@@ -25,7 +25,7 @@ use windows::Win32::System::IO::GetQueuedCompletionStatus;
 use windows::Win32::System::IO::OVERLAPPED;
 
 const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MiB
-const MAX_IN_FLIGHT_IO: usize = 256; // tuning knob
+const MAX_IN_FLIGHT_IO: usize = 16; // tuning knob
 
 #[repr(C)]
 struct ReadRequest {
@@ -108,7 +108,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
         )?;
 
         // Create IOCP and associate handle
-        let cp = CreateIoCompletionPort(overlapped_handle, None, 0, 0)?;
+        let completion_port = CreateIoCompletionPort(overlapped_handle, None, 0, 0)?;
 
         // destination buffer guarded by Mutex; acceptable since writes are large and not CPU bound
         let dest = Arc::new(Mutex::new(vec![0u8; total_bytes as usize]));
@@ -156,7 +156,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                         let mut lp_overlapped: *mut OVERLAPPED = null_mut();
 
                         let res = GetQueuedCompletionStatus(
-                            cp,
+                            completion_port,
                             &mut bytes_transferred as *mut u32,
                             &mut completion_key as *mut usize,
                             &mut lp_overlapped as *mut *mut OVERLAPPED,
@@ -183,7 +183,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                             Err(_) => {
                                 if lp_overlapped.is_null() {
                                     let _ = CloseHandle(overlapped_handle);
-                                    let _ = CloseHandle(cp);
+                                    let _ = CloseHandle(completion_port);
                                     return Err(eyre::eyre!(
                                         "GetQueuedCompletionStatus failed and no overlapped provided"
                                     ));
@@ -213,7 +213,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
             let mut lp_overlapped: *mut OVERLAPPED = null_mut();
 
             let res = GetQueuedCompletionStatus(
-                cp,
+                completion_port,
                 &mut bytes_transferred as *mut u32,
                 &mut completion_key as *mut usize,
                 &mut lp_overlapped as *mut *mut OVERLAPPED,
@@ -238,7 +238,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                 Err(_) => {
                     if lp_overlapped.is_null() {
                         let _ = CloseHandle(overlapped_handle);
-                        let _ = CloseHandle(cp);
+                        let _ = CloseHandle(completion_port);
                         return Err(eyre::eyre!(
                             "GetQueuedCompletionStatus failed and no overlapped provided"
                         ));
@@ -264,7 +264,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
         }
 
         let _ = CloseHandle(overlapped_handle);
-        let _ = CloseHandle(cp);
+        let _ = CloseHandle(completion_port);
 
         Ok(())
     } // unsafe block
