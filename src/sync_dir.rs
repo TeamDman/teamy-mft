@@ -1,3 +1,5 @@
+use crate::cli::command::Command;
+use crate::cli::Cli;
 use crate::paths::ConfigDirPath;
 use crate::paths::EnsureParentDirExists;
 use std::fs;
@@ -50,6 +52,20 @@ pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
         return Ok(None);
     }
     Ok(Some(PathBuf::from(line)))
+}
+
+pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
+    let Some(sync_dir) = get_sync_dir()? else {
+        eyre::bail!(
+            "Sync directory is not set. Please set it using the `{}` command.",
+            Cli {
+                command: Command::SetSyncDir { path: None },
+                ..Default::default()
+            }
+            .display_invocation()
+        );
+    };
+    Ok(sync_dir)
 }
 
 pub fn set_sync_dir(path: PathBuf) -> color_eyre::eyre::Result<()> {
