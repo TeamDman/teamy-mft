@@ -3,6 +3,7 @@ pub mod windows;
 pub mod sync_dir;
 pub mod paths;
 pub mod drive_letter_pattern;
+pub mod mft_dump;
 use clap::CommandFactory;
 use clap::FromArgMatches;
 use tracing::Level;

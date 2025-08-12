@@ -1,8 +1,11 @@
 use crate::drive_letter_pattern::DriveLetterPattern;
+use crate::mft_dump::dump_mft_to_file;
+use crate::mft_dump::enable_backup_privileges;
 use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
 use arbitrary::Arbitrary;
 use clap::Args;
+use eyre::Context;
 use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
@@ -73,8 +76,18 @@ impl SyncArgs {
             bail!("No drives matched the pattern: {}", self.drive_pattern);
         }
 
+        // Enable backup privileges to access system files like $MFT
+        enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
+
         // Perform the MFT dumping in parallel
-        info!("Found {} drives to sync: {}", drives.len(), drives.iter().map(|(drive_letter, _)| drive_letter).join(", "));
+        info!(
+            "Found {} drives to sync: {}",
+            drives.len(),
+            drives
+                .iter()
+                .map(|(drive_letter, _)| drive_letter)
+                .join(", ")
+        );
         let runtime = Builder::new_multi_thread().enable_all().build()?;
         runtime.block_on(async move {
             let mut work = JoinSet::new();
@@ -86,6 +99,7 @@ impl SyncArgs {
                         drive_output_path.display()
                     );
                     // Actual dumping logic would go here
+                    dump_mft_to_file(drive_output_path, drive_letter)?;
                     eyre::Ok(())
                 });
             }
