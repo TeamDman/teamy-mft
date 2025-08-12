@@ -34,6 +34,9 @@ windows = { version = "0.61.3", features = [
     "Win32_UI",
     "Win32_System_Console",
 ] }
+tokio = { version = "1.47.1", features = ["full"] }
+strum = { version = "0.27.2", features = ["derive"] }
+itertools = "0.14.0"
 
 [profile.release]
 codegen-units = 1
