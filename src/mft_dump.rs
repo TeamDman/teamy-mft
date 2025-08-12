@@ -89,7 +89,7 @@ fn read_mft_data(drive_handle: HANDLE) -> eyre::Result<Vec<u8>> {
 }
 
 /// Reads the MFT by parsing the boot sector and following data runs properly
-fn read_mft_from_volume_with_dataruns(drive_handle: HANDLE) -> eyre::Result<Vec<u8>> {
+pub(crate) fn read_mft_from_volume_with_dataruns(drive_handle: HANDLE) -> eyre::Result<Vec<u8>> {
     // Step 1: Read the boot sector to get NTFS parameters
     let boot_sector = read_boot_sector(drive_handle)?;
 
@@ -117,14 +117,14 @@ fn read_mft_from_volume_with_dataruns(drive_handle: HANDLE) -> eyre::Result<Vec<
 
 /// NTFS boot sector information
 #[derive(Debug)]
-struct NtfsBootSector {
-    bytes_per_sector: u16,
-    sectors_per_cluster: u8,
-    mft_cluster_number: u64,
+pub(crate) struct NtfsBootSector {
+    pub(crate) bytes_per_sector: u16,
+    pub(crate) sectors_per_cluster: u8,
+    pub(crate) mft_cluster_number: u64,
 }
 
 /// Reads and parses the NTFS boot sector
-fn read_boot_sector(drive_handle: HANDLE) -> eyre::Result<NtfsBootSector> {
+pub(crate) fn read_boot_sector(drive_handle: HANDLE) -> eyre::Result<NtfsBootSector> {
     // Seek to the beginning of the drive
     unsafe {
         SetFilePointerEx(drive_handle, 0, None, FILE_BEGIN)
@@ -173,7 +173,7 @@ fn read_boot_sector(drive_handle: HANDLE) -> eyre::Result<NtfsBootSector> {
 }
 
 /// Reads a specific MFT record
-fn read_mft_record(
+pub(crate) fn read_mft_record(
     drive_handle: HANDLE,
     mft_location: u64,
     record_number: u64,
@@ -221,13 +221,13 @@ fn read_mft_record(
 
 /// Data run information
 #[derive(Debug)]
-struct DataRun {
-    length: u64,  // Length in clusters
-    cluster: i64, // Cluster offset (can be negative for relative positioning)
+pub(crate) struct DataRun {
+    pub(crate) length: u64,  // Length in clusters
+    pub(crate) cluster: i64, // Cluster offset (can be negative for relative positioning)
 }
 
 /// Parses an MFT record to extract data runs from the DATA attribute (0x80)
-fn parse_mft_record_for_data_attribute(record: &[u8]) -> eyre::Result<Vec<DataRun>> {
+pub(crate) fn parse_mft_record_for_data_attribute(record: &[u8]) -> eyre::Result<Vec<DataRun>> {
     // Get the offset to the first attribute (typically at offset 20)
     let attr_offset = u16::from_le_bytes([record[20], record[21]]) as usize;
     let mut read_ptr = attr_offset;
@@ -433,17 +433,8 @@ fn read_mft_using_data_runs_blocking(
     Ok(mft_data)
 }
 
-/// Reads the complete MFT using the parsed data runs (async wrapper)
-async fn read_mft_using_data_runs(
-    drive_handle: HANDLE,
-    data_runs: &[DataRun],
-    bytes_per_cluster: u64,
-) -> eyre::Result<Vec<u8>> {
-    tokio::task::block_in_place(|| read_mft_using_data_runs_blocking(drive_handle, data_runs, bytes_per_cluster))
-}
-
 /// Writes the MFT data to the specified file
-fn write_mft_to_file(mft_data: &[u8], output_path: &Path) -> eyre::Result<()> {
+pub(crate) fn write_mft_to_file(mft_data: &[u8], output_path: &Path) -> eyre::Result<()> {
     let mut file = if output_path.exists() {
         // If file exists and we got here, overwrite_existing must be true
         OpenOptions::new()
@@ -521,4 +512,38 @@ pub fn enable_backup_privileges() -> eyre::Result<()> {
         info!("Successfully enabled backup privileges");
         Ok(())
     }
+}
+
+// --- added: blocking wrapper to avoid moving HANDLEs across threads ---
+
+/// Blocking wrapper: open drive handle in current thread, run blocking read/parsing logic, write output file.
+/// This avoids moving HANDLE values across threads.
+pub fn dump_mft_to_file_blocking<P: AsRef<Path>>(output_path: P, drive_letter: char) -> eyre::Result<()> {
+    let output_path = output_path.as_ref();
+
+    // normalize drive letter
+    let drive_letter = drive_letter.to_uppercase().next().unwrap_or('C');
+
+    // open handle inside this thread
+    let drive_handle = get_drive_handle(drive_letter)
+        .wrap_err_with(|| format!("Failed to open handle to drive {}", drive_letter))?;
+
+    // validate NTFS
+    validate_ntfs_filesystem(*drive_handle, drive_letter)
+        .wrap_err_with(|| format!("NTFS validation failed for drive {}", drive_letter))?;
+
+    // read MFT using existing blocking parser that returns Vec<u8>
+    let mft_data = read_mft_from_volume_with_dataruns(*drive_handle)
+        .wrap_err_with(|| format!("Failed to read MFT for drive {}", drive_letter))?;
+
+    // write to file
+    write_mft_to_file(&mft_data, output_path).wrap_err_with(|| {
+        format!(
+            "Failed to write MFT for drive {} -> {}",
+            drive_letter,
+            output_path.display()
+        )
+    })?;
+
+    Ok(())
 }

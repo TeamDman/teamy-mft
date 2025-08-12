@@ -4,6 +4,7 @@ pub mod sync_dir;
 pub mod paths;
 pub mod drive_letter_pattern;
 pub mod mft_dump;
+pub mod mft_iocp;
 use clap::CommandFactory;
 use clap::FromArgMatches;
 use tracing::Level;

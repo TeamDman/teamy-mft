@@ -54,6 +54,15 @@ impl EasyPCWSTR for &str {
         )?))
     }
 }
+impl EasyPCWSTR for &String {
+    type Error = eyre::Error;
+
+    fn easy_pcwstr(self) -> eyre::Result<PCWSTRGuard, Self::Error> {
+        Ok(PCWSTRGuard::new(U16CString::from_str(self).map_err(
+            |_| eyre!("Failed to convert string to U16CString: {}", self),
+        )?))
+    }
+}
 impl EasyPCWSTR for String {
     type Error = eyre::Error;
 

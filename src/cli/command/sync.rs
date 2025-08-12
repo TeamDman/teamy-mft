@@ -1,6 +1,6 @@
 use crate::drive_letter_pattern::DriveLetterPattern;
-use crate::mft_dump::dump_mft_to_file;
 use crate::mft_dump::enable_backup_privileges;
+use crate::mft_iocp;
 use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
 use arbitrary::Arbitrary;
@@ -10,8 +10,10 @@ use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
 use std::fs::create_dir_all;
-use tokio::runtime::Builder;
-use tokio::task::JoinSet;
+use std::path::PathBuf;
+use std::thread;
+use crossbeam_channel::bounded;
+use num_cpus;
 use tracing::error;
 use tracing::info;
 
@@ -79,7 +81,6 @@ impl SyncArgs {
         // Enable backup privileges to access system files like $MFT
         enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
 
-        // Perform the MFT dumping in parallel
         info!(
             "Found {} drives to sync: {}",
             drives.len(),
@@ -88,30 +89,50 @@ impl SyncArgs {
                 .map(|(drive_letter, _)| drive_letter)
                 .join(", ")
         );
-        let runtime = Builder::new_multi_thread().enable_all().build()?;
-        runtime.block_on(async move {
-            let mut work = JoinSet::new();
-            for (drive_letter, drive_output_path) in drives {
-                work.spawn(async move {
-                    info!(
-                        "Dumping MFT for drive {} to {}",
-                        drive_letter,
-                        drive_output_path.display()
-                    );
-                    // Actual dumping logic would go here
-                    dump_mft_to_file(drive_output_path, drive_letter).await?;
-                    eyre::Ok(())
-                });
-            }
 
-            info!("Waiting for MFT dumps to complete...");
-            while let Some(result) = work.join_next().await {
-                if let Err(e) = result {
-                    error!("MFT dumping failed: {}", e);
-                }
-            }
-            eyre::Ok(())
-        })
+        // ---- IOCP worker-pool flow ----
+        let max_workers = std::cmp::min(drives.len(), num_cpus::get().saturating_mul(2));
+        let (tx, rx) = bounded::<(char, PathBuf)>(drives.len());
+
+        let mut handles = Vec::with_capacity(max_workers);
+        for worker_id in 0..max_workers {
+            let rx = rx.clone();
+            let handle = thread::Builder::new()
+                .name(format!("mft-iocp-{}", worker_id))
+                .spawn(move || {
+                    while let Ok((drive_letter, output_path)) = rx.recv() {
+                        info!(
+                            "Worker {} reading drive {} -> {}",
+                            worker_id,
+                            drive_letter,
+                            output_path.display()
+                        );
+                        if let Err(e) = mft_iocp::read_mft_iocp(drive_letter, &output_path) {
+                            error!(
+                                "Worker {}: IOCP read failed for {}: {:#}",
+                                worker_id, drive_letter, e
+                            );
+                        }
+                    }
+                })
+                .wrap_err("Failed to spawn IOCP worker thread")
+                .unwrap();
+            handles.push(handle);
+        }
+
+        for (drive_letter, drive_output_path) in drives {
+            tx.send((drive_letter, drive_output_path))
+                .wrap_err("Failed to schedule IOCP drive job")?;
+        }
+        drop(tx);
+
+        for handle in handles {
+            handle.join().map_err(|e| eyre::eyre!("Worker panicked: {:?}", e))?;
+        }
+
+        info!("All MFT dumps completed");
+
+        Ok(())
     }
 }
 
