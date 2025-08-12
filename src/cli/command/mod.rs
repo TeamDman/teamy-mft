@@ -9,11 +9,12 @@ use std::path::PathBuf;
 use tracing::info;
 
 /// Teamy MFT commands
-#[derive(Subcommand, Arbitrary, PartialEq, Debug)]
+#[derive(Subcommand, Arbitrary, PartialEq, Debug, Default)]
 pub enum Command {
     /// Sync operations (requires elevation)
     Sync(SyncArgs),
     /// Get the currently configured sync directory
+    #[default]
     GetSyncDir,
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir { path: Option<PathBuf> },

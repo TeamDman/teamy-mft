@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use to_args::Invocable;
 use to_args::ToArgs;
 
-#[derive(Parser, Arbitrary, PartialEq, Debug)]
+#[derive(Parser, Arbitrary, PartialEq, Debug, Default)]
 #[clap(version)]
 pub struct Cli {
     #[clap(flatten)]
@@ -21,6 +21,15 @@ pub struct Cli {
 impl Cli {
     pub fn invoke(self) -> eyre::Result<()> {
         self.command.invoke()
+    }
+    pub fn display_invocation(&self) -> String {
+        let mut args = self.to_args();
+        // Prepend the executable name
+        args.insert(0, self.executable().into_os_string());
+        args.iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
