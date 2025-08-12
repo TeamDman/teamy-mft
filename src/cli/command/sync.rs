@@ -99,7 +99,7 @@ impl SyncArgs {
                         drive_output_path.display()
                     );
                     // Actual dumping logic would go here
-                    dump_mft_to_file(drive_output_path, drive_letter)?;
+                    dump_mft_to_file(drive_output_path, drive_letter).await?;
                     eyre::Ok(())
                 });
             }
