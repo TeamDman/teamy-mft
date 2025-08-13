@@ -1,4 +1,5 @@
 use crate::cli::command::Command;
+use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::Cli;
 use crate::paths::ConfigDirPath;
 use crate::paths::EnsureParentDirExists;
@@ -59,7 +60,7 @@ pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
         eyre::bail!(
             "Sync directory is not set. Please set it using the `{}` command.",
             Cli {
-                command: Command::SetSyncDir { path: None },
+                command: Command::SetSyncDir(SetSyncDirArgs { path: None }),
                 ..Default::default()
             }
             .display_invocation()

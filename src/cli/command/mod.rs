@@ -1,47 +1,43 @@
 pub mod sync;
+pub mod list_paths;
+pub mod get_sync_dir;
+pub mod set_sync_dir;
 
 use crate::cli::command::sync::SyncArgs;
+use crate::cli::command::list_paths::ListPathsArgs;
+use crate::cli::command::get_sync_dir::GetSyncDirArgs;
+use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Subcommand;
 use std::ffi::OsString;
-use std::path::PathBuf;
-use tracing::info;
 
 /// Teamy MFT commands
-#[derive(Subcommand, Arbitrary, PartialEq, Debug, Default)]
+#[derive(Subcommand, Arbitrary, PartialEq, Debug)]
 pub enum Command {
     /// Sync operations (requires elevation)
     Sync(SyncArgs),
+    /// Produce newline-delimited list of file paths for matching drives from cached .mft files
+    ListPaths(ListPathsArgs),
     /// Get the currently configured sync directory
-    #[default]
-    GetSyncDir,
+    GetSyncDir(GetSyncDirArgs),
     /// Set the sync directory (defaults to current directory if omitted)
-    SetSyncDir { path: Option<PathBuf> },
+    SetSyncDir(SetSyncDirArgs),
+}
+
+impl Default for Command {
+    fn default() -> Self {
+        Command::GetSyncDir(GetSyncDirArgs::default())
+    }
 }
 
 impl Command {
     pub fn invoke(self) -> eyre::Result<()> {
         match self {
             Command::Sync(args) => args.invoke(),
-            Command::GetSyncDir => {
-                match crate::sync_dir::get_sync_dir()? {
-                    Some(p) => println!("{}", p.display()),
-                    None => println!("<not set>"),
-                }
-                Ok(())
-            }
-            Command::SetSyncDir { path } => {
-                let target = if let Some(p) = path {
-                    dunce::canonicalize(p)?
-                } else {
-                    dunce::canonicalize(std::env::current_dir()?)?
-                };
-                info!("Setting sync dir to {}", target.display());
-                crate::sync_dir::set_sync_dir(target.clone())?;
-                println!("Set sync dir to {}", target.display());
-                Ok(())
-            }
+            Command::ListPaths(args) => args.invoke(),
+            Command::GetSyncDir(args) => args.invoke(),
+            Command::SetSyncDir(args) => args.invoke(),
         }
     }
 }
@@ -54,14 +50,17 @@ impl ToArgs for Command {
                 args.push("sync".into());
                 args.extend(sync_args.to_args());
             }
-            Command::GetSyncDir => {
-                args.push("get-sync-dir".into());
+            Command::ListPaths(list_paths_args) => {
+                args.push("list-paths".into());
+                args.extend(list_paths_args.to_args());
             }
-            Command::SetSyncDir { path } => {
+            Command::GetSyncDir(get_args) => {
+                args.push("get-sync-dir".into());
+                args.extend(get_args.to_args());
+            }
+            Command::SetSyncDir(set_args) => {
                 args.push("set-sync-dir".into());
-                if let Some(p) = path {
-                    args.push(p.into());
-                }
+                args.extend(set_args.to_args());
             }
         }
         args
