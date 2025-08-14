@@ -2,11 +2,13 @@ pub mod sync;
 pub mod list_paths;
 pub mod get_sync_dir;
 pub mod set_sync_dir;
+pub mod check;
 
 use crate::cli::command::sync::SyncArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
+use crate::cli::command::check::CheckArgs;
 use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Subcommand;
@@ -23,6 +25,8 @@ pub enum Command {
     GetSyncDir(GetSyncDirArgs),
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir(SetSyncDirArgs),
+    /// Validate cached MFT files have at least one Win32 FILE_NAME attribute per entry having any FILE_NAME
+    Check(CheckArgs),
 }
 
 impl Default for Command {
@@ -38,6 +42,7 @@ impl Command {
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
+            Command::Check(args) => args.invoke(),
         }
     }
 }
@@ -61,6 +66,10 @@ impl ToArgs for Command {
             Command::SetSyncDir(set_args) => {
                 args.push("set-sync-dir".into());
                 args.extend(set_args.to_args());
+            }
+            Command::Check(check_args) => {
+                args.push("check".into());
+                args.extend(check_args.to_args());
             }
         }
         args

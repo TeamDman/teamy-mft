@@ -93,7 +93,7 @@ pub fn run_as_admin(invocable: &impl Invocable) -> eyre::Result<AdminChild> {
 
     // ---------------- ShellExecuteExW ----------------
     let verb = "runas".easy_pcwstr()?;
-    let file = invocable.executable().easy_pcwstr()?;
+    let file = invocable.path_to_exe().easy_pcwstr()?;
     let params = params.easy_pcwstr()?;
     unsafe {
         let mut sei = SHELLEXECUTEINFOW {

@@ -17,7 +17,7 @@ impl<T: ToArgs> ToArgs for &T {
 
 /// Trait for providing executable and arguments for process invocation
 pub trait Invocable {
-    fn executable(&self) -> PathBuf;
+    fn path_to_exe(&self) -> PathBuf;
     fn args(&self) -> Vec<OsString>;
 }
 
@@ -32,7 +32,7 @@ impl ToArgs for SameInvocation {
 }
 
 impl Invocable for SameInvocation {
-    fn executable(&self) -> PathBuf {
+    fn path_to_exe(&self) -> PathBuf {
         std::env::current_exe().expect("Failed to get current executable path")
     }
 
@@ -69,7 +69,7 @@ impl ToArgs for SameInvocationSameConsole {
 }
 
 impl Invocable for SameInvocationSameConsole {
-    fn executable(&self) -> PathBuf {
+    fn path_to_exe(&self) -> PathBuf {
         std::env::current_exe().expect("Failed to get current executable path")
     }
 

@@ -23,7 +23,7 @@ impl DriveLetterPattern {
     }
 
     /// Resolve the pattern into a list of drive letters.
-    pub fn resolve(&self) -> eyre::Result<Vec<char>> {
+    pub fn into_drive_letters(&self) -> eyre::Result<Vec<char>> {
         parse_drive_letters(self.as_str())
     }
 }

@@ -25,7 +25,13 @@ impl Cli {
     pub fn display_invocation(&self) -> String {
         let mut args = self.to_args();
         // Prepend the executable name
-        args.insert(0, self.executable().into_os_string());
+        args.insert(
+            0,
+            self.path_to_exe()
+                .file_name()
+                .unwrap_or(self.path_to_exe().as_os_str())
+                .to_owned(),
+        );
         args.iter()
             .map(|arg| arg.to_string_lossy().to_string())
             .collect::<Vec<_>>()
@@ -43,7 +49,7 @@ impl ToArgs for Cli {
 }
 
 impl Invocable for Cli {
-    fn executable(&self) -> std::path::PathBuf {
+    fn path_to_exe(&self) -> std::path::PathBuf {
         std::env::current_exe().expect("Failed to get current executable path")
     }
 

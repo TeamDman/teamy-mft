@@ -55,7 +55,7 @@ impl SyncArgs {
         // Identify the drives to sync based on the provided pattern
         let drives = self
             .drive_pattern
-            .resolve()?
+            .into_drive_letters()?
             .into_iter()
             .filter_map(|drive_letter| {
                 let drive_output_path = sync_dir.join(format!("{drive_letter}.mft"));
