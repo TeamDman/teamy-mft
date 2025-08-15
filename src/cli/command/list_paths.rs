@@ -9,11 +9,10 @@ use mft::MftParser;
 use mft::attribute::MftAttributeContent;
 use mft::attribute::x30::FileNamespace;
 use rustc_hash::FxHashMap;
-use tracing::trace;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::time::Instant;
 use tracing::info;
 use tracing::warn;
 use winstructs::ntfs::mft_reference::MftReference;
@@ -49,15 +48,16 @@ impl ListPathsArgs {
             info!("Loaded MFT file: {}", path.display());
 
             info!("Parsing MFT file: {}", path.display());
+            let start = Instant::now();
             let mut parser =
                 MftParser::from_read_seek(Cursor::new(mft_bytes), Some(mft_bytes.len() as u64))
                     .wrap_err_with(|| {
                         format!("Failed to parse MFT bytes from {}", path.display())
                     })?;
 
-            // Map each MFT reference to its canonical FILE_NAME (x30) attribute chosen by precedence
-            let mut x30_map = FxHashMap::<MftReference, (FileNamespace, FileNameAttr)>::default();
-            // Lower index => higher precedence
+            // Collect canonical FILE_NAME (x30) attributes per MFT entry.
+            // For each (parent, name) pair keep only highest precedence namespace.
+            let mut x30_map = FxHashMap::<MftReference, Vec<FileNameAttr>>::default();
             let precedence = [
                 FileNamespace::Win32,
                 FileNamespace::Win32AndDos,
@@ -79,7 +79,6 @@ impl ListPathsArgs {
                         continue;
                     }
                 };
-
                 for x30 in entry
                     .iter_attributes()
                     .filter_map(|attr| attr.ok())
@@ -92,58 +91,75 @@ impl ListPathsArgs {
                         entry: entry.header.record_number,
                         sequence: entry.header.sequence,
                     };
-                    match x30_map.get_mut(&key) {
-                        Some((existing_ns, existing_attr)) => {
-                            let existing_rank = prec_index(existing_ns);
-                            let new_rank = prec_index(&x30.namespace);
-                            if new_rank < existing_rank {
-                                // better precedence
-                                trace!(
-                                    "Replacing FILE_NAME for {:?} in {}: {:?} -> {:?}",
-                                    key,
-                                    path.display(),
-                                    existing_ns,
-                                    x30.namespace
-                                );
-                                *existing_ns = x30.namespace;
-                                *existing_attr = x30;
-                            } else if new_rank == existing_rank {
-                                warn!(
-                                    "Duplicate FILE_NAME same precedence for {:?} ({:?}) in {}:\nold={:#?}\nnew={:#?}",
-                                    key,
-                                    existing_ns,
-                                    path.display(),
-                                    existing_attr,
-                                    x30
-                                );
-                            } else {
-                                // lower precedence, ignore
-                            }
+                    let list = x30_map.entry(key).or_default();
+                    if let Some(existing) = list
+                        .iter_mut()
+                        .find(|f| f.parent == x30.parent && f.name == x30.name)
+                    {
+                        let existing_rank = prec_index(&existing.namespace);
+                        let new_rank = prec_index(&x30.namespace);
+                        if new_rank < existing_rank {
+                            *existing = x30; // better namespace precedence
+                        } else if new_rank == existing_rank {
+                            warn!(
+                                "Duplicate FILE_NAME same precedence for {:?} parent {:?} name {:?} {:?}",
+                                key, x30.parent, x30.name, x30.namespace
+                            );
                         }
-                        None => {
-                            x30_map.insert(key, (x30.namespace, x30));
-                        }
+                        // lower precedence ignored
+                    } else {
+                        list.push(x30);
                     }
                 }
             }
+            let elapsed = start.elapsed();
+            let entry_count = x30_map.len();
+            let link_count: usize = x30_map.values().map(|v| v.len()).sum();
+            info!(
+                "Indexed {} MFT entries ({} canonical FILE_NAME links) in {:.2?}",
+                entry_count, link_count, elapsed
+            );
 
             const ROOT_ENTRY: u64 = 5;
-            for (_, (_, entry_attr)) in x30_map.iter() {
-                let mut path = VecDeque::new();
-                path.push_back(&entry_attr.name);
-                let mut parent_nav = &entry_attr.parent;
-                while parent_nav.entry != ROOT_ENTRY {
-                    if let Some((_, parent_attr)) = x30_map.get(parent_nav) {
-                        path.push_front(&parent_attr.name);
-                        parent_nav = &parent_attr.parent;
-                        continue;
+            fn choose_dir<'a>(
+                links: &'a Vec<FileNameAttr>,
+                prec_index: &impl Fn(&FileNamespace) -> usize,
+            ) -> &'a FileNameAttr {
+                links
+                    .iter()
+                    .min_by_key(|f| (prec_index(&f.namespace), f.name.len()))
+                    .expect("links not empty")
+            }
+
+            for (entry_ref, links) in x30_map.iter() {
+                if entry_ref.entry == ROOT_ENTRY {
+                    continue;
+                }
+                let mut seen = std::collections::HashSet::<String>::new();
+                for link in links {
+                    // one output per hard link
+                    // Build path components
+                    let mut components: Vec<&str> = Vec::new();
+                    components.push(&link.name);
+                    let mut parent_ref = link.parent;
+                    while parent_ref.entry != ROOT_ENTRY {
+                        if let Some(parent_links) = x30_map.get(&parent_ref) {
+                            let parent_attr = choose_dir(parent_links, &prec_index);
+                            components.push(parent_attr.name.as_str());
+                            parent_ref = parent_attr.parent;
+                        } else {
+                            break;
+                        }
                     }
-                    break;
+                    let mut full = String::new();
+                    for comp in components.iter().rev() {
+                        full.push('\\');
+                        full.push_str(comp);
+                    }
+                    if seen.insert(full.clone()) {
+                        println!("{}", full);
+                    }
                 }
-                for part in &path {
-                    print!("\\{}", part);
-                }
-                println!();
             }
         }
         Ok(())

@@ -1,3 +1,4 @@
+use crate::windows::win_strings::EasyPCWSTR;
 use eyre::Context;
 use std::ops::Deref;
 use std::ptr::null_mut;
@@ -10,8 +11,6 @@ use windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
-
-use crate::windows::win_strings::EasyPCWSTR;
 
 /// Auto-closing handle wrapper
 pub struct AutoClosingHandle(HANDLE);

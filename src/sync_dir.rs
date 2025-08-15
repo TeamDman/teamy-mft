@@ -1,6 +1,6 @@
+use crate::cli::Cli;
 use crate::cli::command::Command;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
-use crate::cli::Cli;
 use crate::paths::ConfigDirPath;
 use crate::paths::EnsureParentDirExists;
 use std::fs;

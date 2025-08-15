@@ -1,14 +1,14 @@
-pub mod sync;
-pub mod list_paths;
-pub mod get_sync_dir;
-pub mod set_sync_dir;
 pub mod check;
+pub mod get_sync_dir;
+pub mod list_paths;
+pub mod set_sync_dir;
+pub mod sync;
 
-use crate::cli::command::sync::SyncArgs;
-use crate::cli::command::list_paths::ListPathsArgs;
-use crate::cli::command::get_sync_dir::GetSyncDirArgs;
-use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::check::CheckArgs;
+use crate::cli::command::get_sync_dir::GetSyncDirArgs;
+use crate::cli::command::list_paths::ListPathsArgs;
+use crate::cli::command::set_sync_dir::SetSyncDirArgs;
+use crate::cli::command::sync::SyncArgs;
 use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Subcommand;

@@ -1,17 +1,17 @@
 pub mod cli;
-pub mod windows;
-pub mod sync_dir;
-pub mod paths;
 pub mod drive_letter_pattern;
+pub mod mft_check;
 pub mod mft_dump;
 pub mod mft_iocp;
+pub mod paths;
+pub mod sync_dir;
+pub mod windows;
+use crate::cli::Cli;
+use crate::windows::console_reuse::reuse_console_if_requested;
 use clap::CommandFactory;
 use clap::FromArgMatches;
 use tracing::Level;
 use tracing::debug;
-
-use crate::cli::Cli;
-use crate::windows::console_reuse::reuse_console_if_requested;
 
 /// Initialize tracing subscriber with the given log level.
 /// In debug builds, include file and line number without timestamp.

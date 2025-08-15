@@ -168,7 +168,8 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                                 if !lp_overlapped.is_null() {
                                     let req_ptr = lp_overlapped as *mut ReadRequest;
                                     let boxed_req = Box::from_raw(req_ptr);
-                                    let copy_len = (bytes_transferred as usize).min(boxed_req.length);
+                                    let copy_len =
+                                        (bytes_transferred as usize).min(boxed_req.length);
                                     if copy_len > 0 {
                                         let mut dest_lock = dest.lock().unwrap();
                                         let start = boxed_req.dest_offset as usize;
@@ -229,8 +230,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                             let mut dest_lock = dest.lock().unwrap();
                             let start = boxed_req.dest_offset as usize;
                             let end = start + copy_len;
-                            dest_lock[start..end]
-                                .copy_from_slice(&boxed_req.buffer[..copy_len]);
+                            dest_lock[start..end].copy_from_slice(&boxed_req.buffer[..copy_len]);
                         }
                         remaining.fetch_sub(1, Ordering::SeqCst);
                     }

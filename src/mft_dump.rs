@@ -28,7 +28,10 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::Threading::OpenProcessToken;
 
 /// Dumps the MFT to the specified file path
-pub async fn dump_mft_to_file<P: AsRef<Path>>(output_path: P, drive_letter: char) -> eyre::Result<()> {
+pub async fn dump_mft_to_file<P: AsRef<Path>>(
+    output_path: P,
+    drive_letter: char,
+) -> eyre::Result<()> {
     let output_path = output_path.as_ref();
 
     // Use the provided drive letter
@@ -518,7 +521,10 @@ pub fn enable_backup_privileges() -> eyre::Result<()> {
 
 /// Blocking wrapper: open drive handle in current thread, run blocking read/parsing logic, write output file.
 /// This avoids moving HANDLE values across threads.
-pub fn dump_mft_to_file_blocking<P: AsRef<Path>>(output_path: P, drive_letter: char) -> eyre::Result<()> {
+pub fn dump_mft_to_file_blocking<P: AsRef<Path>>(
+    output_path: P,
+    drive_letter: char,
+) -> eyre::Result<()> {
     let output_path = output_path.as_ref();
 
     // normalize drive letter

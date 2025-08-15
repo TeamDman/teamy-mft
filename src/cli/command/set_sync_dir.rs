@@ -26,7 +26,9 @@ impl SetSyncDirArgs {
 impl crate::cli::to_args::ToArgs for SetSyncDirArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         let mut v = Vec::new();
-        if let Some(p) = &self.path { v.push(p.clone().into()); }
+        if let Some(p) = &self.path {
+            v.push(p.clone().into());
+        }
         v
     }
 }

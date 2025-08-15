@@ -5,15 +5,15 @@ use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
 use arbitrary::Arbitrary;
 use clap::Args;
+use crossbeam_channel::bounded;
 use eyre::Context;
 use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
+use num_cpus;
 use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::thread;
-use crossbeam_channel::bounded;
-use num_cpus;
 use tracing::error;
 use tracing::info;
 
@@ -127,7 +127,9 @@ impl SyncArgs {
         drop(tx);
 
         for handle in handles {
-            handle.join().map_err(|e| eyre::eyre!("Worker panicked: {:?}", e))?;
+            handle
+                .join()
+                .map_err(|e| eyre::eyre!("Worker panicked: {:?}", e))?;
         }
 
         info!("All MFT dumps completed");

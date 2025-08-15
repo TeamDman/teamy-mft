@@ -2,7 +2,8 @@ use directories::ProjectDirs;
 use eyre::eyre;
 use std::fs;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 fn project_dirs() -> eyre::Result<ProjectDirs> {
     Ok(ProjectDirs::from_path(PathBuf::from("teamy_mft"))
