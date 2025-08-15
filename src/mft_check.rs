@@ -9,6 +9,7 @@ use mft::path_resolve;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
+use thousands::Separable;
 use tracing::debug;
 use tracing::info;
 use uom::si::f64::Information;
@@ -21,8 +22,8 @@ use uom::si::time::second;
 /// Statistics and timing information for processing a single MFT file.
 pub struct MftProcessStats {
     pub path: PathBuf,
-    pub size_bytes: usize,
-    pub entry_size: usize,
+    pub mft_file_size: Information,
+    pub entry_size: Information,
     pub entry_count: usize,
     pub fixups_applied: u64,
     pub fixups_already: u64,
@@ -54,7 +55,7 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()
     );
 
     for (drive_letter, mft_file_path) in mft_files {
-        process_mft_file(drive_letter.to_string(), &mft_file_path, 20)?;
+        process_mft_file(drive_letter.to_string(), &mft_file_path, 200)?;
     }
     Ok(())
 }
@@ -119,14 +120,15 @@ pub fn process_mft_file(
         "Detecting entry size for {}",
         mft_file_path.display()
     );
-    let entry_size = fast_fixup::detect_entry_size(&bytes[0..1024]).unwrap_or(1024) as usize;
-    if entry_size == 0 || bytes.len() % entry_size != 0 {
+    let entry_size_bytes = fast_fixup::detect_entry_size(&bytes[0..1024]).unwrap_or(1024) as usize;
+    let entry_size = Information::new::<byte>(entry_size_bytes as f64);
+    if entry_size_bytes == 0 || bytes.len() % entry_size_bytes != 0 {
         eyre::bail!("Unaligned entry size for {}", mft_file_path.display());
     }
-    let entry_count = bytes.len() / entry_size;
+    let entry_count = bytes.len() / entry_size_bytes;
     debug!(
         drive_letter = &drive_letter,
-        "Detected entry size: {} bytes, total entries: {}", entry_size, entry_count
+        "Detected entry size: {} bytes, total entries: {}", entry_size_bytes, entry_count
     );
 
     // copy bytes (allows in-place fixup)
@@ -151,35 +153,37 @@ pub fn process_mft_file(
     // apply fixups (parallel)
     debug!(
         drive_letter = &drive_letter,
-        "Applying fixups to {} entries", entry_count
+        "Applying fixups to {} entries",
+        entry_count.separate_with_commas()
     );
     let fixup_start = Instant::now();
-    let stats = fast_fixup::apply_fixups_parallel(&mut owned, entry_size);
+    let stats = fast_fixup::apply_fixups_parallel(&mut owned, entry_size_bytes);
     let fixup_elapsed = Time::new::<second>(fixup_start.elapsed().as_secs_f64());
     let fixup_rate = mft_file_size / fixup_elapsed;
     debug!(
         drive_letter = &drive_letter,
         "Applied fixups in {}, {}/s (applied/already/invalid: {}/{}/{})",
         fixup_elapsed.get_human(),
-        fixup_rate.get::<hertz>(),
-        stats.applied,
-        stats.already_applied,
-        stats.invalid
+        fixup_rate.get::<hertz>().separate_with_commas(),
+        stats.applied.separate_with_commas(),
+        stats.already_applied.separate_with_commas(),
+        stats.invalid.separate_with_commas()
     );
 
     // collect filename attributes (parallel)
     debug!(
         drive_letter = &drive_letter,
-        "Collecting filename attributes from {} entries", entry_count
+        "Collecting filename attributes from {} entries",
+        entry_count.separate_with_commas()
     );
     let scan_start = Instant::now();
-    let (names, per_entry) = fast_entry::par_collect_filenames(&owned, entry_size);
+    let (names, per_entry) = fast_entry::par_collect_filenames(&owned, entry_size_bytes);
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = InformationRate::from(mft_file_size / scan_elapsed);
     debug!(
         drive_letter = &drive_letter,
         "Scanned {} entries for names in {}, {}",
-        names.len(),
+        names.len().separate_with_commas(),
         scan_elapsed.get_human(),
         scan_rate.get_human()
     );
@@ -188,7 +192,7 @@ pub fn process_mft_file(
     debug!(
         drive_letter = &drive_letter,
         "Resolving paths for {} filename attributes",
-        names.len()
+        names.len().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
     let paths = path_resolve::resolve_paths_simple(&names, &per_entry);
@@ -200,7 +204,7 @@ pub fn process_mft_file(
     debug!(
         drive_letter = &drive_letter,
         "Resolved {} paths in {}, {}",
-        resolved_paths,
+        resolved_paths.separate_with_commas(),
         path_resolve_elapsed.get_human(),
         resolve_rate.get_human()
     );
@@ -210,7 +214,7 @@ pub fn process_mft_file(
 
     let rtn = MftProcessStats {
         path: mft_file_path.to_path_buf(),
-        size_bytes: bytes.len(),
+        mft_file_size,
         entry_size,
         entry_count,
         fixups_applied: stats.applied,
@@ -225,29 +229,30 @@ pub fn process_mft_file(
     };
     info!(
         drive_letter = &drive_letter,
-        "MFT {}: size={}MB entries={} entry_size={} fixups(applied/already/invalid)={}/{}/{} names={} resolved={} timings(fix/scan/resolve)={:.3}/{:.3}/{:.3}s",
+        "MFT {}: size={} entries={} entry_size={} fixups(applied/already/invalid)={}/{}/{} names={} resolved={} timings(fix/scan/resolve)={}/{}/{}",
         rtn.path.display(),
-        (rtn.size_bytes as f64) / (1024.0 * 1024.0),
-        rtn.entry_count,
-        rtn.entry_size,
-        rtn.fixups_applied,
-        rtn.fixups_already,
-        rtn.fixups_invalid,
-        rtn.filename_attrs,
-        rtn.resolved_paths,
+        mft_file_size.get_human(),
+        rtn.entry_count.separate_with_commas(),
+        rtn.entry_size.get_human(),
+        rtn.fixups_applied.separate_with_commas(),
+        rtn.fixups_already.separate_with_commas(),
+        rtn.fixups_invalid.separate_with_commas(),
+        rtn.filename_attrs.separate_with_commas(),
+        rtn.resolved_paths.separate_with_commas(),
         rtn.dur_fixups.get_human(),
         rtn.dur_scan.get_human(),
         rtn.dur_resolve.get_human()
     );
     for p in &rtn.sample_paths {
-        info!("PATH: {}", p.display());
+        info!("PATH: {}:\\{}", drive_letter, p.display());
     }
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
     info!(
         drive_letter = &drive_letter,
-        "Total processing time for {}: {}",
+        "Total processing time for {} with {} entries: {}",
         mft_file_path.display(),
+        rtn.entry_count.separate_with_commas(),
         elapsed.get_human()
     );
     Ok(rtn)

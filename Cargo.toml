@@ -51,6 +51,7 @@ uom = { version = "0.37.0", features = [
 ], git = "https://github.com/TeamDman/uom", branch = "mine" }
 rayon = { version = "1.10", optional = true }
 humantime = "2.2.0"
+thousands = "0.2.0"
 
 [profile.release]
 codegen-units = 1
