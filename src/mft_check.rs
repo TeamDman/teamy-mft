@@ -195,7 +195,7 @@ pub fn process_mft_file(
         names.len().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let paths = path_resolve::resolve_paths_simple(&names, &per_entry);
+    let paths = path_resolve::resolve_paths_simple(&names, &per_entry)?;
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let resolved_paths = paths.iter().flatten().count();
     let resolve_rate = InformationRate::from(
