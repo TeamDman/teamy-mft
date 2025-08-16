@@ -6,6 +6,7 @@ use memmap2::Mmap;
 use mft::fast_entry;
 use mft::fast_fixup;
 use mft::path_resolve;
+use uom::si::ratio::ratio;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -14,6 +15,7 @@ use tracing::debug;
 use tracing::info;
 use uom::si::f64::Information;
 use uom::si::f64::InformationRate;
+use uom::si::f64::Ratio;
 use uom::si::f64::Time;
 use uom::si::frequency::hertz;
 use uom::si::information::byte;
@@ -107,8 +109,7 @@ pub fn process_mft_file(
     let mmap_rate = InformationRate::from(mft_file_size / mmap_elapsed);
     debug!(
         drive_letter = &drive_letter,
-        "Memory-mapped {} in {}, {}",
-        mft_file_size.get_human(),
+        "Took {} ({})",
         mmap_elapsed.get_human(),
         mmap_rate.get_human()
     );
@@ -144,8 +145,7 @@ pub fn process_mft_file(
     let copy_rate = InformationRate::from(mft_file_size / copy_elapsed);
     debug!(
         drive_letter = &drive_letter,
-        "Copied {} in {}, {}",
-        mft_file_size.get_human(),
+        "Took {} ({})",
         copy_elapsed.get_human(),
         copy_rate.get_human()
     );
@@ -162,9 +162,9 @@ pub fn process_mft_file(
     let fixup_rate = mft_file_size / fixup_elapsed;
     debug!(
         drive_letter = &drive_letter,
-        "Applied fixups in {}, {}/s (applied/already/invalid: {}/{}/{})",
+        "Took {} ({}/s) applied/already/invalid={}/{}/{}",
         fixup_elapsed.get_human(),
-        fixup_rate.get::<hertz>().separate_with_commas(),
+        fixup_rate.get::<hertz>().trunc().separate_with_commas(),
         stats.applied.separate_with_commas(),
         stats.already_applied.separate_with_commas(),
         stats.invalid.separate_with_commas()
@@ -182,10 +182,10 @@ pub fn process_mft_file(
     let scan_rate = InformationRate::from(mft_file_size / scan_elapsed);
     debug!(
         drive_letter = &drive_letter,
-        "Scanned {} entries for names in {}, {}",
-        file_names.entry_count().separate_with_commas(),
+        "Took {} ({}) entries_with_names={}",
         scan_elapsed.get_human(),
-        scan_rate.get_human()
+        scan_rate.get_human(),
+        file_names.entry_count().separate_with_commas()
     );
 
     // resolve paths (sequential baseline)
@@ -203,10 +203,10 @@ pub fn process_mft_file(
     );
     debug!(
         drive_letter = &drive_letter,
-        "Resolved {} paths in {}, {}",
-        resolved_paths.separate_with_commas(),
+        "Took {} ({}) resolved_paths={}",
         path_resolve_elapsed.get_human(),
-        resolve_rate.get_human()
+        resolve_rate.get_human(),
+        resolved_paths.separate_with_commas()
     );
 
     // sample
@@ -248,12 +248,18 @@ pub fn process_mft_file(
     }
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
+    // aggregate performance statistics
+    let total_data_rate = InformationRate::from(mft_file_size / elapsed); // overall throughput
+    let entries_rate = Ratio::new::<ratio>(rtn.entry_count as f64) / elapsed;
     info!(
         drive_letter = &drive_letter,
-        "Total processing time for {} with {} entries: {}",
+        "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file_path.display(),
         rtn.entry_count.separate_with_commas(),
-        elapsed.get_human()
+        elapsed.get_human(),
+        mft_file_size.get_human(),
+        total_data_rate.get_human(),
+        entries_rate.get::<hertz>().trunc().separate_with_commas()
     );
     Ok(rtn)
 }
