@@ -38,7 +38,7 @@ pub struct MftProcessStats {
     pub sample_paths: Vec<PathBuf>,
 }
 
-pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()> {
+pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) -> eyre::Result<()> {
     // Get MFT files from sync dir
     let sync_dir = try_get_sync_dir()?;
     let drive_letters: Vec<char> = drive_letter_pattern.into_drive_letters()?;
@@ -56,8 +56,32 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()
         mft_files.iter().map(|(_, p)| p).collect::<Vec<_>>()
     );
 
-    for (drive_letter, mft_file_path) in mft_files {
-        process_mft_file(drive_letter.to_string(), &mft_file_path, 10)?;
+    if parallel {
+        use std::sync::Arc;
+        let handles: Vec<_> = mft_files
+            .into_iter()
+            .map(|(drive_letter, mft_file_path)| {
+                let path = Arc::new(mft_file_path);
+                let d = drive_letter.to_string();
+                std::thread::spawn(move || process_mft_file(d, &path, 10, true))
+            })
+            .collect();
+        let mut first_err: Option<eyre::Report> = None;
+        for h in handles {
+            match h.join() {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => { if first_err.is_none() { first_err = Some(e); } }
+                Err(panic) => {
+                    let msg = if let Some(s) = panic.downcast_ref::<&str>() { *s } else if let Some(s) = panic.downcast_ref::<String>() { s.as_str() } else { "unknown panic" };
+                    return Err(eyre::eyre!("Thread panicked: {msg}"));
+                }
+            }
+        }
+        if let Some(e) = first_err { return Err(e); }
+    } else {
+        for (drive_letter, mft_file_path) in mft_files {
+            process_mft_file(drive_letter.to_string(), &mft_file_path, 10, false)?;
+        }
     }
     Ok(())
 }
@@ -67,6 +91,7 @@ pub fn process_mft_file(
     drive_letter: String,
     mft_file_path: &Path,
     sample_limit: usize,
+    parallel: bool,
 ) -> Result<MftProcessStats> {
     info!(
         drive_letter = &drive_letter,
@@ -195,7 +220,7 @@ pub fn process_mft_file(
         file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let multi = path_resolve::resolve_paths_all(&file_names)?;
+    let multi = if parallel { path_resolve::resolve_paths_all_parallel(&file_names)? } else { path_resolve::resolve_paths_all(&file_names)? };
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
