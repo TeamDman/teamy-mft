@@ -92,6 +92,8 @@ impl QueryArgs {
             println!("{}", item.data.display());
         }
 
+        std::process::exit(0); // exit intentionally to accelerate cleanup of background threads
+
         Ok(())
     }
 }
