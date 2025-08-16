@@ -177,13 +177,13 @@ pub fn process_mft_file(
         entry_count.separate_with_commas()
     );
     let scan_start = Instant::now();
-    let (names, per_entry) = fast_entry::par_collect_filenames(&owned, entry_size_bytes);
+    let file_names = fast_entry::par_collect_filenames(&owned, entry_size_bytes);
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = InformationRate::from(mft_file_size / scan_elapsed);
     debug!(
         drive_letter = &drive_letter,
         "Scanned {} entries for names in {}, {}",
-        names.len().separate_with_commas(),
+        file_names.entry_count().separate_with_commas(),
         scan_elapsed.get_human(),
         scan_rate.get_human()
     );
@@ -192,10 +192,10 @@ pub fn process_mft_file(
     debug!(
         drive_letter = &drive_letter,
         "Resolving paths for {} filename attributes",
-        names.len().separate_with_commas()
+        file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let paths = path_resolve::resolve_paths_simple(&names, &per_entry)?;
+    let paths = path_resolve::resolve_paths_simple(&file_names)?;
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let resolved_paths = paths.iter().flatten().count();
     let resolve_rate = InformationRate::from(
@@ -220,7 +220,7 @@ pub fn process_mft_file(
         fixups_applied: stats.applied,
         fixups_already: stats.already_applied,
         fixups_invalid: stats.invalid,
-        filename_attrs: names.len(),
+        filename_attrs: file_names.x30_count(),
         resolved_paths,
         dur_fixups: fixup_elapsed,
         dur_scan: scan_elapsed,
