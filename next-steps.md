@@ -1,3 +1,6 @@
+- [x] update resolve paths simple to take the drive letter
+- [ ] update resolve paths simple to handle multiple parent attributes
+
 # Next Steps: High-Speed MFT -> Canonical Path List Pipeline
 
 ## 1. Objective
