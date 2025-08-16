@@ -6,7 +6,7 @@ use memmap2::Mmap;
 use mft::fast_entry;
 use mft::fast_fixup;
 use mft::path_resolve;
-use uom::si::ratio::ratio;
+use mft::path_resolve::MultiResolvedPaths;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -19,6 +19,7 @@ use uom::si::f64::Ratio;
 use uom::si::f64::Time;
 use uom::si::frequency::hertz;
 use uom::si::information::byte;
+use uom::si::ratio::ratio;
 use uom::si::time::second;
 
 /// Statistics and timing information for processing a single MFT file.
@@ -70,14 +71,26 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
         for h in handles {
             match h.join() {
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => { if first_err.is_none() { first_err = Some(e); } }
+                Ok(Err(e)) => {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
+                }
                 Err(panic) => {
-                    let msg = if let Some(s) = panic.downcast_ref::<&str>() { *s } else if let Some(s) = panic.downcast_ref::<String>() { s.as_str() } else { "unknown panic" };
+                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                        *s
+                    } else if let Some(s) = panic.downcast_ref::<String>() {
+                        s.as_str()
+                    } else {
+                        "unknown panic"
+                    };
                     return Err(eyre::eyre!("Thread panicked: {msg}"));
                 }
             }
         }
-        if let Some(e) = first_err { return Err(e); }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
     } else {
         for (drive_letter, mft_file_path) in mft_files {
             process_mft_file(drive_letter.to_string(), &mft_file_path, 10, false)?;
@@ -92,7 +105,7 @@ pub fn process_mft_file(
     mft_file_path: &Path,
     sample_limit: usize,
     parallel: bool,
-) -> Result<MftProcessStats> {
+) -> Result<(MultiResolvedPaths, MftProcessStats)> {
     info!(
         drive_letter = &drive_letter,
         "Processing MFT file: {}",
@@ -220,7 +233,11 @@ pub fn process_mft_file(
         file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let multi = if parallel { path_resolve::resolve_paths_all_parallel(&file_names)? } else { path_resolve::resolve_paths_all(&file_names)? };
+    let multi = if parallel {
+        path_resolve::resolve_paths_all_parallel(&file_names)?
+    } else {
+        path_resolve::resolve_paths_all(&file_names)?
+    };
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
@@ -245,7 +262,7 @@ pub fn process_mft_file(
         .cloned()
         .collect();
 
-    let rtn = MftProcessStats {
+    let stats = MftProcessStats {
         path: mft_file_path.to_path_buf(),
         mft_file_size,
         entry_size,
@@ -263,36 +280,36 @@ pub fn process_mft_file(
     info!(
         drive_letter = &drive_letter,
         "MFT {}: size={} entries={} entry_size={} fixups(applied/already/invalid)={}/{}/{} names={} resolved={} timings(fix/scan/resolve)={}/{}/{}",
-        rtn.path.display(),
+        stats.path.display(),
         mft_file_size.get_human(),
-        rtn.entry_count.separate_with_commas(),
-        rtn.entry_size.get_human(),
-        rtn.fixups_applied.separate_with_commas(),
-        rtn.fixups_already.separate_with_commas(),
-        rtn.fixups_invalid.separate_with_commas(),
-        rtn.filename_attrs.separate_with_commas(),
-        rtn.resolved_paths.separate_with_commas(),
-        rtn.dur_fixups.get_human(),
-        rtn.dur_scan.get_human(),
-        rtn.dur_resolve.get_human()
+        stats.entry_count.separate_with_commas(),
+        stats.entry_size.get_human(),
+        stats.fixups_applied.separate_with_commas(),
+        stats.fixups_already.separate_with_commas(),
+        stats.fixups_invalid.separate_with_commas(),
+        stats.filename_attrs.separate_with_commas(),
+        stats.resolved_paths.separate_with_commas(),
+        stats.dur_fixups.get_human(),
+        stats.dur_scan.get_human(),
+        stats.dur_resolve.get_human()
     );
-    for p in &rtn.sample_paths {
+    for p in &stats.sample_paths {
         info!("PATH: {}:\\{}", drive_letter, p.display());
     }
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
     // aggregate performance statistics
     let total_data_rate = InformationRate::from(mft_file_size / elapsed); // overall throughput
-    let entries_rate = Ratio::new::<ratio>(rtn.entry_count as f64) / elapsed;
+    let entries_rate = Ratio::new::<ratio>(stats.entry_count as f64) / elapsed;
     info!(
         drive_letter = &drive_letter,
         "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file_path.display(),
-        rtn.entry_count.separate_with_commas(),
+        stats.entry_count.separate_with_commas(),
         elapsed.get_human(),
         mft_file_size.get_human(),
         total_data_rate.get_human(),
         entries_rate.get::<hertz>().trunc().separate_with_commas()
     );
-    Ok(rtn)
+    Ok((multi, stats))
 }
