@@ -188,54 +188,37 @@ pub fn process_mft_file(
         file_names.entry_count().separate_with_commas()
     );
 
-    // resolve paths (sequential baseline)
+    // resolve paths (multi-parent default)
     debug!(
         drive_letter = &drive_letter,
-        "Resolving paths for {} filename attributes",
+        "Resolving (multi-parent) paths for {} filename attributes",
         file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let paths = path_resolve::resolve_paths_simple(&file_names)?;
+    let multi = path_resolve::resolve_paths_all(&file_names)?;
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
-    let resolved_paths = paths.iter().flatten().count();
+    let total_paths = multi.total_paths();
+    let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
     let resolve_rate = InformationRate::from(
-        Information::new::<byte>(resolved_paths as f64 * 256.0) / path_resolve_elapsed,
+        Information::new::<byte>(resolved_entries as f64 * 256.0) / path_resolve_elapsed,
     );
     debug!(
         drive_letter = &drive_letter,
-        "Took {} ({}) resolved_paths={}",
+        "Took {} ({}) entries_resolved={} total_paths={}",
         path_resolve_elapsed.get_human(),
         resolve_rate.get_human(),
-        resolved_paths.separate_with_commas()
+        resolved_entries.separate_with_commas(),
+        total_paths.separate_with_commas()
     );
 
-    #[cfg(debug_assertions)]
-    {
-        // Multi-parent resolution (debug / validation only for now)
-        let mp_start = Instant::now();
-        let multi = path_resolve::resolve_paths_all(&file_names)?;
-        let mp_elapsed = Time::new::<second>(mp_start.elapsed().as_secs_f64());
-        let mp_total: usize = multi.total_paths();
-        debug!(drive_letter = &drive_letter, "Multi-parent resolved paths={} extra={} time={}", mp_total.separate_with_commas(), (mp_total as isize - resolved_paths as isize), mp_elapsed.get_human());
-        // Sample ensure every single-path (if present) appears in multi
-        let mut mismatches = 0usize;
-        for (idx, sp) in paths.iter().enumerate() { if let Some(p) = sp { if !multi.0.get(idx).map(|v| v.iter().any(|mp| mp == p)).unwrap_or(false) { mismatches += 1; if mismatches < 10 { debug!(drive_letter = &drive_letter, idx, single=%p.display(), "Missing in multi-parent set"); } } } }
-        if mismatches > 0 { debug!(drive_letter = &drive_letter, mismatches, "Single-path entries missing from multi-parent results"); }
-    }
-
-    // sample
-    let sample_paths: Vec<PathBuf> = paths.iter().flatten().take(sample_limit).cloned().collect();
-
-    // Debug validation: run comparative sampling between old and new resolvers.
-    // This will execute both algorithms; keep sample size moderate.
-    #[cfg(debug_assertions)]
-    {
-        if let Err(e) = path_resolve::compare_resolvers_random_sample(&file_names, 10_000, 0) {
-            debug!(drive_letter = &drive_letter, "Resolver discrepancy: {:?}", e);
-        } else {
-            debug!(drive_letter = &drive_letter, "Resolver comparison OK (sample)");
-        }
-    }
+    // sample (flatten multi paths)
+    let sample_paths: Vec<PathBuf> = multi
+        .0
+        .iter()
+        .flat_map(|v| v.iter())
+        .take(sample_limit)
+        .cloned()
+        .collect();
 
     let rtn = MftProcessStats {
         path: mft_file_path.to_path_buf(),
@@ -246,7 +229,7 @@ pub fn process_mft_file(
         fixups_already: stats.already_applied,
         fixups_invalid: stats.invalid,
         filename_attrs: file_names.x30_count(),
-        resolved_paths,
+        resolved_paths: resolved_entries, // now counts entries with at least one path
         dur_fixups: fixup_elapsed,
         dur_scan: scan_elapsed,
         dur_resolve: path_resolve_elapsed,
