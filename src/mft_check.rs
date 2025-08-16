@@ -57,7 +57,7 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()
     );
 
     for (drive_letter, mft_file_path) in mft_files {
-        process_mft_file(drive_letter.to_string(), &mft_file_path, 200)?;
+        process_mft_file(drive_letter.to_string(), &mft_file_path, 10)?;
     }
     Ok(())
 }
@@ -209,8 +209,33 @@ pub fn process_mft_file(
         resolved_paths.separate_with_commas()
     );
 
+    #[cfg(debug_assertions)]
+    {
+        // Multi-parent resolution (debug / validation only for now)
+        let mp_start = Instant::now();
+        let multi = path_resolve::resolve_paths_all(&file_names)?;
+        let mp_elapsed = Time::new::<second>(mp_start.elapsed().as_secs_f64());
+        let mp_total: usize = multi.total_paths();
+        debug!(drive_letter = &drive_letter, "Multi-parent resolved paths={} extra={} time={}", mp_total.separate_with_commas(), (mp_total as isize - resolved_paths as isize), mp_elapsed.get_human());
+        // Sample ensure every single-path (if present) appears in multi
+        let mut mismatches = 0usize;
+        for (idx, sp) in paths.iter().enumerate() { if let Some(p) = sp { if !multi.0.get(idx).map(|v| v.iter().any(|mp| mp == p)).unwrap_or(false) { mismatches += 1; if mismatches < 10 { debug!(drive_letter = &drive_letter, idx, single=%p.display(), "Missing in multi-parent set"); } } } }
+        if mismatches > 0 { debug!(drive_letter = &drive_letter, mismatches, "Single-path entries missing from multi-parent results"); }
+    }
+
     // sample
     let sample_paths: Vec<PathBuf> = paths.iter().flatten().take(sample_limit).cloned().collect();
+
+    // Debug validation: run comparative sampling between old and new resolvers.
+    // This will execute both algorithms; keep sample size moderate.
+    #[cfg(debug_assertions)]
+    {
+        if let Err(e) = path_resolve::compare_resolvers_random_sample(&file_names, 10_000, 0) {
+            debug!(drive_letter = &drive_letter, "Resolver discrepancy: {:?}", e);
+        } else {
+            debug!(drive_letter = &drive_letter, "Resolver comparison OK (sample)");
+        }
+    }
 
     let rtn = MftProcessStats {
         path: mft_file_path.to_path_buf(),
