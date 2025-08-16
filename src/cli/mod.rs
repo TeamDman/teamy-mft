@@ -86,7 +86,7 @@ mod tests {
             let args = cli.to_args();
 
             // Create command line with executable name
-            let mut full_args = vec!["test-exe".into()];
+            let mut full_args: Vec<OsString> = vec!["test-exe".into()];
             full_args.extend(args);
 
             // Parse back from args

@@ -1,3 +1,4 @@
+use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft_dump::enable_backup_privileges;
 use crate::mft_iocp;
@@ -11,6 +12,7 @@ use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
 use num_cpus;
+use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::thread;
@@ -138,4 +140,16 @@ impl SyncArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for SyncArgs {}
+impl ToArgs for SyncArgs {
+    fn to_args(&self) -> Vec<OsString> {
+        let mut args = Vec::new();
+        if self.drive_pattern != DriveLetterPattern::default() {
+            args.push(self.drive_pattern.as_str().into());
+        }
+        if self.overwrite_existing != ExistingOutputBehaviour::default() {
+            args.push("--overwrite-existing".into());
+            args.push(self.overwrite_existing.to_string().into());
+        }
+        args
+    }
+}
