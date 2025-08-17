@@ -75,11 +75,11 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
             })?;
 
         let boot_sector = NtfsBootSector::try_from_handle(&drive_handle)?;
-        let mft_record = MftRecord::try_from_handle(
+        let dollar_mft_record = MftRecord::try_from_handle(
             &drive_handle,
-            boot_sector.mft_location() + MftRecordNumber::MFT_ROOT,
+            boot_sector.mft_location() + MftRecordNumber::DOLLAR_MFT,
         )?;
-        let data_runs = parse_mft_record_for_data_attribute(&mft_record)?;
+        let data_runs = parse_mft_record_for_data_attribute(&dollar_mft_record)?;
 
         // compute absolute offsets (on disk), and total logical size (in stream bytes)
         let mut runs_abs = Vec::new();
