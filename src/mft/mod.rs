@@ -3,6 +3,7 @@ pub mod mft_location;
 pub mod mft_record;
 pub mod mft_record_attribute;
 pub mod mft_record_attribute_iter;
+pub mod mft_record_attribute_x80_data_attribute;
 pub mod mft_record_location;
 pub mod mft_record_number;
 pub mod mft_record_reference;

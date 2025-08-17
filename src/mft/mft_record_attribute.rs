@@ -19,48 +19,48 @@ impl<'a> MftRecordAttribute<'a> {
         Ok(Self { raw })
     }
     #[inline(always)]
-    pub fn raw(&self) -> &'a [u8] {
+    pub fn get_raw(&self) -> &'a [u8] {
         self.raw
     }
 
     #[inline(always)]
-    pub fn attr_type(&self) -> u32 {
+    pub fn get_attr_type(&self) -> u32 {
         u32::from_le_bytes(self.raw[0..4].try_into().unwrap())
     }
 
     #[inline(always)]
-    pub fn total_length(&self) -> u32 {
+    pub fn get_total_length(&self) -> u32 {
         u32::from_le_bytes(self.raw[4..8].try_into().unwrap())
     }
 
     #[inline(always)]
-    pub fn is_non_resident(&self) -> bool {
+    pub fn get_is_non_resident(&self) -> bool {
         self.raw[8] != 0
     }
 
     #[inline(always)]
-    pub fn name_len(&self) -> u8 {
+    pub fn get_name_len(&self) -> u8 {
         self.raw[9]
     }
 
     #[inline(always)]
-    pub fn name_offset(&self) -> u16 {
+    pub fn get_name_offset(&self) -> u16 {
         u16::from_le_bytes(self.raw[10..12].try_into().unwrap())
     }
 
     #[inline(always)]
-    pub fn flags(&self) -> u16 {
+    pub fn get_flags(&self) -> u16 {
         u16::from_le_bytes(self.raw[12..14].try_into().unwrap())
     }
     
     #[inline(always)]
-    pub fn attr_id(&self) -> u16 {
+    pub fn get_attr_id(&self) -> u16 {
         u16::from_le_bytes(self.raw[14..16].try_into().unwrap())
     }
 
     // Resident specific
-    pub fn resident_content(&self) -> Option<&'a [u8]> {
-        if self.is_non_resident() || self.raw.len() < 0x18 {
+    pub fn get_resident_content(&self) -> Option<&'a [u8]> {
+        if self.get_is_non_resident() || self.raw.len() < 0x18 {
             return None;
         }
         let size = u32::from_le_bytes(self.raw[0x10..0x14].try_into().ok()?) as usize;
@@ -72,12 +72,18 @@ impl<'a> MftRecordAttribute<'a> {
     }
 
     // Non-resident specific
-    pub fn non_resident_header(&self) -> Option<NonResidentHeader<'_>> {
-        if !self.is_non_resident() || self.raw.len() < 0x40 {
+    pub fn get_non_resident_header(&self) -> Option<NonResidentHeader<'_>> {
+        if !self.get_is_non_resident() || self.raw.len() < 0x40 {
             return None;
         }
         Some(NonResidentHeader { raw: self.raw })
     }
+
+        pub fn as_x80(&self) -> Option<crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DataAttribute<'a>> {
+            if self.get_attr_type() == Self::TYPE_DATA {
+                crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DataAttribute::new(*self).ok()
+            } else { None }
+        }
 }
 
 #[derive(Clone, Copy, Debug)]
