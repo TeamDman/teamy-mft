@@ -40,9 +40,10 @@ pub trait EnsureParentDirExists {
 impl<T: AsRef<Path>> EnsureParentDirExists for T {
     fn ensure_parent_dir_exists(&self) -> eyre::Result<()> {
         if let Some(parent) = self.as_ref().parent()
-            && !parent.exists() {
-                fs::create_dir_all(parent)?;
-            }
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
         Ok(())
     }
 }

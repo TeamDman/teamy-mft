@@ -60,7 +60,7 @@ Resident extension (when non_resident == 0):
 0x18 ...  Content bytes inline (this is where a small DATA attribute’s payload lives)
 
 Non‑resident extension (when non_resident == 1):
-0x10 (8)  Starting VCN  
+0x10 (8)  Starting VCN  (virtual cluster number)
 0x18 (8)  Last VCN  
 0x20 (2)  Data runs offset (from attribute start)  
 0x22 (2)  Compression unit size (power-of-two clusters; 0 = uncompressed)  
