@@ -1,12 +1,12 @@
 pub mod cli;
 pub mod drive_letter_pattern;
+pub mod mft;
 pub mod mft_check;
 pub mod mft_iocp;
+pub mod ntfs;
 pub mod paths;
 pub mod sync_dir;
 pub mod windows;
-pub mod mft;
-pub mod ntfs;
 use crate::cli::Cli;
 use crate::windows::console_reuse::reuse_console_if_requested;
 use clap::CommandFactory;

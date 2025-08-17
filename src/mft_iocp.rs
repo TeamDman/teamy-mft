@@ -1,7 +1,7 @@
+use crate::mft::mft_data_run::parse_mft_record_for_data_attribute;
 use crate::mft::mft_record::MftRecord;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::ntfs_boot_sector::NtfsBootSector;
-use crate::mft::mft_data_run::parse_mft_record_for_data_attribute;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use crate::windows::win_handles::AutoClosingHandle;
 use crate::windows::win_handles::get_drive_handle;

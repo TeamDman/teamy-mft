@@ -6,11 +6,11 @@ use clap::Args;
 use eyre::Context;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use thousands::Separable;
-use tracing::debug;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use thousands::Separable;
+use tracing::debug;
 use tracing::info;
 
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
@@ -84,7 +84,6 @@ impl QueryArgs {
             }
             debug!("Tick status: {:?}", status);
         }
-
 
         let snapshot = nucleo.snapshot();
         info!("Found {} matching items", snapshot.matched_item_count());

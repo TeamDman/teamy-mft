@@ -29,7 +29,7 @@ fn create_deep_folders() -> eyre::Result<()> {
         );
 
         path.push(&dir_name);
-        
+
         // Check if we've reached maximum path length
         if path.to_string_lossy().len() >= max_length {
             println!("Reached maximum path length limit: {}", max_length);

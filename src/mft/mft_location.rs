@@ -1,6 +1,8 @@
-use std::ops::{Add, Deref};
-
-use crate::mft::{mft_record_location::MftRecordLocationOnDisk, mft_record_number::MftRecordNumber, ntfs_boot_sector::NtfsBootSector};
+use crate::mft::mft_record_location::MftRecordLocationOnDisk;
+use crate::mft::mft_record_number::MftRecordNumber;
+use crate::mft::ntfs_boot_sector::NtfsBootSector;
+use std::ops::Add;
+use std::ops::Deref;
 
 #[derive(Debug)]
 pub struct MftLocationOnDisk {
@@ -23,6 +25,6 @@ impl Add<MftRecordNumber> for MftLocationOnDisk {
     type Output = MftRecordLocationOnDisk;
 
     fn add(self, other: MftRecordNumber) -> Self::Output {
-        MftRecordLocationOnDisk::from_offset(self.offset + *other)
+        MftRecordLocationOnDisk::new(self.offset + *other)
     }
 }

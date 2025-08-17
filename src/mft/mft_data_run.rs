@@ -8,9 +8,7 @@ pub struct DataRun {
 }
 
 /// Parses an MFT record to extract data runs from the DATA attribute (0x80)
-pub fn parse_mft_record_for_data_attribute(
-    record: &MftRecord,
-) -> eyre::Result<Vec<DataRun>> {
+pub fn parse_mft_record_for_data_attribute(record: &MftRecord) -> eyre::Result<Vec<DataRun>> {
     let record = record.data;
     // Get the offset to the first attribute (typically at offset 20)
     let attr_offset = u16::from_le_bytes([record[20], record[21]]) as usize;

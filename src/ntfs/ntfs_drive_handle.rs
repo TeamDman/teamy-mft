@@ -1,8 +1,7 @@
-use std::ops::Deref;
-
 use crate::windows::win_handles::AutoClosingHandle;
 use eyre::Context;
 use eyre::eyre;
+use std::ops::Deref;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;

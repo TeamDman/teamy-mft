@@ -14,15 +14,14 @@ impl AutoClosingHandle {
         // Read
         let mut bytes_read = 0;
         unsafe {
-            ReadFile(
-                **self,
-                Some(buf),
-                Some(&mut bytes_read),
-                None,
-            )?;
+            ReadFile(**self, Some(buf), Some(&mut bytes_read), None)?;
         }
         if bytes_read != buf.len() as u32 {
-            bail!("Failed to read from handle, expected to read {} bytes, got {}", buf.len(), bytes_read);
+            bail!(
+                "Failed to read from handle, expected to read {} bytes, got {}",
+                buf.len(),
+                bytes_read
+            );
         }
         Ok(())
     }
