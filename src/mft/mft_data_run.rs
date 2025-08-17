@@ -1,5 +1,5 @@
 use crate::mft::mft_record::MftRecord;
-use eyre::eyre;
+use eyre::Result;
 /// Data run information
 #[derive(Debug)]
 pub struct DataRun {
@@ -8,68 +8,13 @@ pub struct DataRun {
 }
 
 /// Parses an MFT record to extract data runs from the DATA attribute (0x80)
-pub fn parse_mft_record_for_data_attribute(record: &MftRecord) -> eyre::Result<Vec<DataRun>> {
-    let record = record.data;
-    // Get the offset to the first attribute (typically at offset 20)
-    let attr_offset = u16::from_le_bytes([record[20], record[21]]) as usize;
-    let mut read_ptr = attr_offset;
-
-    while read_ptr < record.len() {
-        // Read attribute header
-        if read_ptr + 8 > record.len() {
-            break;
-        }
-
-        let attr_type = u32::from_le_bytes([
-            record[read_ptr],
-            record[read_ptr + 1],
-            record[read_ptr + 2],
-            record[read_ptr + 3],
-        ]);
-
-        // Check for end marker
-        if attr_type == 0xffffffff {
-            break;
-        }
-
-        let attr_length = u32::from_le_bytes([
-            record[read_ptr + 4],
-            record[read_ptr + 5],
-            record[read_ptr + 6],
-            record[read_ptr + 7],
-        ]) as usize;
-
-        if attr_length == 0 {
-            break;
-        }
-
-        // Check if this is the DATA attribute (0x80)
-        if attr_type == 0x80 {
-            // Check if it's non-resident (byte at offset 8 should be != 0)
-            if read_ptr + 8 < record.len() && record[read_ptr + 8] != 0 {
-                // Get the data runs offset (at offset 32 from attribute start)
-                if read_ptr + 34 <= record.len() {
-                    let run_offset =
-                        u16::from_le_bytes([record[read_ptr + 32], record[read_ptr + 33]]) as usize;
-
-                    let data_runs_start = read_ptr + run_offset;
-                    let data_runs_end = read_ptr + attr_length;
-
-                    if data_runs_start < data_runs_end && data_runs_end <= record.len() {
-                        return decode_data_runs(&record[data_runs_start..data_runs_end]);
-                    }
-                }
-            }
-        }
-
-        read_ptr += attr_length;
-    }
-
-    Err(eyre!("Could not find DATA attribute (0x80) in MFT record"))
+pub fn parse_mft_record_for_data_attribute(record: &MftRecord) -> Result<Vec<DataRun>> {
+    let runlist = record.get_data_attribute_runlist()?; // underlying attribute helpers validate bounds
+    decode_data_runs(runlist)
 }
 
 /// Decodes NTFS data runs
-fn decode_data_runs(data_runs: &[u8]) -> eyre::Result<Vec<DataRun>> {
+fn decode_data_runs(data_runs: &[u8]) -> Result<Vec<DataRun>> {
     let mut runs = Vec::new();
     let mut decode_pos = 0;
 

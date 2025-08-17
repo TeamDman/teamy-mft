@@ -55,7 +55,7 @@ impl ReadRequest {
 /// Read the complete MFT using IOCP overlapped reads.
 /// drive_letter: 'C', 'D', ...
 /// output_path: file path to write final MFT blob
-pub fn read_mft<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre::Result<()> {
+pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Result<()> {
     let drive_letter = drive_letter.to_ascii_uppercase();
     let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path

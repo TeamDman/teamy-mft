@@ -1,7 +1,7 @@
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::windows::win_handles::AutoClosingHandle;
-use eyre::bail;
+use eyre::{bail, eyre};
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
 /// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
@@ -125,36 +125,85 @@ impl MftRecord {
         self.read_u32(Self::OFFSET_FOR_RECORD_NUMBER).into()
     }
 
-    /// Apply USA fixups in-place. Returns true if all sectors validated, false if any mismatch.
-    /// Safety: operates purely on the in-memory buffer; caller decides how to handle false.
-    pub fn apply_fixups(&mut self) -> bool {
+    /// Apply USA fixups in-place.
+    /// On success returns Ok(()). Any integrity issue yields an Err with context.
+    pub fn apply_fixups(&mut self) -> eyre::Result<()> {
         if self.get_signature() != b"FILE" {
-            return false;
+            bail!("Cannot apply fixups: signature is not FILE (found {:?})", self.get_signature());
         }
         let usa_offset = self.get_update_sequence_array_offset() as usize;
-        let usa_size = self.get_update_sequence_array_size_words() as usize; // number of 2-byte words
-        if usa_size < 2 {
-            return false;
+        let usa_size_words = self.get_update_sequence_array_size_words() as usize; // total 2-byte words including sentinel
+        if usa_size_words < 2 {
+            bail!("Invalid USA: size words {} < 2", usa_size_words);
         }
-        let fixup_bytes_len = usa_size * 2;
+        let fixup_bytes_len = usa_size_words * 2;
         if usa_offset == 0 || usa_offset + fixup_bytes_len > self.data.len() {
-            return false;
+            bail!(
+                "Invalid USA bounds: offset={} length={} record_len={}",
+                usa_offset,
+                fixup_bytes_len,
+                self.data.len()
+            );
         }
-        let usa = self.data[usa_offset..usa_offset + fixup_bytes_len].to_vec();
-        let update_sequence: [u8; 2] = usa[0..2].try_into().unwrap();
-        let mut valid = true;
-        for (i, replacement) in usa[2..].chunks_exact(2).enumerate() {
-            let end = (i + 1) * 512; // stride size fixed at 512 logical bytes
-            if end > self.data.len() {
-                break;
-            } // allow partial at tail
+    let usa_vec = self.data[usa_offset..usa_offset + fixup_bytes_len].to_vec();
+    let update_sequence = &usa_vec[0..2];
+    let replacements = &usa_vec[2..];
+    for (i, replacement) in replacements.chunks_exact(2).enumerate() {
+            let end = (i + 1) * 512; // logical stride size
+            if end > self.data.len() { break; } // partial final stride ok
             let sector_last_two = &mut self.data[end - 2..end];
             if sector_last_two != update_sequence {
-                valid = false;
-                continue;
+                bail!("Fixup mismatch at stride {}: expected {:02X?} found {:02X?}", i, update_sequence, sector_last_two);
             }
             sector_last_two.copy_from_slice(replacement);
         }
-        valid
+        Ok(())
+    }
+
+    /// Iterate raw attribute slices (header + body) in this record.
+    pub fn iter_raw_attributes(&self) -> RawAttributeIter<'_> {
+        let start = self.get_first_attribute_offset() as usize;
+        let used = self.get_used_size() as usize;
+        let used = used.min(self.data.len());
+        RawAttributeIter { data: &self.data, pos: start, used }
+    }
+    /// Find the first non-resident $DATA (0x80) attribute and return its full slice.
+    pub fn find_non_resident_data_attribute(&self) -> Option<&[u8]> {
+        for attr in self.iter_raw_attributes() {
+            if attribute_type(attr) == 0x80 && is_non_resident(attr) { return Some(attr); }
+        }
+        None
+    }
+    /// Extract the runlist slice (data runs) from the first non-resident $DATA attribute.
+    pub fn get_data_attribute_runlist(&self) -> eyre::Result<&[u8]> {
+        let attr = self
+            .find_non_resident_data_attribute()
+            .ok_or_else(|| eyre!("No non-resident $DATA attribute found"))?;
+        if attr.len() < 0x22 { bail!("Attribute too short to contain runlist header (len={})", attr.len()); }
+        // non-resident header layout: runlist offset at +0x20 (u16)
+        let runlist_off = u16::from_le_bytes([attr[0x20], attr[0x21]]) as usize;
+        if runlist_off >= attr.len() { bail!("Runlist offset {} beyond attribute length {}", runlist_off, attr.len()); }
+        let run_slice = &attr[runlist_off..];
+        Ok(run_slice)
     }
 }
+
+/// Iterator over raw attribute byte slices inside an MFT record.
+pub struct RawAttributeIter<'a> { data: &'a [u8], pos: usize, used: usize }
+impl<'a> Iterator for RawAttributeIter<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos + 4 > self.used { return None; }
+        let attr_type = u32::from_le_bytes(self.data[self.pos..self.pos+4].try_into().ok()?);
+        if attr_type == 0xFFFF_FFFF { return None; }
+        if self.pos + 8 > self.used { return None; }
+        let attr_len = u32::from_le_bytes(self.data[self.pos+4..self.pos+8].try_into().ok()?) as usize;
+        if attr_len == 0 || self.pos + attr_len > self.used { return None; }
+        let start = self.pos; let end = start + attr_len; self.pos = end; Some(&self.data[start..end])
+    }
+}
+
+#[inline(always)]
+fn attribute_type(attr: &[u8]) -> u32 { u32::from_le_bytes(attr[0..4].try_into().unwrap()) }
+#[inline(always)]
+fn is_non_resident(attr: &[u8]) -> bool { attr.get(8).map(|b| *b != 0).unwrap_or(false) }
