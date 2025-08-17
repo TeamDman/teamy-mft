@@ -35,7 +35,7 @@ pub enum Command {
 
 impl Default for Command {
     fn default() -> Self {
-        Command::GetSyncDir(GetSyncDirArgs::default())
+        Command::GetSyncDir(GetSyncDirArgs)
     }
 }
 

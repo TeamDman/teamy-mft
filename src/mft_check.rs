@@ -161,7 +161,7 @@ pub fn process_mft_file(
     );
     let entry_size_bytes = fast_fixup::detect_entry_size(&bytes[0..1024]).unwrap_or(1024) as usize;
     let entry_size = Information::new::<byte>(entry_size_bytes as f64);
-    if entry_size_bytes == 0 || bytes.len() % entry_size_bytes != 0 {
+    if entry_size_bytes == 0 || !bytes.len().is_multiple_of(entry_size_bytes) {
         eyre::bail!("Unaligned entry size for {}", mft_file_path.display());
     }
     let entry_count = bytes.len() / entry_size_bytes;

@@ -6,11 +6,20 @@ use std::ops::Deref;
 pub struct MftRecordLocationOnDisk(u64);
 
 impl MftRecordLocationOnDisk {
-    pub const fn new(offset: u64) -> Self { MftRecordLocationOnDisk(offset) }
-    pub fn from_record_number(mft_location: MftLocationOnDisk, record_number: MftRecordNumber) -> Self { mft_location + record_number }
+    pub const fn new(offset: u64) -> Self {
+        MftRecordLocationOnDisk(offset)
+    }
+    pub fn from_record_number(
+        mft_location: MftLocationOnDisk,
+        record_number: MftRecordNumber,
+    ) -> Self {
+        mft_location + record_number
+    }
 }
 
 impl Deref for MftRecordLocationOnDisk {
     type Target = u64;
-    fn deref(&self) -> &Self::Target { &self.0 }
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }

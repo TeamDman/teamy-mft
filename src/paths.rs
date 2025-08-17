@@ -6,8 +6,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn project_dirs() -> eyre::Result<ProjectDirs> {
-    Ok(ProjectDirs::from_path(PathBuf::from("teamy_mft"))
-        .ok_or_else(|| eyre!("Could not determine project directories"))?)
+    ProjectDirs::from_path(PathBuf::from("teamy_mft"))
+        .ok_or_else(|| eyre!("Could not determine project directories"))
 }
 
 pub struct ConfigDirPath {
@@ -39,11 +39,10 @@ pub trait EnsureParentDirExists {
 }
 impl<T: AsRef<Path>> EnsureParentDirExists for T {
     fn ensure_parent_dir_exists(&self) -> eyre::Result<()> {
-        if let Some(parent) = self.as_ref().parent() {
-            if !parent.exists() {
+        if let Some(parent) = self.as_ref().parent()
+            && !parent.exists() {
                 fs::create_dir_all(parent)?;
             }
-        }
         Ok(())
     }
 }

@@ -59,8 +59,8 @@ impl QueryArgs {
             .par_iter()
             .map(|(drive_letter, mft_path)| {
                 let (files, _stats) =
-                    process_mft_file(drive_letter.to_string(), &mft_path, 0, true).wrap_err_with(
-                        || format!("Failed to process MFT file for drive {}", drive_letter),
+                    process_mft_file(drive_letter.to_string(), mft_path, 0, true).wrap_err_with(
+                        || format!("Failed to process MFT file for drive {drive_letter}"),
                     )?;
                 info!("Found {} files", files.total_paths().separate_with_commas());
                 files.0.into_iter().flatten().for_each(|file_path| {
@@ -72,7 +72,7 @@ impl QueryArgs {
             })
             .for_each(|resp| {
                 if let Err(e) = resp {
-                    eprintln!("Error processing MFT file: {:?}", e);
+                    eprintln!("Error processing MFT file: {e:?}");
                 }
             });
 

@@ -5,7 +5,9 @@ use std::ops::Deref;
 pub struct MftRecordNumber(u64);
 
 impl MftRecordNumber {
-    pub const fn new(record_number: u64) -> Self { Self(record_number) }
+    pub const fn new(record_number: u64) -> Self {
+        Self(record_number)
+    }
     // ---------------------------------------------------------------------
     // Reserved system file record numbers (0–15) as defined by NTFS.
     // These records are guaranteed to exist (though some may be empty on a
@@ -46,29 +48,29 @@ impl MftRecordNumber {
 
     /// Returns true if this record number is within the reserved system file range (0–15 inclusive).
     pub const fn is_reserved(self) -> bool {
-    self.0 < 16
+        self.0 < 16
     }
 }
 impl std::fmt::Display for MftRecordNumber {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", self.0)
+        write!(f, "{}", self.0)
     }
 }
 impl From<u64> for MftRecordNumber {
     fn from(record_number: u64) -> Self {
-    MftRecordNumber(record_number)
+        MftRecordNumber(record_number)
     }
 }
 impl From<u32> for MftRecordNumber {
     fn from(record_number: u32) -> Self {
-    MftRecordNumber(record_number as u64)
+        MftRecordNumber(record_number as u64)
     }
 }
 
 impl Deref for MftRecordNumber {
     type Target = u64;
     fn deref(&self) -> &Self::Target {
-    &self.0
+        &self.0
     }
 }
 

@@ -100,7 +100,7 @@ impl SyncArgs {
         for worker_id in 0..max_workers {
             let rx = rx.clone();
             let handle = thread::Builder::new()
-                .name(format!("mft-iocp-{}", worker_id))
+                .name(format!("mft-iocp-{worker_id}"))
                 .spawn(move || {
                     while let Ok((drive_letter, output_path)) = rx.recv() {
                         info!(

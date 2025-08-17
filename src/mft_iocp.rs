@@ -57,7 +57,7 @@ impl ReadRequest {
 /// output_path: file path to write final MFT blob
 pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre::Result<()> {
     let drive_letter = drive_letter.to_ascii_uppercase();
-    let volume_path = format!(r"\\.\{}:", drive_letter);
+    let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path
         .as_str()
         .easy_pcwstr()

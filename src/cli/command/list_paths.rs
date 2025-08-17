@@ -122,7 +122,7 @@ impl ListPathsArgs {
 
             const ROOT_ENTRY: u64 = 5;
             fn choose_dir<'a>(
-                links: &'a Vec<FileNameAttr>,
+                links: &'a [FileNameAttr],
                 prec_index: &impl Fn(&FileNamespace) -> usize,
             ) -> &'a FileNameAttr {
                 links
@@ -157,7 +157,7 @@ impl ListPathsArgs {
                         full.push_str(comp);
                     }
                     if seen.insert(full.clone()) {
-                        println!("{}", full);
+                        println!("{full}");
                     }
                 }
             }
