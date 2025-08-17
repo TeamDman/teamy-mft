@@ -1,7 +1,7 @@
-use crate::mft::mft_record_attribute::MftRecordAttribute;
 use crate::mft::mft_record::MftRecord;
+use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListEntry; // ensure new shared types referenced
 use crate::mft::mft_record_number::MftRecordNumber;
-use crate::mft::ntfs_boot_sector::NtfsBootSector;
+use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use crate::windows::win_handles::AutoClosingHandle;
 use crate::windows::win_handles::get_drive_handle;
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use tracing::warn;
 use windows::Win32::Storage::FileSystem::CreateFileW;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
@@ -25,7 +26,6 @@ use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::CreateIoCompletionPort;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 use windows::Win32::System::IO::OVERLAPPED;
-
 const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MiB
 const MAX_IN_FLIGHT_IO: usize = 16; // tuning knob
 
@@ -79,28 +79,41 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
             &drive_handle,
             boot_sector.mft_location() + MftRecordNumber::DOLLAR_MFT,
         )?;
+
         // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).
-        let mut decoded_runs = Vec::new();
-        for attr in dollar_mft_record.iter_raw_attributes() {
-            if attr.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA && attr.get_is_non_resident() {
-                if let Some(x80) = attr.as_x80() {
-                    if let Some(runlist) = x80.get_data_run_list()? {
-                        for run_res in runlist.iter() { decoded_runs.push(run_res?); }
+        let mut decoded_runs: Vec<MftRecordAttributeRunListEntry> = Vec::new();
+        for attr in dollar_mft_record.iter_attributes() {
+            if let Some(x80) = attr.as_x80() {
+                if let Ok(runlist) = x80.get_data_run_list() {
+                    for run_res in runlist.iter() {
+                        match run_res {
+                            Ok(run) => decoded_runs.push(run),
+                            Err(e) => warn!("Failed decoding data run entry: {e:?}"),
+                        }
                     }
+                } else {
+                    warn!("Failed to get data runs from attribute");
                 }
             }
         }
-        if decoded_runs.is_empty() { eyre::bail!("No non-resident $DATA runs found in $MFT record"); }
+
+        if decoded_runs.is_empty() {
+            eyre::bail!("No non-resident $DATA runs found in $MFT record");
+        }
+
         // Convert relative runs (with optional sparse) into absolute cluster extents list (skip sparse).
-    let mut runs_abs = Vec::new();
+        let mut runs_abs = Vec::new();
         let bytes_per_cluster = boot_sector.bytes_per_cluster();
         let mut total_bytes: u64 = 0;
         for run in &decoded_runs {
-            let lcn = if let Some(lcn) = run.lcn_start { lcn } else { // sparse: extend logical size only
+            let local_cluster_network = if let Some(local_cluster_network) = run.local_cluster_network_start {
+                local_cluster_network
+            } else {
+                // sparse: extend logical size only
                 total_bytes = total_bytes.saturating_add(run.length_clusters * bytes_per_cluster);
                 continue;
             };
-            let disk_offset = lcn * bytes_per_cluster;
+            let disk_offset = local_cluster_network * bytes_per_cluster;
             let run_bytes = run.length_clusters * bytes_per_cluster;
             runs_abs.push((disk_offset, run_bytes));
             total_bytes = total_bytes.saturating_add(run_bytes);

@@ -4,7 +4,7 @@ use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::windows::win_handles::AutoClosingHandle;
 use eyre::bail;
-use eyre::eyre;
+use std::ops::Deref;
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
 /// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
@@ -197,127 +197,24 @@ impl MftRecord {
     }
 
     /// Iterate raw attribute slices (header + body) in this record.
-    pub fn iter_raw_attributes(&self) -> MftRecordAttributeIter<'_> {
-        let start = self.get_first_attribute_offset() as usize;
-        let used = self.get_used_size() as usize;
-        debug_assert!(
-            start < used,
-            "Attribute start {} must be less than used size {}",
-            start,
-            used
-        );
-        debug_assert!(
-            used <= self.data.len(),
-            "Used size {} must not exceed record length {}",
-            used,
-            self.data.len()
-        );
-        MftRecordAttributeIter {
-            data: &self.data,
-            pos: start,
-            used,
-        }
+    pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> {
+        MftRecordAttributeIter::new(self)
     }
+}
+impl Deref for MftRecord {
+    type Target = [u8];
 
-    /// Find the first non-resident $DATA (0x80) attribute and return its full slice.
-    pub fn find_non_resident_data_attribute(&self) -> Option<MftRecordAttribute<'_>> {
-        self.iter_raw_attributes()
-            .find(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA && a.get_is_non_resident())
+    fn deref(&self) -> &Self::Target {
+        &self.data
     }
-
-    /// Iterate over all $DATA (0x80) attributes (resident and non-resident)
-    pub fn iter_data_attributes(&self) -> impl Iterator<Item = MftRecordAttribute<'_>> + '_ {
-        self.iter_raw_attributes()
-            .filter(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA)
-    }
-
-    /// Collect runlists for all non-resident DATA attributes (multiple segments if Attribute List used later).
-    pub fn get_all_data_attribute_runlists(&self) -> eyre::Result<Vec<&[u8]>> {
-        let mut out = Vec::new();
-        // Manual scan like get_data_attribute_runlist but collecting all.
-        let start = self.get_first_attribute_offset() as usize;
-        let used = (self.get_used_size() as usize).min(self.data.len());
-        let mut pos = start;
-        while pos + 8 <= used {
-            let attr_type = u32::from_le_bytes(self.data[pos..pos + 4].try_into().unwrap());
-            if attr_type == MftRecordAttribute::TYPE_END {
-                break;
-            }
-            let attr_len =
-                u32::from_le_bytes(self.data[pos + 4..pos + 8].try_into().unwrap()) as usize;
-            if attr_len == 0 || pos + attr_len > used {
-                break;
-            }
-            let non_resident_flag = self.data.get(pos + 8).copied().unwrap_or(0);
-            if attr_type == MftRecordAttribute::TYPE_DOLLAR_DATA && non_resident_flag != 0 {
-                if attr_len < 0x40 {
-                    bail!(
-                        "DATA attribute too short for non-resident header (len={})",
-                        attr_len
-                    );
-                }
-                let runlist_off =
-                    u16::from_le_bytes(self.data[pos + 0x20..pos + 0x22].try_into().unwrap())
-                        as usize;
-                if runlist_off >= attr_len {
-                    bail!(
-                        "Runlist offset {} beyond attribute length {}",
-                        runlist_off,
-                        attr_len
-                    );
-                }
-                out.push(&self.data[pos + runlist_off..pos + attr_len]);
-            }
-            pos += attr_len;
-        }
-        if out.is_empty() {
-            bail!("No non-resident $DATA attributes found");
-        }
-        Ok(out)
-    }
-
-    /// Extract the runlist slice (data runs) from the first non-resident $DATA attribute.
-    pub fn get_data_attribute_runlist(&self) -> eyre::Result<&[u8]> {
-        // Manually search again to obtain raw slice lifetime directly from self.data.
-        let start = self.get_first_attribute_offset() as usize;
-        let used = self.get_used_size() as usize;
-        debug_assert!(used <= self.data.len());
-        let mut pos = start;
-        while pos + 8 <= used {
-            let attr_type = u32::from_le_bytes(self.data[pos..pos + 4].try_into().unwrap());
-            if attr_type == MftRecordAttribute::TYPE_END {
-                break;
-            }
-            let attr_len =
-                u32::from_le_bytes(self.data[pos + 4..pos + 8].try_into().unwrap()) as usize;
-            if attr_len == 0 || pos + attr_len > used {
-                break;
-            }
-            if attr_type == MftRecordAttribute::TYPE_DOLLAR_DATA
-                && self.data.get(pos + 8).copied().unwrap_or(0) != 0
-            {
-                // non-resident DATA
-                if attr_len < 0x40 {
-                    bail!(
-                        "DATA attribute too short for non-resident header (len={})",
-                        attr_len
-                    );
-                }
-                let runlist_off =
-                    u16::from_le_bytes(self.data[pos + 0x20..pos + 0x22].try_into().unwrap())
-                        as usize;
-                if runlist_off >= attr_len {
-                    bail!(
-                        "Runlist offset {} beyond attribute length {}",
-                        runlist_off,
-                        attr_len
-                    );
-                }
-                let run_slice = &self.data[pos + runlist_off..pos + attr_len];
-                return Ok(run_slice);
-            }
-            pos += attr_len;
-        }
-        Err(eyre!("No non-resident $DATA attribute found"))
+}
+impl std::fmt::Debug for MftRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MftRecord")
+            .field("signature", &self.get_signature())
+            .field("record_number", &self.get_record_number())
+            .field("used_size", &self.get_used_size())
+            .field("allocated_size", &self.get_allocated_size())
+            .finish()
     }
 }

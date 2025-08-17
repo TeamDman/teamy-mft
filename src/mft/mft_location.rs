@@ -1,6 +1,6 @@
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
-use crate::mft::ntfs_boot_sector::NtfsBootSector;
+use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use std::ops::Add;
 use std::ops::Deref;
 
