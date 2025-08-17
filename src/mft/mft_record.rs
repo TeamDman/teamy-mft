@@ -222,13 +222,13 @@ impl MftRecord {
     /// Find the first non-resident $DATA (0x80) attribute and return its full slice.
     pub fn find_non_resident_data_attribute(&self) -> Option<MftRecordAttribute<'_>> {
         self.iter_raw_attributes()
-            .find(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DATA && a.get_is_non_resident())
+            .find(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA && a.get_is_non_resident())
     }
 
     /// Iterate over all $DATA (0x80) attributes (resident and non-resident)
     pub fn iter_data_attributes(&self) -> impl Iterator<Item = MftRecordAttribute<'_>> + '_ {
         self.iter_raw_attributes()
-            .filter(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DATA)
+            .filter(|a| a.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA)
     }
 
     /// Collect runlists for all non-resident DATA attributes (multiple segments if Attribute List used later).
@@ -239,20 +239,40 @@ impl MftRecord {
         let used = (self.get_used_size() as usize).min(self.data.len());
         let mut pos = start;
         while pos + 8 <= used {
-            let attr_type = u32::from_le_bytes(self.data[pos..pos+4].try_into().unwrap());
-            if attr_type == MftRecordAttribute::TYPE_END { break; }
-            let attr_len = u32::from_le_bytes(self.data[pos+4..pos+8].try_into().unwrap()) as usize;
-            if attr_len == 0 || pos + attr_len > used { break; }
-            let non_resident_flag = self.data.get(pos+8).copied().unwrap_or(0);
-            if attr_type == MftRecordAttribute::TYPE_DATA && non_resident_flag != 0 {
-                if attr_len < 0x40 { bail!("DATA attribute too short for non-resident header (len={})", attr_len); }
-                let runlist_off = u16::from_le_bytes(self.data[pos+0x20..pos+0x22].try_into().unwrap()) as usize;
-                if runlist_off >= attr_len { bail!("Runlist offset {} beyond attribute length {}", runlist_off, attr_len); }
-                out.push(&self.data[pos + runlist_off .. pos + attr_len]);
+            let attr_type = u32::from_le_bytes(self.data[pos..pos + 4].try_into().unwrap());
+            if attr_type == MftRecordAttribute::TYPE_END {
+                break;
+            }
+            let attr_len =
+                u32::from_le_bytes(self.data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            if attr_len == 0 || pos + attr_len > used {
+                break;
+            }
+            let non_resident_flag = self.data.get(pos + 8).copied().unwrap_or(0);
+            if attr_type == MftRecordAttribute::TYPE_DOLLAR_DATA && non_resident_flag != 0 {
+                if attr_len < 0x40 {
+                    bail!(
+                        "DATA attribute too short for non-resident header (len={})",
+                        attr_len
+                    );
+                }
+                let runlist_off =
+                    u16::from_le_bytes(self.data[pos + 0x20..pos + 0x22].try_into().unwrap())
+                        as usize;
+                if runlist_off >= attr_len {
+                    bail!(
+                        "Runlist offset {} beyond attribute length {}",
+                        runlist_off,
+                        attr_len
+                    );
+                }
+                out.push(&self.data[pos + runlist_off..pos + attr_len]);
             }
             pos += attr_len;
         }
-        if out.is_empty() { bail!("No non-resident $DATA attributes found"); }
+        if out.is_empty() {
+            bail!("No non-resident $DATA attributes found");
+        }
         Ok(out)
     }
 
@@ -273,7 +293,7 @@ impl MftRecord {
             if attr_len == 0 || pos + attr_len > used {
                 break;
             }
-            if attr_type == MftRecordAttribute::TYPE_DATA
+            if attr_type == MftRecordAttribute::TYPE_DOLLAR_DATA
                 && self.data.get(pos + 8).copied().unwrap_or(0) != 0
             {
                 // non-resident DATA

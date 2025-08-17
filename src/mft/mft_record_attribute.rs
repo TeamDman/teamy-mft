@@ -1,3 +1,4 @@
+use crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DollarDataAttribute;
 use eyre::bail;
 use eyre::eyre;
 
@@ -5,12 +6,12 @@ use eyre::eyre;
 /// Provides typed accessors for common header fields without copying.
 #[derive(Clone, Copy, Debug)]
 pub struct MftRecordAttribute<'a> {
-    pub(crate) raw: &'a [u8],
+    raw: &'a [u8],
 }
 
 impl<'a> MftRecordAttribute<'a> {
     pub const TYPE_END: u32 = 0xFFFF_FFFF;
-    pub const TYPE_DATA: u32 = 0x80;
+    pub const TYPE_DOLLAR_DATA: u32 = 0x80;
 
     pub fn from_raw(raw: &'a [u8]) -> eyre::Result<Self> {
         if raw.len() < 16 {
@@ -18,6 +19,7 @@ impl<'a> MftRecordAttribute<'a> {
         }
         Ok(Self { raw })
     }
+
     #[inline(always)]
     pub fn get_raw(&self) -> &'a [u8] {
         self.raw
@@ -52,7 +54,7 @@ impl<'a> MftRecordAttribute<'a> {
     pub fn get_flags(&self) -> u16 {
         u16::from_le_bytes(self.raw[12..14].try_into().unwrap())
     }
-    
+
     #[inline(always)]
     pub fn get_attr_id(&self) -> u16 {
         u16::from_le_bytes(self.raw[14..16].try_into().unwrap())
@@ -79,11 +81,9 @@ impl<'a> MftRecordAttribute<'a> {
         Some(NonResidentHeader { raw: self.raw })
     }
 
-        pub fn as_x80(&self) -> Option<crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DataAttribute<'a>> {
-            if self.get_attr_type() == Self::TYPE_DATA {
-                crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DataAttribute::new(*self).ok()
-            } else { None }
-        }
+    pub fn as_x80(&self) -> Option<MftRecordX80DollarDataAttribute<'a>> {
+        MftRecordX80DollarDataAttribute::new(*self).ok()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
