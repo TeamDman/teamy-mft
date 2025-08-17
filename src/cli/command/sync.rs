@@ -1,6 +1,6 @@
 use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
-use crate::mft_iocp;
+use crate::mft_read;
 use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
 use crate::windows::win_read_raw::enable_backup_privileges;
@@ -109,7 +109,7 @@ impl SyncArgs {
                             drive_letter,
                             output_path.display()
                         );
-                        if let Err(e) = mft_iocp::read_mft_iocp(drive_letter, &output_path) {
+                        if let Err(e) = mft_read::read_mft(drive_letter, &output_path) {
                             error!(
                                 "Worker {}: IOCP read failed for {}: {:#}",
                                 worker_id, drive_letter, e
