@@ -1,4 +1,4 @@
-use crate::mft::mft_data_run::parse_mft_record_for_data_attribute;
+use crate::mft::mft_record_attribute::MftRecordAttribute;
 use crate::mft::mft_record::MftRecord;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::ntfs_boot_sector::NtfsBootSector;
@@ -79,20 +79,33 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
             &drive_handle,
             boot_sector.mft_location() + MftRecordNumber::DOLLAR_MFT,
         )?;
-        let data_runs = parse_mft_record_for_data_attribute(&dollar_mft_record)?;
-
-        // compute absolute offsets (on disk), and total logical size (in stream bytes)
-        let mut runs_abs = Vec::new();
-        let mut current_cluster: i64 = 0;
-        let mut total_bytes: u64 = 0;
+        // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).
+        let mut decoded_runs = Vec::new();
+        for attr in dollar_mft_record.iter_raw_attributes() {
+            if attr.get_attr_type() == MftRecordAttribute::TYPE_DOLLAR_DATA && attr.get_is_non_resident() {
+                if let Some(x80) = attr.as_x80() {
+                    if let Some(runlist) = x80.get_data_run_list()? {
+                        for run_res in runlist.iter() { decoded_runs.push(run_res?); }
+                    }
+                }
+            }
+        }
+        if decoded_runs.is_empty() { eyre::bail!("No non-resident $DATA runs found in $MFT record"); }
+        // Convert relative runs (with optional sparse) into absolute cluster extents list (skip sparse).
+    let mut runs_abs = Vec::new();
         let bytes_per_cluster = boot_sector.bytes_per_cluster();
-        for run in &data_runs {
-            current_cluster = current_cluster.wrapping_add(run.cluster);
-            let disk_offset = current_cluster as u64 * bytes_per_cluster; // absolute on disk
-            let run_bytes = run.length * bytes_per_cluster; // bytes in MFT stream
+        let mut total_bytes: u64 = 0;
+        for run in &decoded_runs {
+            let lcn = if let Some(lcn) = run.lcn_start { lcn } else { // sparse: extend logical size only
+                total_bytes = total_bytes.saturating_add(run.length_clusters * bytes_per_cluster);
+                continue;
+            };
+            let disk_offset = lcn * bytes_per_cluster;
+            let run_bytes = run.length_clusters * bytes_per_cluster;
             runs_abs.push((disk_offset, run_bytes));
             total_bytes = total_bytes.saturating_add(run_bytes);
         }
+        // TODO: If sparse extents appear inside $MFT they logically represent gaps (rare); currently skipped.
 
         drop(drive_handle);
 
