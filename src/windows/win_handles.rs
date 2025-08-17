@@ -1,7 +1,6 @@
 use crate::windows::win_strings::EasyPCWSTR;
 use eyre::Context;
 use std::ops::Deref;
-use std::ptr::null_mut;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::CreateFileW;
@@ -27,6 +26,16 @@ impl Drop for AutoClosingHandle {
         }
     }
 }
+impl AutoClosingHandle {
+    pub fn new(handle: HANDLE) -> Self {
+        Self(handle)
+    }
+}
+impl From<HANDLE> for AutoClosingHandle {
+    fn from(handle: HANDLE) -> Self {
+        AutoClosingHandle(handle)
+    }
+}
 
 /// Opens a handle to the specified drive.
 pub fn get_drive_handle(drive_letter: char) -> eyre::Result<AutoClosingHandle> {
@@ -35,13 +44,11 @@ pub fn get_drive_handle(drive_letter: char) -> eyre::Result<AutoClosingHandle> {
         CreateFileW(
             drive_path.easy_pcwstr()?.as_ref(),
             FILE_GENERIC_READ.0,
-            windows::Win32::Storage::FileSystem::FILE_SHARE_MODE(
-                FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0,
-            ),
-            Some(null_mut()),
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL,
-            Some(HANDLE::default()),
+            None,
         )
         .wrap_err(format!(
             "Failed to open volume handle for {drive_letter:?}, did you forget to elevate?"

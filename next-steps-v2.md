@@ -11,3 +11,4 @@
         - apply fixups (parallel)
         - collect file name attributes (parallel)
         - resolve paths (parallel)
+- ensure deleted files arent included? why are we seeing $RECYCLE.BIN entries if I've emptied my recycle bin?

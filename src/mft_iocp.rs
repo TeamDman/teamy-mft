@@ -1,7 +1,10 @@
-use crate::mft_dump::parse_mft_record_for_data_attribute;
-use crate::mft_dump::read_boot_sector;
-use crate::mft_dump::read_mft_record;
-use crate::mft_dump::write_mft_to_file;
+use crate::mft::mft_record::MftRecord;
+use crate::mft::mft_record_number::MftRecordNumber;
+use crate::mft::ntfs_boot_sector::NtfsBootSector;
+use crate::mft::mft_data_run::parse_mft_record_for_data_attribute;
+use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
+use crate::windows::win_handles::AutoClosingHandle;
+use crate::windows::win_handles::get_drive_handle;
 use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
 use std::path::Path;
@@ -10,7 +13,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Storage::FileSystem::CreateFileW;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
@@ -63,29 +65,27 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
 
     unsafe {
         // Open blocking handle for boot sector & MFT record parsing
-        let blocking_handle = CreateFileW(
-            &volume_path,
-            FILE_GENERIC_READ.0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            None,
+        let drive_handle: NtfsDriveHandle = get_drive_handle(drive_letter)
+            .wrap_err_with(|| format!("Failed to open handle to drive {drive_letter}"))?
+            .try_into()
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to convert drive handle for drive {drive_letter} to NtfsDriveHandle"
+                )
+            })?;
+
+        let boot_sector = NtfsBootSector::try_from_handle(&drive_handle)?;
+        let mft_record = MftRecord::try_from_handle(
+            &drive_handle,
+            boot_sector.mft_location() + MftRecordNumber::MFT_ROOT,
         )?;
-
-        let boot = read_boot_sector(blocking_handle).wrap_err("Failed to read boot sector")?;
-        let bytes_per_cluster = boot.bytes_per_sector as u64 * boot.sectors_per_cluster as u64;
-        let mft_location = boot.mft_cluster_number * bytes_per_cluster;
-
-        let mft_record = read_mft_record(blocking_handle, mft_location, 0)
-            .wrap_err("Failed to read MFT record")?;
-        let data_runs = parse_mft_record_for_data_attribute(&mft_record)
-            .wrap_err("Failed to parse data runs from MFT record")?;
+        let data_runs = parse_mft_record_for_data_attribute(&mft_record)?;
 
         // compute absolute offsets (on disk), and total logical size (in stream bytes)
         let mut runs_abs = Vec::new();
         let mut current_cluster: i64 = 0;
         let mut total_bytes: u64 = 0;
+        let bytes_per_cluster = boot_sector.bytes_per_cluster();
         for run in &data_runs {
             current_cluster = current_cluster.wrapping_add(run.cluster);
             let disk_offset = current_cluster as u64 * bytes_per_cluster; // absolute on disk
@@ -94,10 +94,10 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
             total_bytes = total_bytes.saturating_add(run_bytes);
         }
 
-        let _ = CloseHandle(blocking_handle);
+        drop(drive_handle);
 
         // Open overlapped-capable handle
-        let overlapped_handle = CreateFileW(
+        let overlapped_handle: AutoClosingHandle = CreateFileW(
             &volume_path,
             FILE_GENERIC_READ.0,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -105,10 +105,12 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
             OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
             None,
-        )?;
+        )?
+        .into();
 
         // Create IOCP and associate handle
-        let completion_port = CreateIoCompletionPort(overlapped_handle, None, 0, 0)?;
+        let completion_port: AutoClosingHandle =
+            CreateIoCompletionPort(*overlapped_handle, None, 0, 0)?.into();
 
         // destination buffer guarded by Mutex; acceptable since writes are large and not CPU bound
         let dest = Arc::new(Mutex::new(vec![0u8; total_bytes as usize]));
@@ -137,7 +139,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
 
                 // call ReadFile (overlapped)
                 let _ = ReadFile(
-                    overlapped_handle,
+                    *overlapped_handle,
                     Some(&mut req_ref.buffer[..this_len]),
                     None,
                     Some(overlapped_ptr),
@@ -156,7 +158,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                         let mut lp_overlapped: *mut OVERLAPPED = null_mut();
 
                         let res = GetQueuedCompletionStatus(
-                            completion_port,
+                            *completion_port,
                             &mut bytes_transferred as *mut u32,
                             &mut completion_key as *mut usize,
                             &mut lp_overlapped as *mut *mut OVERLAPPED,
@@ -183,8 +185,6 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                             }
                             Err(_) => {
                                 if lp_overlapped.is_null() {
-                                    let _ = CloseHandle(overlapped_handle);
-                                    let _ = CloseHandle(completion_port);
                                     return Err(eyre::eyre!(
                                         "GetQueuedCompletionStatus failed and no overlapped provided"
                                     ));
@@ -214,7 +214,7 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
             let mut lp_overlapped: *mut OVERLAPPED = null_mut();
 
             let res = GetQueuedCompletionStatus(
-                completion_port,
+                *completion_port,
                 &mut bytes_transferred as *mut u32,
                 &mut completion_key as *mut usize,
                 &mut lp_overlapped as *mut *mut OVERLAPPED,
@@ -237,8 +237,6 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
                 }
                 Err(_) => {
                     if lp_overlapped.is_null() {
-                        let _ = CloseHandle(overlapped_handle);
-                        let _ = CloseHandle(completion_port);
                         return Err(eyre::eyre!(
                             "GetQueuedCompletionStatus failed and no overlapped provided"
                         ));
@@ -259,12 +257,9 @@ pub fn read_mft_iocp<P: AsRef<Path>>(drive_letter: char, output_path: P) -> eyre
         // All reads complete — write to file
         {
             let dest_guard = dest.lock().unwrap();
-            write_mft_to_file(&dest_guard, output_path.as_ref())
+            std::fs::write(&output_path, dest_guard.as_slice())
                 .wrap_err("Failed to write MFT output file")?;
         }
-
-        let _ = CloseHandle(overlapped_handle);
-        let _ = CloseHandle(completion_port);
 
         Ok(())
     } // unsafe block

@@ -1,9 +1,9 @@
 use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
-use crate::mft_dump::enable_backup_privileges;
 use crate::mft_iocp;
 use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
+use crate::windows::win_read_raw::enable_backup_privileges;
 use arbitrary::Arbitrary;
 use clap::Args;
 use crossbeam_channel::bounded;

@@ -93,8 +93,6 @@ impl QueryArgs {
         }
 
         std::process::exit(0); // exit intentionally to accelerate cleanup of background threads
-
-        Ok(())
     }
 }
 
