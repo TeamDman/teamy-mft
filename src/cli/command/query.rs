@@ -58,11 +58,14 @@ impl QueryArgs {
         mft_files
             .par_iter()
             .map(|(drive_letter, mft_path)| {
-                let (files, _stats) = process_mft_file(drive_letter.to_string(), mft_path, 0, true)
-                    .wrap_err_with(|| {
-                        format!("Failed to process MFT file for drive {drive_letter}")
-                    })?;
-                info!("Found {} files", files.total_paths().separate_with_commas());
+                let drive_letter = drive_letter.to_string();
+                let (files, _stats) = process_mft_file(&drive_letter, mft_path, 0, true)
+                    .wrap_err(format!("Failed to process MFT file for drive {drive_letter}"))?;
+                info!(
+                    drive_letter = &drive_letter,
+                    "Found {} paths to be queried against",
+                    files.total_paths().separate_with_commas()
+                );
                 files.0.into_iter().flatten().for_each(|file_path| {
                     injector.push(file_path, |x, cols| {
                         cols[0] = x.to_string_lossy().into();
@@ -76,7 +79,7 @@ impl QueryArgs {
                 }
             });
 
-        info!("Ticking...");
+        debug!("Ticking Nucleo...");
         loop {
             let status = nucleo.tick(100);
             if !status.running {

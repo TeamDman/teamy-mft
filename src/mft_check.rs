@@ -58,13 +58,12 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
     );
 
     if parallel {
-        use std::sync::Arc;
         let handles: Vec<_> = mft_files
             .into_iter()
             .map(|(drive_letter, mft_file_path)| {
-                let path = Arc::new(mft_file_path);
-                let d = drive_letter.to_string();
-                std::thread::spawn(move || process_mft_file(d, &path, 10, true))
+                std::thread::spawn(move || {
+                    process_mft_file(&drive_letter.to_string(), &mft_file_path, 10, true)
+                })
             })
             .collect();
         let mut first_err: Option<eyre::Report> = None;
@@ -93,7 +92,7 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
         }
     } else {
         for (drive_letter, mft_file_path) in mft_files {
-            process_mft_file(drive_letter.to_string(), &mft_file_path, 10, false)?;
+            process_mft_file(drive_letter.to_string().as_str(), &mft_file_path, 10, false)?;
         }
     }
     Ok(())
@@ -101,7 +100,7 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
 
 /// Overall high-level processing of an MFT file: mmap -> copy -> fixups -> extract names -> resolve paths.
 pub fn process_mft_file(
-    drive_letter: String,
+    drive_letter: &str,
     mft_file_path: &Path,
     sample_limit: usize,
     parallel: bool,
@@ -277,7 +276,7 @@ pub fn process_mft_file(
         dur_resolve: path_resolve_elapsed,
         sample_paths,
     };
-    info!(
+    debug!(
         drive_letter = &drive_letter,
         "MFT {}: size={} entries={} entry_size={} fixups(applied/already/invalid)={}/{}/{} names={} resolved={} timings(fix/scan/resolve)={}/{}/{}",
         stats.path.display(),
@@ -301,7 +300,7 @@ pub fn process_mft_file(
     // aggregate performance statistics
     let total_data_rate = InformationRate::from(mft_file_size / elapsed); // overall throughput
     let entries_rate = Ratio::new::<ratio>(stats.entry_count as f64) / elapsed;
-    info!(
+    debug!(
         drive_letter = &drive_letter,
         "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file_path.display(),
