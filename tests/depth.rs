@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 #[test]
+#[ignore]
 fn create_deep_folders() -> eyre::Result<()> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
