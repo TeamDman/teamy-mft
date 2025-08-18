@@ -144,12 +144,12 @@ impl PhysicalReadPlan {
         self.requests
     }
 
-    pub fn read(self, filename: impl Param<PCWSTR>) -> eyre::Result<Vec<PhysicalReadResultEntry>> {
+    pub fn read(self, filename: impl Param<PCWSTR>) -> eyre::Result<PhysicalReadResults> {
         use windows::Win32::Foundation::ERROR_IO_PENDING;
         const MAX_IN_FLIGHT_IO: usize = 32;
 
         if self.is_empty() {
-            return Ok(Vec::new());
+            return Ok(PhysicalReadResults { entries: Vec::new() });
         }
 
         #[repr(C)]
@@ -286,7 +286,7 @@ impl PhysicalReadPlan {
                 .collect::<eyre::Result<_>>()?;
             final_responses.sort_by_key(|r| r.request.logical_offset.get::<byte>());
 
-            Ok(final_responses)
+            Ok(PhysicalReadResults { entries: final_responses })
         }
     }
 }
@@ -303,31 +303,32 @@ impl PhysicalReadResultEntry {
     }
 }
 
-/// Write the collected physical read results into a file at the provided path.
-/// Assumes results may be out-of-order; sorts by logical offset, pre-sizes the file to `total_logical_size`
-/// (zeros for gaps), then writes each block at its logical offset.
-pub fn write_read_results_to_file(
-    mut entries: Vec<PhysicalReadResultEntry>,
-    output_path: impl AsRef<std::path::Path>,
-    total_logical_size: u64,
-) -> eyre::Result<()> {
-    use std::io::Seek;
-    use std::io::SeekFrom;
-    use std::io::Write;
-    if entries.is_empty() {
-        // still create & size (may represent all-sparse data)
+#[derive(Debug)]
+pub struct PhysicalReadResults {
+    pub entries: Vec<PhysicalReadResultEntry>,
+}
+impl PhysicalReadResults {
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn into_entries(self) -> Vec<PhysicalReadResultEntry> { self.entries }
+    /// Consumes the results and writes them to a file (pre-sizing & zero-filling gaps by allocation).
+    pub fn write_to_file(self, output_path: impl AsRef<std::path::Path>, total_logical_size: u64) -> eyre::Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut entries = self.entries;
+        if entries.is_empty() {
+            let file = std::fs::File::create(output_path)?;
+            file.set_len(total_logical_size)?;
+            return Ok(());
+        }
+        entries.sort_by_key(|e| e.logical_offset_bytes());
         let file = std::fs::File::create(output_path)?;
         file.set_len(total_logical_size)?;
-        return Ok(());
+        let mut writer = std::io::BufWriter::new(file);
+        for e in entries {
+            writer.seek(SeekFrom::Start(e.logical_offset_bytes()))?;
+            writer.write_all(&e.data)?;
+        }
+        writer.flush()?;
+        Ok(())
     }
-    entries.sort_by_key(|e| e.logical_offset_bytes());
-    let file = std::fs::File::create(output_path)?;
-    file.set_len(total_logical_size)?;
-    let mut writer = std::io::BufWriter::new(file);
-    for e in entries {
-        writer.seek(SeekFrom::Start(e.logical_offset_bytes()))?;
-        writer.write_all(&e.data)?;
-    }
-    writer.flush()?;
-    Ok(())
 }

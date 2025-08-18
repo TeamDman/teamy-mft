@@ -4,13 +4,11 @@ use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
-use crate::windows::rapid_reader::PhysicalReadResultEntry;
+use crate::windows::rapid_reader::PhysicalReadResults;
 // IO now delegated to PhysicalRapidReader
 use crate::windows::win_handles::get_drive_handle;
 use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
-use std::io::BufWriter;
-use std::io::Write;
 use std::path::Path;
 use uom::si::information::byte;
 use uom::si::information::megabyte;
@@ -63,27 +61,10 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
         let mut plan = logical_plan.into_physical_plan();
         plan.merge_contiguous_reads();
         let plan = plan.chunked(chunk_size);
-        let physical_blocks: Vec<PhysicalReadResultEntry> = plan.read(&volume_path)?; // sorted by logical offset
-
-        // Create & pre-size output file so sparse gaps are zero-filled by NTFS initialization
-        let file = std::fs::File::create(&output_path)
-            .wrap_err("Failed to create/truncate output MFT file")?;
-        file.set_len(logical_plan.total_logical_size_bytes)
-            .wrap_err("Failed to pre-size MFT output file")?;
-        let mut writer = BufWriter::new(file);
-
-        // Write physical chunks at their logical offsets
-        for block in physical_blocks {
-            use std::io::Seek;
-            use std::io::SeekFrom;
-            writer
-                .seek(SeekFrom::Start(block.request.logical_offset.get::<byte>()))
-                .wrap_err("Failed seeking to logical offset")?;
-            writer
-                .write_all(&block.data)
-                .wrap_err("Failed writing MFT data chunk")?;
-        }
-        writer.flush().wrap_err("Failed to flush MFT output file")?;
+        let physical_results: PhysicalReadResults = plan.read(&volume_path)?;
+        physical_results
+            .write_to_file(&output_path, logical_plan.total_logical_size_bytes)
+            .wrap_err("Failed writing MFT output file")?;
 
         Ok(())
     }
