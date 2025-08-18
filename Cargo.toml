@@ -46,13 +46,14 @@ mft = { version = "0.6.1", features = [
 ], git = "https://github.com/TeamDman/mft", branch = "mine" }
 rustc-hash = "2.1.1"
 winstructs = "0.3.2"
-uom = { version = "0.37.0", features = [
-    "human",
-], git = "https://github.com/TeamDman/uom", branch = "mine" }
+uom = { version = "0.37.0", features = ["autoconvert", "human", "u64"], git = "https://github.com/TeamDman/uom", branch = "mine" }
 rayon = { version = "1.10" }
 humantime = "2.2.0"
 thousands = "0.2.0"
 nucleo = "0.5.0"
+
+[dev-dependencies]
+tempfile = "3.20"
 
 [profile.release]
 codegen-units = 1
