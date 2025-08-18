@@ -91,14 +91,13 @@ impl PhysicalReadPlan {
         });
         let mut merged: Vec<PhysicalReadRequest> = Vec::with_capacity(self.requests.len());
         for req in self.requests.drain(..) {
-            if let Some(last) = merged.last_mut() {
-                if last.physical_end() == req.physical_offset
+            if let Some(last) = merged.last_mut()
+                && last.physical_end() == req.physical_offset
                     && last.logical_end() == req.logical_offset
                 {
                     last.length += req.length;
                     continue;
                 }
-            }
             merged.push(req);
         }
         self.requests = merged;

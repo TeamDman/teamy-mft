@@ -12,9 +12,7 @@ impl<'a> MftRecordAttributeIter<'a> {
         let mft_record_used_size = mft_record.get_used_size() as usize;
         debug_assert!(
             first_mft_attribute_offset < mft_record_used_size,
-            "Attribute start {} must be less than used size {}",
-            first_mft_attribute_offset,
-            mft_record_used_size
+            "Attribute start {first_mft_attribute_offset} must be less than used size {mft_record_used_size}"
         );
         debug_assert!(
             mft_record_used_size <= mft_record.len(),
