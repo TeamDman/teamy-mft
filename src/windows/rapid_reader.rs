@@ -1,6 +1,7 @@
 use crate::windows::win_handles::AutoClosingHandle;
 use std::ptr::null_mut;
 use tracing::debug;
+use tracing::warn;
 use uom::ConstZero;
 use uom::si::information::byte;
 use uom::si::u64::Information;
@@ -128,6 +129,29 @@ impl PhysicalReadPlan {
         }
         out
     }
+    /// Adjust requests so each (offset,length) is 512-byte aligned by expanding outward.
+    /// The logical offsets and lengths remain the same; we simply over-read and will trim later.
+    pub fn align_512(&mut self) -> &mut Self {
+        if self.requests.is_empty() {
+            return self;
+        }
+        let sector: u64 = 512;
+        for r in &mut self.requests {
+            let phys = r.physical_offset.get::<byte>();
+            let len = r.length.get::<byte>();
+            let aligned_start = phys & !(sector - 1);
+            let end = phys + len;
+            let aligned_end = (end + sector - 1) & !(sector - 1);
+            let new_len = aligned_end - aligned_start;
+            if aligned_start != phys || new_len != len {
+                r.length = Information::new::<byte>(new_len);
+                r.physical_offset = Information::new::<byte>(aligned_start);
+            }
+        }
+        // merging again may be beneficial
+        self.merge_contiguous_reads();
+        self
+    }
     pub fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
@@ -149,7 +173,9 @@ impl PhysicalReadPlan {
         const MAX_IN_FLIGHT_IO: usize = 32;
 
         if self.is_empty() {
-            return Ok(PhysicalReadResults { entries: Vec::new() });
+            return Ok(PhysicalReadResults {
+                entries: Vec::new(),
+            });
         }
 
         #[repr(C)]
@@ -183,27 +209,38 @@ impl PhysicalReadPlan {
                 self.total_requested_information().get_human()
             );
 
-            let num = self.num_requests();
-            // Use with_capacity + push to avoid requiring Clone on Option<PhysicalReadResponse>
+            let requests = self.into_requests();
+            let num = requests.len();
             let mut responses: Vec<Option<PhysicalReadResultEntry>> =
                 (0..num).map(|_| None).collect();
             let mut in_flight = 0usize;
-            let mut iter = self.into_requests().into_iter().enumerate();
+            let mut next_to_queue = 0usize;
 
-            let mut post_more = |in_flight: &mut usize| -> eyre::Result<()> {
-                for (idx, req) in &mut iter {
-                    if *in_flight >= MAX_IN_FLIGHT_IO {
-                        break;
-                    }
+            let mut queue_some = |in_flight: &mut usize| -> eyre::Result<()> {
+                while *in_flight < MAX_IN_FLIGHT_IO && next_to_queue < num {
+                    let req = &requests[next_to_queue];
+                    let idx = next_to_queue;
                     let file_offset = req.physical_offset.get::<byte>();
                     let length = req.length.get::<byte>() as usize;
+                    if file_offset & 0x1FF != 0 {
+                        warn!(
+                            "queuing unaligned physical_offset={} (not 512-byte aligned) length={length}",
+                            file_offset
+                        );
+                    }
+                    if length & 0x1FF != 0 {
+                        warn!(
+                            "queuing unaligned length={} (not 512-byte multiple) physical_offset={file_offset}",
+                            length
+                        );
+                    }
                     let mut boxed = Box::new(ReadRequest {
                         overlapped: OVERLAPPED::default(),
                         buffer: vec![0u8; length],
                         file_offset,
                         length,
                         response_index: idx,
-                        original: req,
+                        original: req.clone(),
                     });
                     boxed.overlapped.Anonymous.Anonymous.Offset =
                         (file_offset & 0xFFFF_FFFF) as u32;
@@ -219,17 +256,20 @@ impl PhysicalReadPlan {
                         Ok(()) => {}
                         Err(e) => {
                             if e.code() != ERROR_IO_PENDING.into() {
-                                return Err(eyre::eyre!("ReadFile failed to queue: {e:?}"));
+                                return Err(eyre::eyre!(
+                                    "ReadFile failed to queue (idx={idx} phys_offset={file_offset} len={length}): {e:?}"
+                                ));
                             }
                         }
                     }
                     let _ = Box::into_raw(boxed);
                     *in_flight += 1;
+                    next_to_queue += 1;
                 }
                 Ok(())
             };
 
-            post_more(&mut in_flight)?;
+            queue_some(&mut in_flight)?;
 
             while in_flight > 0 {
                 let mut bytes_transferred: u32 = 0;
@@ -261,7 +301,7 @@ impl PhysicalReadPlan {
                             data,
                         });
                         in_flight -= 1;
-                        post_more(&mut in_flight)?;
+                        queue_some(&mut in_flight)?;
                     }
                     Err(e) => {
                         if lp_overlapped.is_null() {
@@ -279,6 +319,11 @@ impl PhysicalReadPlan {
                 }
             }
 
+            if next_to_queue != num {
+                return Err(eyre::eyre!(
+                    "Scheduler logic error after completion: queued {next_to_queue} of {num}"
+                ));
+            }
             let mut final_responses: Vec<PhysicalReadResultEntry> = responses
                 .into_iter()
                 .enumerate()
@@ -286,7 +331,9 @@ impl PhysicalReadPlan {
                 .collect::<eyre::Result<_>>()?;
             final_responses.sort_by_key(|r| r.request.logical_offset.get::<byte>());
 
-            Ok(PhysicalReadResults { entries: final_responses })
+            Ok(PhysicalReadResults {
+                entries: final_responses,
+            })
         }
     }
 }
@@ -308,12 +355,24 @@ pub struct PhysicalReadResults {
     pub entries: Vec<PhysicalReadResultEntry>,
 }
 impl PhysicalReadResults {
-    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
-    pub fn len(&self) -> usize { self.entries.len() }
-    pub fn into_entries(self) -> Vec<PhysicalReadResultEntry> { self.entries }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn into_entries(self) -> Vec<PhysicalReadResultEntry> {
+        self.entries
+    }
     /// Consumes the results and writes them to a file (pre-sizing & zero-filling gaps by allocation).
-    pub fn write_to_file(self, output_path: impl AsRef<std::path::Path>, total_logical_size: u64) -> eyre::Result<()> {
-        use std::io::{Seek, SeekFrom, Write};
+    pub fn write_to_file(
+        self,
+        output_path: impl AsRef<std::path::Path>,
+        total_logical_size: u64,
+    ) -> eyre::Result<()> {
+        use std::io::Seek;
+        use std::io::SeekFrom;
+        use std::io::Write;
         let mut entries = self.entries;
         if entries.is_empty() {
             let file = std::fs::File::create(output_path)?;
@@ -325,8 +384,23 @@ impl PhysicalReadResults {
         file.set_len(total_logical_size)?;
         let mut writer = std::io::BufWriter::new(file);
         for e in entries {
-            writer.seek(SeekFrom::Start(e.logical_offset_bytes()))?;
-            writer.write_all(&e.data)?;
+            // If we over-aligned earlier, we may have leading bytes before logical_offset.
+            // Compute how many leading bytes to skip: logical - physical delta (clamped).
+            let phys = e.request.physical_offset.get::<byte>();
+            let log = e.request.logical_offset.get::<byte>();
+            let delta = log.saturating_sub(phys); // bytes to skip in buffer
+            if delta as usize > e.data.len() {
+                continue;
+            }
+            let slice = &e.data[delta as usize..];
+            // We must not exceed the intended logical length.
+            let intended = e.request.length.get::<byte>() - delta as u64; // inflated by alignment
+            let logical_len = (e.request.logical_end().get::<byte>() - log).min(intended);
+            let max_len = logical_len as usize;
+            let used_len = std::cmp::min(max_len, slice.len());
+            let slice = &slice[..used_len];
+            writer.seek(SeekFrom::Start(log))?;
+            writer.write_all(slice)?;
         }
         writer.flush()?;
         Ok(())

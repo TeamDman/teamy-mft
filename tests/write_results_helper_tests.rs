@@ -1,4 +1,6 @@
-use teamy_mft::windows::rapid_reader::{PhysicalReadRequest, PhysicalReadResultEntry, PhysicalReadResults};
+use teamy_mft::windows::rapid_reader::PhysicalReadRequest;
+use teamy_mft::windows::rapid_reader::PhysicalReadResultEntry;
+use teamy_mft::windows::rapid_reader::PhysicalReadResults;
 use uom::si::information::byte;
 use uom::si::u64::Information;
 
@@ -29,7 +31,9 @@ fn writes_blocks_and_preserves_gap_zero() {
             data: b"XYZ".to_vec(),
         },
     ];
-    PhysicalReadResults { entries }.write_to_file(&path, 20).expect("write ok");
+    PhysicalReadResults { entries }
+        .write_to_file(&path, 20)
+        .expect("write ok");
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(bytes.len(), 20);
     assert_eq!(&bytes[0..4], b"ABCD");

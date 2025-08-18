@@ -11,7 +11,7 @@ use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
 use std::path::Path;
 use uom::si::information::byte;
-use uom::si::information::megabyte;
+use uom::si::information::mebibyte;
 use uom::si::u64::Information;
 
 /// Read the complete MFT using IOCP overlapped reads.
@@ -56,15 +56,32 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
             eyre::bail!("Logical plan empty (no runs)");
         }
 
-        // Derive physical read plan, merge, chunk and execute with 1 MiB chunk size
-        let chunk_size = Information::new::<megabyte>(1);
+        // Derive physical read plan, merge, chunk and execute with 1 MiB (binary) chunk size (1,048,576 = 1024*1024) for sector alignment
+        let chunk_size = Information::new::<mebibyte>(1);
         let mut plan = logical_plan.into_physical_plan();
-        plan.merge_contiguous_reads();
+        plan.align_512().merge_contiguous_reads();
         let plan = plan.chunked(chunk_size);
         let physical_results: PhysicalReadResults = plan.read(&volume_path)?;
         physical_results
             .write_to_file(&output_path, logical_plan.total_logical_size_bytes)
             .wrap_err("Failed writing MFT output file")?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use uom::si::information::byte;
+    use uom::si::information::mebibyte;
+    use uom::si::u64::Information;
+
+    #[test]
+    fn it_works() -> eyre::Result<()> {
+        assert_eq!(
+            Information::new::<byte>(1_048_576).get::<byte>(),
+            Information::new::<mebibyte>(1).get::<byte>()
+        );
 
         Ok(())
     }
