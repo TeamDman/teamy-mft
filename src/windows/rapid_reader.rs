@@ -394,7 +394,7 @@ impl PhysicalReadResults {
             }
             let slice = &e.data[delta as usize..];
             // We must not exceed the intended logical length.
-            let intended = e.request.length.get::<byte>() - delta as u64; // inflated by alignment
+            let intended = e.request.length.get::<byte>() - delta; // inflated by alignment
             let logical_len = (e.request.logical_end().get::<byte>() - log).min(intended);
             let max_len = logical_len as usize;
             let used_len = std::cmp::min(max_len, slice.len());
