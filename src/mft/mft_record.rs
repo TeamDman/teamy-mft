@@ -1,4 +1,3 @@
-use crate::mft::mft_record_attribute::MftRecordAttribute;
 use crate::mft::mft_record_attribute_iter::MftRecordAttributeIter;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
