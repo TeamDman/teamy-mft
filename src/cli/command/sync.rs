@@ -11,7 +11,6 @@ use eyre::Context;
 use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
-use num_cpus;
 use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::path::PathBuf;
@@ -93,7 +92,7 @@ impl SyncArgs {
         );
 
         // ---- IOCP worker-pool flow ----
-        let max_workers = std::cmp::min(drives.len(), num_cpus::get().saturating_mul(2));
+        let max_workers = drives.len();
         let (tx, rx) = bounded::<(char, PathBuf)>(drives.len());
 
         let mut handles = Vec::with_capacity(max_workers);
