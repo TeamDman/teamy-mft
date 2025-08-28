@@ -18,14 +18,17 @@ impl RobocopyLogsTuiArgs {
             "Tailing robocopy log (skip start): {}",
             self.robocopy_log_file_path.display()
         );
-        let rx = watch_file_content(&self.robocopy_log_file_path, StartBehaviour::SkipStart)?;
+        let rx = watch_file_content(&self.robocopy_log_file_path, StartBehaviour::ReadFromStart)?;
         let mut parser = RobocopyLogParser::new();
         for chunk in rx.iter() {
             let s = String::from_utf8_lossy(&chunk);
             parser.accept(&s);
             loop {
                 match parser.advance()? {
-                    RobocopyParseAdvance::NeedMoreData => break,
+                    RobocopyParseAdvance::NeedMoreData => {
+                        println!("Need more data...");
+                        break
+                    },
                     RobocopyParseAdvance::Header(h) => {
                         println!("[HEADER]\n{h}");
                     }
