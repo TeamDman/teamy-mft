@@ -1,0 +1,53 @@
+
+-------------------------------------------------------------------------------
+   ROBOCOPY     ::     Robust File Copy for Windows                              
+-------------------------------------------------------------------------------
+
+  Started : August 27, 2025 10:19:37 PM
+   Source : J:\
+     Dest : K:\
+
+    Files : *.*
+	    
+  Options : *.* /TEE /S /E /DCOPY:DA /COPY:DAT /MT:16 /R:1000000 /W:5 
+
+------------------------------------------------------------------------------
+
+2025/08/27 22:19:37 ERROR 5 (0x00000005) Copying Directory J:\$RECYCLE.BIN\
+Access is denied.
+
+
+2025/08/27 22:19:37 ERROR 5 (0x00000005) Copying Directory J:\System Volume Information\
+Access is denied.
+
+
+	    New File  		  50.0 m	J:\nas-ds418j_1.hbk\Pool\0\17\0.bucket
+  5%  
+ 17%  
+ 23%  
+ 29%  
+ 35%  
+ 41%  
+ 53%  
+ 59%  
+ 65%  
+ 67%  
+ 75%  
+ 83%  
+ 89%  
+ 95%  
+100%  
+	    New File  		  204576	J:\nas-ds418j_1.hbk\Pool\0\17\0.index
+100%  
+	    New File  		       0	J:\nas-ds418j_1.hbk\Pool\0\17\0.lock
+100%  
+	    New File  		  50.0 m	J:\nas-ds418j_1.hbk\Pool\0\17\1.bucket
+ 91%  
+ 97%  
+100%  
+	    New File  		  204224	J:\nas-ds418j_1.hbk\Pool\0\17\1.index
+100%  
+	    New File  		       0	J:\nas-ds418j_1.hbk\Pool\0\17\1.lock
+100%  
+	    New File  		  50.0 m	J:\nas-ds418j_1.hbk\Pool\0\17\10.bucket
+100%  
