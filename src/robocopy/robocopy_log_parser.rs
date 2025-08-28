@@ -5,6 +5,7 @@ use chrono::TimeZone;
 use eyre::WrapErr;
 use std::path::PathBuf;
 use uom::si::information::byte;
+use uom::si::information::mebibyte;
 use uom::si::u64::Information;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -29,7 +30,6 @@ struct PendingNewFile {
     size: Information,
     path: PathBuf,
     percentages: Vec<u8>,
-    saw_100: bool,
 }
 
 impl Default for RobocopyLogParser {
@@ -93,24 +93,28 @@ impl RobocopyLogParser {
 
     fn try_parse_entry(&mut self) -> eyre::Result<RobocopyParseAdvance> {
         loop {
-            // If we are accumulating a New File entry percentages, handle that first
             if let Some(pending) = &mut self.pending_new_file {
-                // Attempt to read next complete line
-                if let Some(pos) = self.buf.find('\n') {
-                    let line = self.buf[..pos + 1].to_string();
-                    self.buf.drain(..pos + 1);
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        // skip blank line
-                        continue;
-                    }
+                // try to read next segment (handle CR or LF)
+                let pos = match (self.buf.find('\n'), self.buf.find('\r')) {
+                    (Some(nl), Some(cr)) => Some(nl.min(cr)),
+                    (Some(nl), None) => Some(nl),
+                    (None, Some(cr)) => Some(cr),
+                    (None, None) => None,
+                };
+                let Some(end) = pos else {
+                    return Ok(RobocopyParseAdvance::NeedMoreData);
+                };
+                let seg_with_term = self.buf[..=end].to_string();
+                self.buf.drain(..=end);
+                for piece in seg_with_term
+                    .split(['\r', '\n'])
+                    .filter(|p| !p.trim().is_empty())
+                {
+                    let trimmed = piece.trim();
                     if let Some(pct) = parse_percentage_line(trimmed) {
                         pending.percentages.push(pct);
                         if pct == 100 {
-                            pending.saw_100 = true;
-                        }
-                        // Continue gathering until we saw 100%
-                        if pending.saw_100 {
+                            // finalize and emit final state
                             let finished = self.pending_new_file.take().unwrap();
                             return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
                                 size: finished.size,
@@ -118,12 +122,16 @@ impl RobocopyLogParser {
                                 percentages: finished.percentages,
                             }));
                         } else {
-                            continue; // need more percentages
+                            // Emit incremental state (clone path)
+                            return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
+                                size: pending.size,
+                                path: pending.path.clone(),
+                                percentages: pending.percentages.clone(),
+                            }));
                         }
                     } else if is_new_file_line(trimmed) {
-                        // Edge case: New file started before 100% of previous; finalize previous anyway.
+                        // finalize previous without adding new pct and reprocess line
                         let finished = self.pending_new_file.take().unwrap();
-                        // put the line back for reprocessing as a new file start
                         self.buf.insert_str(0, &format!("{trimmed}\n"));
                         return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
                             size: finished.size,
@@ -131,76 +139,87 @@ impl RobocopyLogParser {
                             percentages: finished.percentages,
                         }));
                     } else {
-                        // Unexpected line: finalize previous (without 100%) and reprocess this line
-                        let finished = self.pending_new_file.take().unwrap();
-                        self.buf.insert_str(0, &format!("{trimmed}\n"));
-                        return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
-                            size: finished.size,
-                            path: finished.path,
-                            percentages: finished.percentages,
-                        }));
+                        // ignore noise
+                        continue;
                     }
-                } else {
-                    return Ok(RobocopyParseAdvance::NeedMoreData);
                 }
+                // loop to grab more data
+                continue;
             } else {
-                // Not in a pending New File entry
-                // Need at least one complete line
-                let Some(line_end) = self.buf.find('\n') else {
+                // read line/segment for new entry
+                let pos = match (self.buf.find('\n'), self.buf.find('\r')) {
+                    (Some(nl), Some(cr)) => Some(nl.min(cr)),
+                    (Some(nl), None) => Some(nl),
+                    (None, Some(cr)) => Some(cr),
+                    (None, None) => None,
+                };
+                let Some(end) = pos else {
                     return Ok(RobocopyParseAdvance::NeedMoreData);
                 };
-                let line_with_nl = self.buf[..line_end + 1].to_string();
-                self.buf.drain(..line_end + 1);
-                let line = line_with_nl.trim_end_matches(['\r', '\n']);
-                let trimmed = line.trim();
+                let seg_with_term = self.buf[..=end].to_string();
+                self.buf.drain(..=end);
+                let mut pieces: Vec<&str> = seg_with_term
+                    .split(['\r', '\n'])
+                    .filter(|p| !p.trim().is_empty())
+                    .collect();
+                if pieces.is_empty() {
+                    continue;
+                }
+                let first = pieces.remove(0);
+                if !pieces.is_empty() {
+                    let rest = pieces.join("\n");
+                    self.buf.insert_str(0, &format!("{rest}\n"));
+                }
+                let trimmed = first.trim();
                 if trimmed.is_empty() {
                     continue;
                 }
-
-                // Access denied error multi-line: date line followed by Access is denied.
                 if let Some(access_err) = parse_access_denied_first_line(trimmed)? {
-                    // Need the following line
-                    let next_line_end = match self.buf.find('\n') {
-                        Some(p) => p,
-                        None => {
-                            // Put the first line back and wait for more data
-                            self.buf.insert_str(0, &format!("{line}\n"));
-                            return Ok(RobocopyParseAdvance::NeedMoreData);
-                        }
+                    // Peek if we have a following line terminator at all
+                    let pos2 = match (self.buf.find('\n'), self.buf.find('\r')) {
+                        (Some(nl), Some(cr)) => Some(nl.min(cr)),
+                        (Some(nl), None) => Some(nl),
+                        (None, Some(cr)) => Some(cr),
+                        (None, None) => None,
                     };
-                    let next_line = self.buf[..next_line_end + 1].to_string();
-                    self.buf.drain(..next_line_end + 1);
-                    let next_trim = next_line.trim();
-                    if next_trim.eq_ignore_ascii_case("Access is denied.") {
+                    let Some(end2) = pos2 else {
+                        // not enough data, push back and wait
+                        self.buf.insert_str(0, &format!("{trimmed}\n"));
+                        return Ok(RobocopyParseAdvance::NeedMoreData);
+                    };
+                    let second_line = self.buf[..=end2].to_string();
+                    self.buf.drain(..=end2);
+                    if second_line.trim().eq_ignore_ascii_case("Access is denied.") {
+                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
+                    } else if second_line.trim().is_empty() {
+                        // blank line after; accept the error anyway
                         return Ok(RobocopyParseAdvance::LogEntry(access_err));
                     } else {
-                        eyre::bail!(
-                            "Expected 'Access is denied.' after access error line, got '{}'.",
-                            next_trim
-                        );
+                        // Unexpected; reinsert consumed second line for future processing and still emit error.
+                        self.buf.insert_str(0, &second_line);
+                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
                     }
                 }
-
                 if is_new_file_line(trimmed) {
                     if let Some((size, path)) = parse_new_file_line(trimmed) {
                         self.pending_new_file = Some(PendingNewFile {
                             size,
+                            path: path.clone(),
+                            percentages: Vec::new(),
+                        });
+                        // emit initial new file with empty percentages
+                        return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
+                            size,
                             path,
                             percentages: Vec::new(),
-                            saw_100: false,
-                        });
-                        // loop to collect percentages
-                        continue;
+                        }));
                     } else {
                         eyre::bail!("Failed to parse New File line: '{}'", trimmed);
                     }
                 }
-                // Lines consisting solely of percentages can appear if they race with reading; ignore until associated entry.
                 if parse_percentage_line(trimmed).is_some() {
-                    // Without a pending new file, we can't attach these percentages; ignore.
                     continue;
                 }
-                // Unknown line; just need more data (or ignore). We choose to ignore silently for now.
                 continue;
             }
         }
@@ -220,9 +239,10 @@ fn parse_percentage_line(s: &str) -> Option<u8> {
         let num = stripped.trim();
         if num.chars().all(|c| c.is_ascii_digit())
             && let Ok(v) = num.parse::<u16>()
-                && v <= 100 {
-                    return Some(v as u8);
-                }
+            && v <= 100
+        {
+            return Some(v as u8);
+        }
     }
     None
 }
@@ -242,39 +262,39 @@ fn parse_access_denied_first_line(line: &str) -> eyre::Result<Option<RobocopyLog
         if parts[1].len() == 8
             && parts[1].chars().nth(2) == Some(':')
             && parts[1].chars().nth(5) == Some(':')
-            && parts[2].eq_ignore_ascii_case("ERROR") && parts[4].starts_with("(0x") {
-                // find "Copying" and "Directory"
-                if parts[5].eq_ignore_ascii_case("Copying")
-                    && parts[6].eq_ignore_ascii_case("Directory")
-                {
-                    // path remainder (joined with spaces) after 'Directory'
-                    // Slice after the "Directory" token occurrence.
-                    if let Some(dir_pos) = line.find("Directory") {
-                        let after = &line[dir_pos + "Directory".len()..].trim();
-                        let path_str = after; // includes trailing backslash per format
-                        // reconstruct datetime
-                        let date = parts[0];
-                        let time = parts[1];
-                        // date format yyyy/mm/dd time HH:MM:SS
-                        let year: i32 = date[0..4].parse()?;
-                        let month: u32 = date[5..7].parse()?;
-                        let day: u32 = date[8..10].parse()?;
-                        let hour: u32 = time[0..2].parse()?;
-                        let minute: u32 = time[3..5].parse()?;
-                        let second: u32 = time[6..8].parse()?;
-                        let when = Local
-                            .with_ymd_and_hms(year, month, day, hour, minute, second)
-                            .single()
-                            .ok_or_else(|| {
-                                eyre::eyre!("Invalid timestamp in access denied line")
-                            })?;
-                        return Ok(Some(RobocopyLogEntry::AccessDeniedError {
-                            when,
-                            path: PathBuf::from(path_str),
-                        }));
-                    }
+            && parts[2].eq_ignore_ascii_case("ERROR")
+            && parts[4].starts_with("(0x")
+        {
+            // find "Copying" and "Directory"
+            if parts[5].eq_ignore_ascii_case("Copying")
+                && parts[6].eq_ignore_ascii_case("Directory")
+            {
+                // path remainder (joined with spaces) after 'Directory'
+                // Slice after the "Directory" token occurrence.
+                if let Some(dir_pos) = line.find("Directory") {
+                    let after = &line[dir_pos + "Directory".len()..].trim();
+                    let path_str = after; // includes trailing backslash per format
+                    // reconstruct datetime
+                    let date = parts[0];
+                    let time = parts[1];
+                    // date format yyyy/mm/dd time HH:MM:SS
+                    let year: i32 = date[0..4].parse()?;
+                    let month: u32 = date[5..7].parse()?;
+                    let day: u32 = date[8..10].parse()?;
+                    let hour: u32 = time[0..2].parse()?;
+                    let minute: u32 = time[3..5].parse()?;
+                    let second: u32 = time[6..8].parse()?;
+                    let when = Local
+                        .with_ymd_and_hms(year, month, day, hour, minute, second)
+                        .single()
+                        .ok_or_else(|| eyre::eyre!("Invalid timestamp in access denied line"))?;
+                    return Ok(Some(RobocopyLogEntry::AccessDeniedError {
+                        when,
+                        path: PathBuf::from(path_str),
+                    }));
                 }
             }
+        }
     }
     Ok(None)
 }
@@ -359,49 +379,81 @@ mod tests {
                 }
             }
         }
-        // Build expected entries (up to first NewFile completion present in sample excerpt)
-        use chrono::TimeZone;
         let when = Local.with_ymd_and_hms(2025, 8, 27, 22, 19, 37).unwrap();
-        let expected = vec![
-            RobocopyLogEntry::AccessDeniedError {
-                when,
-                path: PathBuf::from(r"J:\$RECYCLE.BIN\"),
-            },
-            RobocopyLogEntry::AccessDeniedError {
-                when,
-                path: PathBuf::from(r"J:\System Volume Information\"),
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<mebibyte>(50),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\0.bucket"),
-                percentages: vec![5, 17, 23, 29, 35, 41, 53, 59, 65, 67, 75, 83, 89, 95, 100],
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<byte>(204576),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\0.index"),
-                percentages: vec![100],
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<byte>(0),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\0.lock"),
-                percentages: vec![100],
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<mebibyte>(50),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\1.bucket"),
-                percentages: vec![91, 97, 100],
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<byte>(204224),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\1.index"),
-                percentages: vec![100],
-            },
-            RobocopyLogEntry::NewFile {
-                size: Information::new::<byte>(0),
-                path: PathBuf::from(r"J:\nas-ds418j_1.hbk\Pool\0\17\1.lock"),
-                percentages: vec![100],
-            },
-        ];
+        // Build expected incremental emissions
+        let mut expected: Vec<RobocopyLogEntry> = Vec::new();
+        expected.push(RobocopyLogEntry::AccessDeniedError {
+            when,
+            path: PathBuf::from(r"J:\$RECYCLE.BIN\"),
+        });
+        expected.push(RobocopyLogEntry::AccessDeniedError {
+            when,
+            path: PathBuf::from(r"J:\System Volume Information\"),
+        });
+        fn push_new_file(
+            expected: &mut Vec<RobocopyLogEntry>,
+            size: Information,
+            path: &str,
+            percentages: &[u8],
+        ) {
+            // initial empty
+            expected.push(RobocopyLogEntry::NewFile {
+                size,
+                path: PathBuf::from(path),
+                percentages: Vec::new(),
+            });
+            let mut acc: Vec<u8> = Vec::new();
+            for &p in percentages {
+                acc.push(p);
+                expected.push(RobocopyLogEntry::NewFile {
+                    size,
+                    path: PathBuf::from(path),
+                    percentages: acc.clone(),
+                });
+            }
+        }
+        push_new_file(
+            &mut expected,
+            Information::new::<mebibyte>(50),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\0.bucket",
+            &[5, 17, 23, 29, 35, 41, 53, 59, 65, 67, 75, 83, 89, 95, 100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<byte>(204576),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\0.index",
+            &[100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<byte>(0),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\0.lock",
+            &[100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<mebibyte>(50),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\1.bucket",
+            &[91, 97, 100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<byte>(204224),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\1.index",
+            &[100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<byte>(0),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\1.lock",
+            &[100],
+        );
+        push_new_file(
+            &mut expected,
+            Information::new::<mebibyte>(50),
+            r"J:\nas-ds418j_1.hbk\Pool\0\17\10.bucket",
+            &[],
+        );
         assert_eq!(entries, expected, "Parsed entries mismatch");
         Ok(())
     }
