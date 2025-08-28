@@ -32,6 +32,12 @@ struct PendingNewFile {
     saw_100: bool,
 }
 
+impl Default for RobocopyLogParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RobocopyLogParser {
     pub fn new() -> Self {
         Self {
@@ -118,7 +124,7 @@ impl RobocopyLogParser {
                         // Edge case: New file started before 100% of previous; finalize previous anyway.
                         let finished = self.pending_new_file.take().unwrap();
                         // put the line back for reprocessing as a new file start
-                        self.buf.insert_str(0, &format!("{}\n", trimmed));
+                        self.buf.insert_str(0, &format!("{trimmed}\n"));
                         return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
                             size: finished.size,
                             path: finished.path,
@@ -127,7 +133,7 @@ impl RobocopyLogParser {
                     } else {
                         // Unexpected line: finalize previous (without 100%) and reprocess this line
                         let finished = self.pending_new_file.take().unwrap();
-                        self.buf.insert_str(0, &format!("{}\n", trimmed));
+                        self.buf.insert_str(0, &format!("{trimmed}\n"));
                         return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
                             size: finished.size,
                             path: finished.path,
@@ -158,7 +164,7 @@ impl RobocopyLogParser {
                         Some(p) => p,
                         None => {
                             // Put the first line back and wait for more data
-                            self.buf.insert_str(0, &format!("{}\n", line));
+                            self.buf.insert_str(0, &format!("{line}\n"));
                             return Ok(RobocopyParseAdvance::NeedMoreData);
                         }
                     };
@@ -212,13 +218,11 @@ fn parse_percentage_line(s: &str) -> Option<u8> {
     let t = s.trim();
     if let Some(stripped) = t.strip_suffix('%') {
         let num = stripped.trim();
-        if num.chars().all(|c| c.is_ascii_digit()) {
-            if let Ok(v) = num.parse::<u16>() {
-                if v <= 100 {
+        if num.chars().all(|c| c.is_ascii_digit())
+            && let Ok(v) = num.parse::<u16>()
+                && v <= 100 {
                     return Some(v as u8);
                 }
-            }
-        }
     }
     None
 }
@@ -238,8 +242,7 @@ fn parse_access_denied_first_line(line: &str) -> eyre::Result<Option<RobocopyLog
         if parts[1].len() == 8
             && parts[1].chars().nth(2) == Some(':')
             && parts[1].chars().nth(5) == Some(':')
-        {
-            if parts[2].eq_ignore_ascii_case("ERROR") && parts[4].starts_with("(0x") {
+            && parts[2].eq_ignore_ascii_case("ERROR") && parts[4].starts_with("(0x") {
                 // find "Copying" and "Directory"
                 if parts[5].eq_ignore_ascii_case("Copying")
                     && parts[6].eq_ignore_ascii_case("Directory")
@@ -272,7 +275,6 @@ fn parse_access_denied_first_line(line: &str) -> eyre::Result<Option<RobocopyLog
                     }
                 }
             }
-        }
     }
     Ok(None)
 }
