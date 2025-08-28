@@ -1,4 +1,4 @@
-use teamy_mft::windows::rapid_reader::PhysicalReadPlan;
+use teamy_mft::windows::win_rapid_reader::PhysicalReadPlan;
 use uom::si::information::byte;
 use uom::si::u64::Information;
 

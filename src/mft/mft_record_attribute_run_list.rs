@@ -1,5 +1,5 @@
 use crate::mft::mft_record::MftRecord;
-use crate::windows::rapid_reader::PhysicalReadPlan;
+use crate::windows::win_rapid_reader::PhysicalReadPlan;
 use eyre::Result;
 use eyre::eyre;
 use std::ops::Deref;

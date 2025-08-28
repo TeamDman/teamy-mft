@@ -8,7 +8,7 @@ pub mod paths;
 pub mod sync_dir;
 pub mod windows;
 use crate::cli::Cli;
-use crate::windows::console_reuse::reuse_console_if_requested;
+use crate::windows::win_console_reuse::reuse_console_if_requested;
 use clap::CommandFactory;
 use clap::FromArgMatches;
 use tracing::Level;

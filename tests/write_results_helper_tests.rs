@@ -1,6 +1,6 @@
-use teamy_mft::windows::rapid_reader::PhysicalReadRequest;
-use teamy_mft::windows::rapid_reader::PhysicalReadResultEntry;
-use teamy_mft::windows::rapid_reader::PhysicalReadResults;
+use teamy_mft::windows::win_rapid_reader::PhysicalReadRequest;
+use teamy_mft::windows::win_rapid_reader::PhysicalReadResultEntry;
+use teamy_mft::windows::win_rapid_reader::PhysicalReadResults;
 use uom::si::information::byte;
 use uom::si::u64::Information;
 
