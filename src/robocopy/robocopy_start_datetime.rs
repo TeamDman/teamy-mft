@@ -2,8 +2,10 @@ use chrono::DateTime;
 use chrono::Local;
 use chrono::TimeZone;
 use std::fmt::Display;
+use std::ops::Deref;
 use std::str::FromStr;
 
+#[derive(Debug)]
 pub struct RobocopyStartDateTime {
     inner: DateTime<Local>,
 }
@@ -33,14 +35,29 @@ impl FromStr for RobocopyStartDateTime {
 }
 
 impl RobocopyStartDateTime {
-    pub fn as_datetime(&self) -> &DateTime<Local> { &self.inner }
+    pub fn as_datetime(&self) -> &DateTime<Local> {
+        &self.inner
+    }
 }
+impl From<DateTime<Local>> for RobocopyStartDateTime {
+    fn from(dt: DateTime<Local>) -> Self {
+        Self { inner: dt }
+    }
+}
+impl Deref for RobocopyStartDateTime {
+    type Target = DateTime<Local>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 
 #[cfg(test)]
 mod test {
+    use super::RobocopyStartDateTime;
     use chrono::Local;
     use chrono::TimeZone;
-    use super::RobocopyStartDateTime;
 
     #[test]
     fn parse_date() -> eyre::Result<()> {
