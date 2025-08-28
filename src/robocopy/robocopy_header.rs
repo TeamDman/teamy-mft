@@ -1,11 +1,12 @@
 use chrono::DateTime;
 use chrono::Local;
-use chrono::TimeZone; // for from_local_datetime
 use eyre::Context;
 use eyre::OptionExt;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
+use super::robocopy_file_pattern::RobocopyFilePattern;
+use super::robocopy_options::RobocopyOptions;
 
 /*
 -------------------------------------------------------------------------------
@@ -76,38 +77,4 @@ impl FromStr for RobocopyHeader {
     }
 }
 
-pub struct RobocopyFilePattern {
-    inner: String,
-}
-impl Display for RobocopyFilePattern {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.inner)
-    }
-}
-impl FromStr for RobocopyFilePattern {
-    type Err = eyre::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(RobocopyFilePattern {
-            inner: s.to_string(),
-        })
-    }
-}
-
-pub struct RobocopyOptions {
-    inner: String,
-}
-impl Display for RobocopyOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.inner)
-    }
-}
-impl FromStr for RobocopyOptions {
-    type Err = eyre::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(RobocopyOptions {
-            inner: s.to_string(),
-        })
-    }
-}
+// RobocopyFilePattern and RobocopyOptions moved to their own modules.
