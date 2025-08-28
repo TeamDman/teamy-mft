@@ -166,4 +166,15 @@ impl ListPathsArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for ListPathsArgs {}
+impl crate::cli::to_args::ToArgs for ListPathsArgs {
+    fn to_args(&self) -> Vec<std::ffi::OsString> {
+        let mut args = Vec::new();
+        // drive_pattern is a positional argument with a default of "*".
+        // Only include it when it's not the default so that roundtrip
+        // parsing reproduces the same value and we don't add redundant args.
+        if self.drive_pattern != DriveLetterPattern::default() {
+            args.push(self.drive_pattern.to_string().into());
+        }
+        args
+    }
+}
