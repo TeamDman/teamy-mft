@@ -4,6 +4,7 @@ use arbitrary::Arbitrary;
 use clap::Args;
 use std::path::PathBuf;
 use tracing::info;
+use crate::robocopy::robocopy_log_parser::{RobocopyLogParser, RobocopyParseAdvance};
 
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct RobocopyLogsTuiArgs {
@@ -18,10 +19,21 @@ impl RobocopyLogsTuiArgs {
             self.robocopy_log_file_path.display()
         );
         let rx = watch_file_content(&self.robocopy_log_file_path, StartBehaviour::SkipStart)?;
+        let mut parser = RobocopyLogParser::new();
         for chunk in rx.iter() {
-            print!("{}", String::from_utf8_lossy(&chunk));
-            use std::io::Write;
-            std::io::stdout().flush().ok();
+            let s = String::from_utf8_lossy(&chunk);
+            parser.accept(&s);
+            loop {
+                match parser.advance()? {
+                    RobocopyParseAdvance::NeedMoreData => break,
+                    RobocopyParseAdvance::Header(h) => {
+                        println!("[HEADER]\n{h}");
+                    }
+                    RobocopyParseAdvance::LogEntry(e) => {
+                        println!("[ENTRY] {e:?}");
+                    }
+                }
+            }
         }
         Ok(())
     }
