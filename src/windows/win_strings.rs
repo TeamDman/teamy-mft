@@ -1,7 +1,9 @@
 use eyre::eyre;
 use std::convert::Infallible;
-use std::ffi::{OsString, OsStr};
-use std::path::{PathBuf, Path};
+use std::ffi::OsStr;
+use std::ffi::OsString;
+use std::path::Path;
+use std::path::PathBuf;
 use widestring::U16CString;
 use windows::core::PCWSTR;
 use windows::core::Param;
@@ -101,7 +103,9 @@ impl EasyPCWSTR for &Path {
     type Error = eyre::Error;
 
     fn easy_pcwstr(self) -> eyre::Result<PCWSTRGuard, Self::Error> {
-        Ok(PCWSTRGuard::new(U16CString::from_os_str_truncate(self.as_os_str())))
+        Ok(PCWSTRGuard::new(U16CString::from_os_str_truncate(
+            self.as_os_str(),
+        )))
     }
 }
 

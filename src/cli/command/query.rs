@@ -59,8 +59,9 @@ impl QueryArgs {
             .par_iter()
             .map(|(drive_letter, mft_path)| {
                 let drive_letter = drive_letter.to_string();
-                let (files, _stats) = process_mft_file(&drive_letter, mft_path, 0, true)
-                    .wrap_err(format!("Failed to process MFT file for drive {drive_letter}"))?;
+                let (files, _stats) = process_mft_file(&drive_letter, mft_path, 0, true).wrap_err(
+                    format!("Failed to process MFT file for drive {drive_letter}"),
+                )?;
                 info!(
                     drive_letter = &drive_letter,
                     "Found {} paths to be queried against",

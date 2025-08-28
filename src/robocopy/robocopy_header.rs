@@ -143,7 +143,10 @@ mod tests {
         assert_eq!(header.source, PathBuf::from("J:/"));
         assert_eq!(header.dest, PathBuf::from("K:/"));
         assert_eq!(header.files.to_string(), "*.*");
-        assert_eq!(header.options.to_string(), "*.* /TEE /S /E /DCOPY:DA /COPY:DAT /MT:16 /R:1000000 /W:5");
+        assert_eq!(
+            header.options.to_string(),
+            "*.* /TEE /S /E /DCOPY:DA /COPY:DAT /MT:16 /R:1000000 /W:5"
+        );
         // Normalize both expected header block and display (trim leading blank lines & trailing whitespace per line)
         fn normalize(s: &str) -> String {
             s.trim_start_matches('\n')
@@ -154,7 +157,10 @@ mod tests {
         }
         let expected_display = normalize(&header_str);
         let actual_display = normalize(&header.to_string());
-        assert_eq!(actual_display, expected_display, "Display formatting mismatch");
+        assert_eq!(
+            actual_display, expected_display,
+            "Display formatting mismatch"
+        );
         Ok(())
     }
 }

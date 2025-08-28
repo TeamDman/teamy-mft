@@ -14,6 +14,8 @@ impl FromStr for RobocopyFilePattern {
     type Err = eyre::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(RobocopyFilePattern { inner: s.to_string() })
+        Ok(RobocopyFilePattern {
+            inner: s.to_string(),
+        })
     }
 }

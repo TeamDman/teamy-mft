@@ -52,7 +52,6 @@ impl Deref for RobocopyStartDateTime {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use super::RobocopyStartDateTime;

@@ -6,4 +6,3 @@ pub struct RobocopyLog {
     pub header: RobocopyHeader,
     pub parts: Vec<RobocopyLogEntry>,
 }
-

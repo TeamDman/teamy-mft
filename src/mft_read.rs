@@ -4,9 +4,9 @@ use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
-use crate::windows::win_rapid_reader::PhysicalReadResults;
 // IO now delegated to PhysicalRapidReader
 use crate::windows::win_handles::get_drive_handle;
+use crate::windows::win_rapid_reader::PhysicalReadResults;
 use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
 use std::path::Path;
