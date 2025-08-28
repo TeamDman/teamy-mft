@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RobocopyFilePattern {
     pub(crate) inner: String,
 }

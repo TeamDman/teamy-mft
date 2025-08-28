@@ -24,7 +24,7 @@ use std::str::FromStr;
 
 ------------------------------------------------------------------------------
 */
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RobocopyHeader {
     pub started: RobocopyStartDateTime,
     pub source: PathBuf,

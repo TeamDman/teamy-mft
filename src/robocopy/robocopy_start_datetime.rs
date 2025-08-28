@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::str::FromStr;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RobocopyStartDateTime {
     inner: DateTime<Local>,
 }
