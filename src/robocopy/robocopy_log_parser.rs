@@ -5,7 +5,6 @@ use chrono::TimeZone;
 use eyre::WrapErr;
 use std::path::PathBuf;
 use uom::si::information::byte;
-use uom::si::information::mebibyte;
 use uom::si::u64::Information;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -226,7 +225,7 @@ impl RobocopyLogParser {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum RobocopyParseAdvance {
     NeedMoreData,
     Header(RobocopyHeader),
