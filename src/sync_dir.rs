@@ -38,6 +38,7 @@ pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
     if let Ok(val) = std::env::var(SYNC_DIR_ENV) {
         let trimmed = val.trim();
         if !trimmed.is_empty() {
+            debug!(env = SYNC_DIR_ENV, "Using sync dir from env: {}", trimmed);
             return Ok(Some(PathBuf::from(trimmed)));
         }
     }
@@ -47,6 +48,10 @@ pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
         return Ok(None);
     }
 
+    debug!(
+        "Reading sync dir from persisted file: {}",
+        persist_path.display()
+    );
     let contents = fs::read_to_string(persist_path.as_ref())?;
     let line = contents.trim();
     if line.is_empty() {
