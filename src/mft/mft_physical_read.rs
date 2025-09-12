@@ -1,15 +1,13 @@
 use crate::mft::mft_record::MftRecord;
-use crate::mft::mft_record_attribute_run_list::LogicalPlan;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
-// IO now delegated to PhysicalRapidReader
+use crate::read::logical_read_plan::LogicalReadPlan;
+use crate::read::physical_read_results::PhysicalReadResults;
 use crate::windows::win_handles::get_drive_handle;
-use crate::windows::win_rapid_reader::PhysicalReadResults;
 use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
-use std::path::Path;
 use uom::si::information::byte;
 use uom::si::information::mebibyte;
 use uom::si::u64::Information;
@@ -17,7 +15,7 @@ use uom::si::u64::Information;
 /// Read the complete MFT using IOCP overlapped reads.
 /// drive_letter: 'C', 'D', ...
 /// output_path: file path to write final MFT blob
-pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Result<()> {
+pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalReadResults> {
     let drive_letter = drive_letter.to_ascii_uppercase();
     let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path
@@ -50,8 +48,8 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
         drop(drive_handle);
 
         // Build sparse-aware logical plan
-        let logical_plan: LogicalPlan = decoded_runs
-            .into_logical_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()));
+        let logical_plan: LogicalReadPlan = decoded_runs
+            .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()));
         if logical_plan.segments.is_empty() {
             eyre::bail!("Logical plan empty (no runs)");
         }
@@ -61,12 +59,8 @@ pub fn read_mft(drive_letter: char, output_path: impl AsRef<Path>) -> eyre::Resu
         let mut plan = logical_plan.into_physical_plan();
         plan.align_512().merge_contiguous_reads();
         let plan = plan.chunked(chunk_size);
-        let physical_results: PhysicalReadResults = plan.read(&volume_path)?;
-        physical_results
-            .write_to_file(&output_path, logical_plan.total_logical_size_bytes)
-            .wrap_err("Failed writing MFT output file")?;
-
-        Ok(())
+        let physical_read_results: PhysicalReadResults = plan.read(&volume_path)?;
+        Ok(physical_read_results)
     }
 }
 

@@ -1,15 +1,14 @@
 use crate::drive_letter_pattern::DriveLetterPattern;
+use crate::mft::mft_file::MftFile;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
 use eyre::Context;
-use memmap2::Mmap;
 use mft::FileNameAttr;
 use mft::MftParser;
 use mft::attribute::MftAttributeContent;
 use mft::attribute::x30::FileNamespace;
 use rustc_hash::FxHashMap;
-use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -37,22 +36,17 @@ impl ListPathsArgs {
             .filter(|p| p.is_file())
             .collect();
 
-        for path in &mft_files {
-            info!("Loading MFT file: {}", path.display());
-            let file =
-                File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-            // Safety: mapping read-only; file descriptor lives until mmap dropped in loop iteration.
-            let mmap = unsafe { Mmap::map(&file) }
-                .with_context(|| format!("Failed to memory-map {}", path.display()))?;
-            let mft_bytes: &[u8] = &mmap; // bytes of the MFT file
-            info!("Loaded MFT file: {}", path.display());
+        for mft_file_path in &mft_files {
+            let mft_file = MftFile::read(mft_file_path)?;
+            let mft_bytes: &[u8] = &mft_file;
+            info!("Loaded MFT file: {}", mft_file_path.display());
 
-            info!("Parsing MFT file: {}", path.display());
+            info!("Parsing MFT file: {}", mft_file_path.display());
             let start = Instant::now();
             let mut parser =
                 MftParser::from_read_seek(Cursor::new(mft_bytes), Some(mft_bytes.len() as u64))
                     .wrap_err_with(|| {
-                        format!("Failed to parse MFT bytes from {}", path.display())
+                        format!("Failed to parse MFT bytes from {}", mft_file_path.display())
                     })?;
 
             // Collect canonical FILE_NAME (x30) attributes per MFT entry.
@@ -75,7 +69,7 @@ impl ListPathsArgs {
                 let entry = match entry {
                     Ok(x) => x,
                     Err(e) => {
-                        warn!("Failed to parse entry from {}: {}", path.display(), e);
+                        warn!("Failed to parse entry from {}: {}", mft_file_path.display(), e);
                         continue;
                     }
                 };

@@ -1,5 +1,8 @@
 use crate::mft::mft_record::MftRecord;
-use crate::windows::win_rapid_reader::PhysicalReadPlan;
+use crate::read::logical_read_plan::LogicalReadPlan;
+use crate::read::logical_read_plan::LogicalReadSegment;
+use crate::read::logical_read_plan::LogicalReadSegmentKind;
+use crate::read::physical_read_plan::PhysicalReadPlan;
 use eyre::Result;
 use eyre::eyre;
 use std::ops::Deref;
@@ -169,60 +172,16 @@ impl MftRecordAttributeRunListOwned {
         plan
     }
 }
-// ---------------- Sparse-aware logical plan (Option B) ----------------
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogicalSegmentKind {
-    Physical { physical_offset_bytes: u64 },
-    Sparse,
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogicalSegment {
-    pub logical_offset_bytes: u64,
-    pub length_bytes: u64,
-    pub kind: LogicalSegmentKind,
-}
-
-#[derive(Debug, Clone)]
-pub struct LogicalPlan {
-    pub segments: Vec<LogicalSegment>,
-    pub total_logical_size_bytes: u64,
-}
-
-impl LogicalPlan {
-    pub fn physical_segments(&self) -> impl Iterator<Item = &LogicalSegment> {
-        self.segments
-            .iter()
-            .filter(|s| matches!(s.kind, LogicalSegmentKind::Physical { .. }))
-    }
-
-    /// Convert a logical plan into a physical read plan ignoring sparse segments (no chunking/merging).
-    pub fn into_physical_plan(&self) -> PhysicalReadPlan {
-        let mut physical_plan = PhysicalReadPlan::new();
-        for seg in &self.segments {
-            if let LogicalSegmentKind::Physical {
-                physical_offset_bytes,
-            } = seg.kind
-            {
-                physical_plan.push(
-                    Information::new::<byte>(physical_offset_bytes),
-                    Information::new::<byte>(seg.logical_offset_bytes),
-                    Information::new::<byte>(seg.length_bytes),
-                );
-            }
-        }
-        physical_plan
-    }
-}
 
 impl MftRecordAttributeRunListOwned {
     /// Build a logical plan preserving sparse runs. Future opportunity (Option C): produce a sparse output file
     /// by marking destination with FSCTL_SET_SPARSE and eliding zero allocation explicitly.
-    pub fn into_logical_plan(&self, cluster_size: Information) -> LogicalPlan {
+    pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
         let mut segments = Vec::new();
         let mut logical_offset = Information::ZERO;
         if cluster_size == Information::ZERO {
-            return LogicalPlan {
+            return LogicalReadPlan {
                 segments,
                 total_logical_size_bytes: 0,
             };
@@ -234,19 +193,19 @@ impl MftRecordAttributeRunListOwned {
             }
             let length_bytes = length_clusters * cluster_size;
             let kind = match run.local_cluster_network_start_entry_index {
-                Some(lcn) => LogicalSegmentKind::Physical {
+                Some(lcn) => LogicalReadSegmentKind::Physical {
                     physical_offset_bytes: (lcn * cluster_size).get::<byte>(),
                 },
-                None => LogicalSegmentKind::Sparse,
+                None => LogicalReadSegmentKind::Sparse,
             };
-            segments.push(LogicalSegment {
+            segments.push(LogicalReadSegment {
                 logical_offset_bytes: logical_offset.get::<byte>(),
                 length_bytes: length_bytes.get::<byte>(),
                 kind,
             });
             logical_offset += length_bytes;
         }
-        LogicalPlan {
+        LogicalReadPlan {
             segments,
             total_logical_size_bytes: logical_offset.get::<byte>(),
         }

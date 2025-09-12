@@ -1,5 +1,5 @@
 use crate::drive_letter_pattern::DriveLetterPattern;
-use crate::mft_check::process_mft_file;
+use crate::mft_process::process_mft_file;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
@@ -59,7 +59,7 @@ impl QueryArgs {
             .par_iter()
             .map(|(drive_letter, mft_path)| {
                 let drive_letter = drive_letter.to_string();
-                let (files, _stats) = process_mft_file(&drive_letter, mft_path, 0, true).wrap_err(
+                let files = process_mft_file(&drive_letter, mft_path, true).wrap_err(
                     format!("Failed to process MFT file for drive {drive_letter}"),
                 )?;
                 info!(

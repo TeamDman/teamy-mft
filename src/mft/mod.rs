@@ -9,3 +9,5 @@ pub mod mft_record_location;
 pub mod mft_record_number;
 pub mod mft_record_reference;
 pub mod mft_sequence_number;
+pub mod mft_physical_read;
+pub mod mft_file;

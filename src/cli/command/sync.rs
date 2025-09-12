@@ -1,6 +1,6 @@
 use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
-use crate::mft_read;
+use crate::mft::mft_physical_read::read_physical_mft;
 use crate::sync_dir::try_get_sync_dir;
 use crate::windows::win_elevation::ensure_elevated;
 use crate::windows::win_read_raw::enable_backup_privileges;
@@ -108,13 +108,22 @@ impl SyncArgs {
                             drive_letter,
                             output_path.display()
                         );
-                        if let Err(e) = mft_read::read_mft(drive_letter, &output_path) {
-                            error!(
-                                "Worker {}: IOCP read failed for {}: {:#}",
-                                worker_id, drive_letter, e
-                            );
+
+                        match read_physical_mft(drive_letter) {
+                            Ok(physical_read_results) => {
+                                physical_read_results
+                                    .write_to_file(&output_path)
+                                    .wrap_err("Failed writing MFT output file")?;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Worker {}: IOCP read failed for {}: {:#}",
+                                    worker_id, drive_letter, e
+                                );
+                            }
                         }
                     }
+                    eyre::Ok(())
                 })
                 .wrap_err("Failed to spawn IOCP worker thread")
                 .unwrap();
@@ -130,7 +139,8 @@ impl SyncArgs {
         for handle in handles {
             handle
                 .join()
-                .map_err(|e| eyre::eyre!("Worker panicked: {:?}", e))?;
+                .map_err(|e| eyre::eyre!("Failed to join worker: {:?}", e))?
+                .wrap_err("Identified failure result from worker")?;
         }
 
         info!("All MFT dumps completed");
