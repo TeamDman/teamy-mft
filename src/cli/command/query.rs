@@ -67,8 +67,11 @@ impl QueryArgs {
                     "Found {} paths to be queried against",
                     files.total_paths().separate_with_commas()
                 );
+                // Build a drive prefix (e.g., "C:\\") and prepend it to each path
+                let drive_prefix: PathBuf = PathBuf::from(format!("{drive_letter}:\\"));
                 files.0.into_iter().flatten().for_each(|file_path| {
-                    injector.push(file_path, |x, cols| {
+                    let full_path = drive_prefix.join(&file_path);
+                    injector.push(full_path, |x, cols| {
                         cols[0] = x.to_string_lossy().into();
                     });
                 });
@@ -91,7 +94,8 @@ impl QueryArgs {
 
         let snapshot = nucleo.snapshot();
         info!("Found {} matching items", snapshot.matched_item_count());
-        for item in snapshot.matched_items(..) {
+        for (i, item) in snapshot.matched_items(..).enumerate() {
+            if i >= self.limit { break; }
             println!("{}", item.data.display());
         }
 
