@@ -1,5 +1,6 @@
 use crate::mft::mft_location::MftLocationOnDisk;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
+use teamy_windows::file::HandleReadExt;
 
 pub struct NtfsBootSector {
     pub data: [u8; 512],

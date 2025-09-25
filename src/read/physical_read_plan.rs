@@ -1,7 +1,6 @@
 use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use crate::read::physical_read_results::PhysicalReadResults;
-use crate::windows::win_handles::AutoClosingHandle;
 use std::ptr::null_mut;
 use tracing::debug;
 use tracing::warn;
@@ -20,9 +19,9 @@ use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::CreateIoCompletionPort;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 use windows::Win32::System::IO::OVERLAPPED;
+use windows::core::Owned;
 use windows::core::PCWSTR;
 use windows::core::Param;
-
 
 #[derive(Debug, Default, Clone)]
 pub struct PhysicalReadPlan {
@@ -161,7 +160,7 @@ impl PhysicalReadPlan {
         }
 
         unsafe {
-            let handle: AutoClosingHandle = CreateFileW(
+            let handle = Owned::new(CreateFileW(
                 filename,
                 FILE_GENERIC_READ.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -169,11 +168,9 @@ impl PhysicalReadPlan {
                 OPEN_EXISTING,
                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
                 None,
-            )?
-            .into();
+            )?);
 
-            let completion_port: AutoClosingHandle =
-                CreateIoCompletionPort(*handle, None, 0, 0)?.into();
+            let completion_port = Owned::new(CreateIoCompletionPort(*handle, None, 0, 0)?);
 
             debug!(
                 "Queueing {} IOCP reads ({} total)",
@@ -307,7 +304,7 @@ impl PhysicalReadPlan {
 
             Ok(PhysicalReadResults {
                 entries: final_responses,
-                total_size
+                total_size,
             })
         }
     }

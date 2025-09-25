@@ -6,13 +6,13 @@ pub mod ntfs;
 pub mod paths;
 pub mod robocopy;
 pub mod sync_dir;
-pub mod windows;
 pub mod mft_process;
 pub mod read;
+pub mod bevy;
 use crate::cli::Cli;
-use crate::windows::win_console_reuse::reuse_console_if_requested;
 use clap::CommandFactory;
 use clap::FromArgMatches;
+use teamy_windows::console::console_attach;
 use tracing::Level;
 use tracing::debug;
 
@@ -40,7 +40,9 @@ pub fn main() -> eyre::Result<()> {
     let cli = Cli::command();
     let cli = Cli::from_arg_matches(&cli.get_matches())?;
 
-    reuse_console_if_requested(&cli.global_args);
+    if let Some(pid) = cli.global_args.console_pid {
+        console_attach(pid)?;
+    }
     init_tracing(cli.global_args.log_level());
 
     cli.invoke()?;

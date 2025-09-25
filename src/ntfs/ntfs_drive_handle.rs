@@ -1,6 +1,6 @@
-use crate::windows::win_handles::AutoClosingHandle;
 use eyre::Context;
 use eyre::eyre;
+use windows::core::Owned;
 use std::ops::Deref;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
@@ -8,32 +8,37 @@ use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;
 use windows::Win32::System::Ioctl::NTFS_VOLUME_DATA_BUFFER;
 
 pub struct NtfsDriveHandle {
-    pub handle: AutoClosingHandle,
+    pub handle: Owned<HANDLE>,
 }
 impl NtfsDriveHandle {
-    pub fn try_new(drive_handle: AutoClosingHandle) -> eyre::Result<Self> {
+    pub fn try_new(drive_handle: Owned<HANDLE>) -> eyre::Result<Self> {
         validate_ntfs_filesystem(*drive_handle)?;
         Ok(NtfsDriveHandle {
             handle: drive_handle,
         })
     }
-    pub fn new_unchecked(drive_handle: AutoClosingHandle) -> Self {
+    pub fn new_unchecked(drive_handle: Owned<HANDLE>) -> Self {
         NtfsDriveHandle {
             handle: drive_handle,
         }
     }
 }
-impl TryFrom<AutoClosingHandle> for NtfsDriveHandle {
+impl TryFrom<Owned<HANDLE>> for NtfsDriveHandle {
     type Error = eyre::Report;
 
-    fn try_from(drive_handle: AutoClosingHandle) -> Result<Self, Self::Error> {
+    fn try_from(drive_handle: Owned<HANDLE>) -> Result<Self, Self::Error> {
         Self::try_new(drive_handle)
     }
 }
 impl Deref for NtfsDriveHandle {
-    type Target = AutoClosingHandle;
+    type Target = Owned<HANDLE>;
 
     fn deref(&self) -> &Self::Target {
+        &self.handle
+    }
+}
+impl AsRef<HANDLE> for NtfsDriveHandle {
+    fn as_ref(&self) -> &HANDLE {
         &self.handle
     }
 }

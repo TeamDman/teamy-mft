@@ -5,9 +5,9 @@ use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_results::PhysicalReadResults;
-use crate::windows::win_handles::get_drive_handle;
-use crate::windows::win_strings::EasyPCWSTR;
 use eyre::WrapErr;
+use teamy_windows::handle::get_read_only_drive_handle;
+use teamy_windows::string::EasyPCWSTR;
 use uom::si::information::byte;
 use uom::si::information::mebibyte;
 use uom::si::u64::Information;
@@ -19,13 +19,12 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalReadResults
     let drive_letter = drive_letter.to_ascii_uppercase();
     let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path
-        .as_str()
         .easy_pcwstr()
         .wrap_err("Failed to convert volume path to PCWSTR")?;
 
     {
         // Open blocking handle for boot sector & MFT record parsing
-        let drive_handle: NtfsDriveHandle = get_drive_handle(drive_letter)
+        let drive_handle: NtfsDriveHandle = get_read_only_drive_handle(drive_letter)
             .wrap_err_with(|| format!("Failed to open handle to drive {drive_letter}"))?
             .try_into()
             .wrap_err_with(|| {

@@ -1,8 +1,8 @@
 use crate::mft::mft_record_attribute_iter::MftRecordAttributeIter;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
-use crate::windows::win_handles::AutoClosingHandle;
 use eyre::bail;
+use teamy_windows::file::HandleReadExt;
 use std::ops::Deref;
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
@@ -21,7 +21,7 @@ impl MftRecord {
         Self { data }
     }
     pub fn try_from_handle(
-        drive_handle: &AutoClosingHandle,
+        drive_handle: impl HandleReadExt,
         mft_record_location: MftRecordLocationOnDisk,
     ) -> eyre::Result<Self> {
         let mut data = [0u8; MFT_RECORD_SIZE as usize];

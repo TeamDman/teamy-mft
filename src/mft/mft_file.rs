@@ -55,6 +55,7 @@ impl MftFile {
             self.bytes.len() / entry_size_bytes
         }
     }
+    
     #[instrument(level = "debug")]
     pub fn read(mft_file_path: &Path) -> eyre::Result<Self> {
         let file = std::fs::File::open(mft_file_path)

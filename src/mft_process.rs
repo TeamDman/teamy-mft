@@ -21,7 +21,6 @@ use uom::si::time::second;
 pub fn process_mft_file(
     drive_letter: &str,
     mft_file_path: &Path,
-    parallel: bool,
 ) -> Result<MftEntryPathCollection> {
     info!(
         drive_letter = &drive_letter,
@@ -55,11 +54,7 @@ pub fn process_mft_file(
         file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let multi = if parallel {
-        path_resolve::resolve_paths_all_parallel(&file_names)?
-    } else {
-        path_resolve::resolve_paths_all(&file_names)?
-    };
+    let multi =        path_resolve::resolve_paths_all_parallel(&file_names)?;
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();

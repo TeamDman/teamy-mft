@@ -59,7 +59,7 @@ impl QueryArgs {
             .par_iter()
             .map(|(drive_letter, mft_path)| {
                 let drive_letter = drive_letter.to_string();
-                let files = process_mft_file(&drive_letter, mft_path, true).wrap_err(
+                let files = process_mft_file(&drive_letter, mft_path).wrap_err(
                     format!("Failed to process MFT file for drive {drive_letter}"),
                 )?;
                 info!(

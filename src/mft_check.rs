@@ -4,7 +4,7 @@ use crate::sync_dir::try_get_sync_dir;
 use std::path::PathBuf;
 use tracing::debug;
 
-pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) -> eyre::Result<()> {
+pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()> {
     // Get MFT files from sync dir
     let sync_dir = try_get_sync_dir()?;
     let drive_letters: Vec<char> = drive_letter_pattern.into_drive_letters()?;
@@ -22,12 +22,11 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
         mft_files.iter().map(|(_, p)| p).collect::<Vec<_>>()
     );
 
-    if parallel {
         let handles: Vec<_> = mft_files
             .into_iter()
             .map(|(drive_letter, mft_file_path)| {
                 std::thread::spawn(move || {
-                    process_mft_file(&drive_letter.to_string(), &mft_file_path, true)
+                    process_mft_file(&drive_letter.to_string(), &mft_file_path)
                 })
             })
             .collect();
@@ -55,10 +54,6 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern, parallel: bool) ->
         if let Some(e) = first_err {
             return Err(e);
         }
-    } else {
-        for (drive_letter, mft_file_path) in mft_files {
-            process_mft_file(drive_letter.to_string().as_str(), &mft_file_path,  false)?;
-        }
-    }
+    
     Ok(())
 }
