@@ -1872,7 +1872,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "uom",
+ "uom 0.37.0",
  "widestring",
  "windows",
  "winstructs",
@@ -1880,13 +1880,13 @@ dependencies = [
 
 [[package]]
 name = "teamy-windows"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e029e56f5c5b44bb9c7d8f04c289c35c5eb63a798c181fff99ef782bb2ebba2a"
+version = "0.2.0"
 dependencies = [
+ "crossbeam-channel",
  "eyre",
  "tracing",
  "tracing-subscriber",
+ "uom 0.37.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "widestring",
  "windows",
 ]
@@ -2177,6 +2177,17 @@ version = "0.37.0"
 dependencies = [
  "humansize",
  "humantime",
+ "num-rational",
+ "num-traits",
+ "typenum",
+]
+
+[[package]]
+name = "uom"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd5cfe7d84f6774726717f358a37f5bca8fca273bed4de40604ad129d1107b49"
+dependencies = [
  "num-rational",
  "num-traits",
  "typenum",
@@ -2790,7 +2801,3 @@ name = "zeroize"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
-
-[[patch.unused]]
-name = "teamy-windows"
-version = "0.2.0"
