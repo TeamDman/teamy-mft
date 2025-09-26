@@ -1,24 +1,27 @@
+use uom::si::usize::Information;
+
 use crate::mft::mft_location::MftLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use std::ops::Deref;
 
 #[derive(Debug, Clone, Copy)]
-pub struct MftRecordLocationOnDisk(u64);
+pub struct MftRecordLocationOnDisk(Information);
 
 impl MftRecordLocationOnDisk {
-    pub const fn new(offset: u64) -> Self {
+    pub const fn new(offset: Information) -> Self {
         MftRecordLocationOnDisk(offset)
     }
     pub fn from_record_number(
-        mft_location: MftLocationOnDisk,
+        mft_location: &MftLocationOnDisk,
         record_number: MftRecordNumber,
+        record_size: Information,
     ) -> Self {
-        mft_location + record_number
+        mft_location.record_location(record_number, record_size)
     }
 }
 
 impl Deref for MftRecordLocationOnDisk {
-    type Target = u64;
+    type Target = Information;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

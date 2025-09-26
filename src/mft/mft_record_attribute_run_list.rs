@@ -1,16 +1,14 @@
 use crate::mft::mft_record::MftRecord;
+use crate::read::logical_read_plan::LogicalFileSegment;
+use crate::read::logical_read_plan::LogicalFileSegmentKind;
 use crate::read::logical_read_plan::LogicalReadPlan;
-use crate::read::logical_read_plan::LogicalReadSegment;
-use crate::read::logical_read_plan::LogicalReadSegmentKind;
-use crate::read::physical_read_plan::PhysicalReadPlan;
 use eyre::Result;
 use eyre::eyre;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use tracing::warn;
 use uom::ConstZero;
-use uom::si::information::byte;
-use uom::si::u64::Information;
+use uom::si::usize::Information;
 
 /// Generic decoded run list entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,63 +125,19 @@ impl MftRecordAttributeRunListOwned {
         }
         rtn
     }
-
-    /// Convert decoded run list entries into a simple list of physical (byte) read requests.
-    ///
-    /// Responsibilities (phase 1 of pipeline):
-    ///  - Skip sparse runs (logical gaps -> zero fill handled later if needed).
-    ///  - Convert cluster-based extents into byte offsets using bytes_per_cluster.
-    ///  - Coalesce immediately contiguous physical extents (where next_lcn == prev_lcn + prev_len_clusters)
-    ///
-    /// NOT handled here:
-    ///  - Splitting into IO-sized chunks (that is a later pipeline stage).
-    ///  - Performing any actual I/O.
-    ///  - Injecting zero buffers for sparse gaps.
-    pub fn into_physical_reader(&self, bytes_per_cluster: u64) -> PhysicalReadPlan {
-        // NOTE: This legacy helper now returns an unchunked PhysicalReadPlan.
-        let mut plan = PhysicalReadPlan::new();
-        if bytes_per_cluster == 0 {
-            return plan;
-        }
-        let mut logical_offset: u64 = 0;
-        for run in self.iter() {
-            let Some(lcn) = run.local_cluster_network_start_entry_index else {
-                continue;
-            }; // skip sparse
-            if run.length_clusters == 0 {
-                continue;
-            }
-            let Some(phys) = lcn.checked_mul(bytes_per_cluster) else {
-                warn!("LCN * bytes_per_cluster overflow; skipping run");
-                continue;
-            };
-            let Some(len_bytes) = run.length_clusters.checked_mul(bytes_per_cluster) else {
-                warn!("Run length * bytes_per_cluster overflow; skipping run");
-                continue;
-            };
-            plan.push(
-                Information::new::<byte>(phys),
-                Information::new::<byte>(logical_offset),
-                Information::new::<byte>(len_bytes),
-            );
-            logical_offset = logical_offset.saturating_add(len_bytes);
-        }
-        plan.merge_contiguous_reads();
-        plan
-    }
 }
 
-
 impl MftRecordAttributeRunListOwned {
-    /// Build a logical plan preserving sparse runs. Future opportunity (Option C): produce a sparse output file
+    /// Build a logical plan preserving sparse runs.
+    ///
+    /// Future opportunity: produce a sparse output file
     /// by marking destination with FSCTL_SET_SPARSE and eliding zero allocation explicitly.
     pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
-        let mut segments = Vec::new();
+        let mut segments = Default::default();
         let mut logical_offset = Information::ZERO;
         if cluster_size == Information::ZERO {
             return LogicalReadPlan {
                 segments,
-                total_logical_size_bytes: 0,
             };
         }
         for run in self.iter() {
@@ -191,23 +145,22 @@ impl MftRecordAttributeRunListOwned {
             if length_clusters == 0 {
                 continue;
             }
-            let length_bytes = length_clusters * cluster_size;
+            let length = length_clusters as usize * cluster_size;
             let kind = match run.local_cluster_network_start_entry_index {
-                Some(lcn) => LogicalReadSegmentKind::Physical {
-                    physical_offset_bytes: (lcn * cluster_size).get::<byte>(),
+                Some(lcn) => LogicalFileSegmentKind::Physical {
+                    physical_offset: lcn as usize * cluster_size,
                 },
-                None => LogicalReadSegmentKind::Sparse,
+                None => LogicalFileSegmentKind::Sparse,
             };
-            segments.push(LogicalReadSegment {
-                logical_offset_bytes: logical_offset.get::<byte>(),
-                length_bytes: length_bytes.get::<byte>(),
+            segments.insert(LogicalFileSegment {
+                logical_offset,
+                length,
                 kind,
             });
-            logical_offset += length_bytes;
+            logical_offset += length;
         }
         LogicalReadPlan {
             segments,
-            total_logical_size_bytes: logical_offset.get::<byte>(),
         }
     }
 }

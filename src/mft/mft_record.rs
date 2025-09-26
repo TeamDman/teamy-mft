@@ -3,6 +3,7 @@ use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use eyre::bail;
 use teamy_windows::file::HandleReadExt;
+use uom::si::information::byte;
 use std::ops::Deref;
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
@@ -25,7 +26,7 @@ impl MftRecord {
         mft_record_location: MftRecordLocationOnDisk,
     ) -> eyre::Result<Self> {
         let mut data = [0u8; MFT_RECORD_SIZE as usize];
-        drive_handle.try_read_exact(*mft_record_location as i64, data.as_mut_slice())?;
+        drive_handle.try_read_exact(mft_record_location.get::<byte>() as i64, data.as_mut_slice())?;
         if &data[0..4] != b"FILE" {
             bail!(
                 "Invalid MFT record signature: expected 'FILE', got {:?}",

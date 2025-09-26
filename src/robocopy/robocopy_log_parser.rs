@@ -5,7 +5,7 @@ use chrono::TimeZone;
 use eyre::WrapErr;
 use std::path::PathBuf;
 use uom::si::information::byte;
-use uom::si::u64::Information;
+use uom::si::usize::Information;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum InternalState {
@@ -322,11 +322,10 @@ fn parse_new_file_line(line: &str) -> Option<(Information, PathBuf)> {
     // size may be like "50.0 m" or "204576"
     let size_seg = segs[segs.len() - 2];
     let bytes = parse_size_to_bytes(size_seg)?;
-    let info = Information::new::<byte>(bytes as u64);
-    Some((info, PathBuf::from(path_str)))
+    Some((bytes, PathBuf::from(path_str)))
 }
 
-fn parse_size_to_bytes(s: &str) -> Option<f64> {
+fn parse_size_to_bytes(s: &str) -> Option<Information> {
     let t = s.trim().to_lowercase();
     if t.is_empty() {
         return None;
@@ -347,13 +346,14 @@ fn parse_size_to_bytes(s: &str) -> Option<f64> {
         Some('t') => 1024.0 * 1024.0 * 1024.0 * 1024.0,
         Some(_) => return None,
     };
-    Some(number * factor)
+    Some(Information::new::<byte>((number * factor) as usize))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::robocopy::robocopy_log_entry::RobocopyLogEntry;
+    use uom::si::information::mebibyte;
 
     #[test]
     fn parse_header_and_first_entries_streaming() -> eyre::Result<()> {

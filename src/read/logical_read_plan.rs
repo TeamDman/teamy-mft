@@ -1,49 +1,77 @@
-use uom::si::information::byte;
-use uom::si::u64::Information;
+use std::collections::BTreeSet;
 
 use crate::read::physical_read_plan::PhysicalReadPlan;
+use crate::read::physical_read_request::PhysicalReadRequest;
+use uom::si::usize::Information;
+use uom::ConstZero;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogicalReadSegmentKind {
-    Physical { physical_offset_bytes: u64 },
-    Sparse,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LogicalReadSegment {
-    pub logical_offset_bytes: u64,
-    pub length_bytes: u64,
-    pub kind: LogicalReadSegmentKind,
-}
-
+/// A plan for reading a file logically, including sparse segments.
+///
+/// The MFT is a collection of segments that may be either physical (data present on disk)
+/// or sparse (holes, unallocated, zero-filled).
+///
+/// Each part of the MFT exists somewhere on the physical device.
+/// The logical read plan describes how to read the entire MFT.
 #[derive(Debug, Clone)]
 pub struct LogicalReadPlan {
-    pub segments: Vec<LogicalReadSegment>,
-    pub total_logical_size_bytes: u64,
+    pub segments: BTreeSet<LogicalFileSegment>,
 }
 
 impl LogicalReadPlan {
-    pub fn physical_segments(&self) -> impl Iterator<Item = &LogicalReadSegment> {
+    pub fn physical_segments(&self) -> impl Iterator<Item = &LogicalFileSegment> {
         self.segments
             .iter()
-            .filter(|s| matches!(s.kind, LogicalReadSegmentKind::Physical { .. }))
+            .filter(|s| matches!(s.kind, LogicalFileSegmentKind::Physical { .. }))
     }
 
-    /// Convert a logical plan into a physical read plan ignoring sparse segments (no chunking/merging).
-    pub fn into_physical_plan(&self) -> PhysicalReadPlan {
-        let mut physical_plan = PhysicalReadPlan::new();
-        for seg in &self.segments {
-            if let LogicalReadSegmentKind::Physical {
+    pub fn as_physical_read_plan(&self) -> PhysicalReadPlan {
+        self.segments
+            .iter()
+            .filter_map(|seg| seg.as_physical_read_request())
+            .collect()
+    }
+
+    pub fn total_logical_size(&self) -> Information {
+        self.segments
+            .last()
+            .map(|s| s.logical_offset + s.length)
+            .unwrap_or(Information::ZERO)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalFileSegment {
+    pub logical_offset: Information,
+    pub length: Information,
+    pub kind: LogicalFileSegmentKind,
+}
+impl LogicalFileSegment {
+    pub fn as_physical_read_request(&self) -> Option<PhysicalReadRequest> {
+        match self.kind {
+            LogicalFileSegmentKind::Physical {
+                physical_offset: physical_offset_bytes,
+            } => Some(PhysicalReadRequest::new(
                 physical_offset_bytes,
-            } = seg.kind
-            {
-                physical_plan.push(
-                    Information::new::<byte>(physical_offset_bytes),
-                    Information::new::<byte>(seg.logical_offset_bytes),
-                    Information::new::<byte>(seg.length_bytes),
-                );
-            }
+                self.length,
+            )),
+            LogicalFileSegmentKind::Sparse => None,
         }
-        physical_plan
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LogicalFileSegmentKind {
+    Physical { physical_offset: Information },
+    Sparse,
+}
+
+impl Ord for LogicalFileSegment {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.logical_offset.cmp(&other.logical_offset)
+    }
+}
+impl PartialOrd for LogicalFileSegment {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }

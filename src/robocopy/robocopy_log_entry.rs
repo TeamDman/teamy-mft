@@ -1,7 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
 use std::path::PathBuf;
-use uom::si::u64::Information;
+use uom::si::usize::Information;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RobocopyLogEntry {
