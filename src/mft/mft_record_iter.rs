@@ -34,11 +34,12 @@ impl Iterator for MftRecordIter {
         if self.index >= self.total {
             return None;
         }
-        let start = self.index * self.entry_size;
-        let end = start + self.entry_size;
+        let entry_size_bytes = self.entry_size.get::<byte>();
+        let start = self.index * entry_size_bytes;
+        let end = start + entry_size_bytes;
         self.index += 1;
         Some(MftRecord::from_bytes_unchecked(
-            self.bytes.slice(start.get::<byte>()..end.get::<byte>()),
+            self.bytes.slice(start..end),
         ))
     }
 
