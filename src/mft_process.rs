@@ -33,8 +33,7 @@ pub fn process_mft_file(
 
     // collect filename attributes (parallel)
     let scan_start = Instant::now();
-    let file_names =
-        fast_entry::par_collect_filenames(&mft_file, mft_file.entry_size().get::<byte>() as usize);
+    let file_names = fast_entry::collect_filenames(&mft_file);
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = InformationRate::from(
         uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64) / scan_elapsed,
