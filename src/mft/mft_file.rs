@@ -1,5 +1,6 @@
 use crate::mft::fast_fixup::FixupStats;
 use crate::mft::fast_fixup::apply_fixups_parallel;
+use crate::mft::mft_record_iter::MftRecordIter;
 use bytes::Bytes;
 use eyre::Context;
 use std::fmt::Debug;
@@ -10,8 +11,8 @@ use std::time::Instant;
 use thousands::Separable;
 use tracing::debug;
 use tracing::instrument;
-use uom::si::f64::Information;
 use uom::si::information::byte;
+use uom::si::usize::Information;
 
 pub struct MftFile {
     bytes: Bytes,
@@ -33,17 +34,18 @@ impl Deref for MftFile {
 }
 impl MftFile {
     pub fn size(&self) -> Information {
-        Information::new::<byte>(self.bytes.len() as f64)
+        Information::new::<byte>(self.bytes.len())
     }
     pub fn entry_size(&self) -> Information {
         if self.len() < 0x20 {
-            return Information::new::<byte>(1024.0);
+            return Information::new::<byte>(1024);
         }
-        let size = u32::from_le_bytes([self[0x1C], self[0x1D], self[0x1E], self[0x1F]]);
+        let size = u32::from_le_bytes([self[0x1C], self[0x1D], self[0x1E], self[0x1F]]) as usize;
         if size == 0 {
-            Information::new::<byte>(1024.0)
+            // Information::new::<byte>(1024)
+            panic!("MFT entry size field is zero (invalid/unknown)");
         } else {
-            Information::new::<byte>(size as f64)
+            Information::new::<byte>(size)
         }
     }
     pub fn entry_count(&self) -> usize {
@@ -64,12 +66,14 @@ impl MftFile {
         debug!("Opened MFT file: {}", mft_file_path.display());
 
         // Determine file size
-        let file_size_bytes = file
-            .metadata()
-            .wrap_err_with(|| format!("Failed to get metadata for {}", mft_file_path.display()))?
-            .len() as usize;
-        let mft_file_size = Information::new::<byte>(file_size_bytes as f64);
-        if file_size_bytes < 1024 {
+        let mft_file_size = Information::new::<byte>(
+            file.metadata()
+                .wrap_err_with(|| {
+                    format!("Failed to get metadata for {}", mft_file_path.display())
+                })?
+                .len() as usize,
+        );
+        if mft_file_size < Information::new::<byte>(1024) {
             eyre::bail!("MFT file too small: {}", mft_file_path.display());
         }
 
@@ -77,7 +81,7 @@ impl MftFile {
         debug!("Reading cached bytes: {}", mft_file_size.get_human());
         let read_start = Instant::now();
         let bytes = {
-            let mut buf = Vec::with_capacity(file_size_bytes);
+            let mut buf = Vec::with_capacity(mft_file_size.get::<byte>());
             let mut reader = std::io::BufReader::new(&file);
             reader
                 .read_to_end(&mut buf)
@@ -132,5 +136,16 @@ impl MftFile {
         Ok(MftFile {
             bytes: Bytes::from(raw),
         })
+    }
+
+    /// Iterate over fixed-size records contained in this MFT file.
+    ///
+    /// This creates zero-copy `MftRecord` instances by slicing the shared
+    /// `Bytes` buffer. No signature validation is performed.
+    /// The caller is responsible for ensuring fixups were already applied
+    /// (handled by `MftFile::from_bytes`/`from_path`).
+    #[inline]
+    pub fn iter_records(&self) -> MftRecordIter {
+        MftRecordIter::new(self.bytes.clone(), self.entry_size())
     }
 }

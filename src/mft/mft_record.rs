@@ -1,11 +1,11 @@
 use crate::mft::mft_record_attribute_iter::MftRecordAttributeIter;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
+use bytes::Bytes;
 use eyre::bail;
+use std::ops::Deref;
 use teamy_windows::file::HandleReadExt;
 use uom::si::information::byte;
-use std::ops::Deref;
-use bytes::Bytes;
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
 /// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
@@ -22,8 +22,10 @@ pub struct MftRecord {
 }
 
 impl Deref for MftRecord {
-    type Target = [u8];
-    fn deref(&self) -> &Self::Target { self.data.as_ref() }
+    type Target = Bytes;
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
 }
 
 impl std::fmt::Debug for MftRecord {
@@ -38,6 +40,15 @@ impl std::fmt::Debug for MftRecord {
 }
 
 impl MftRecord {
+    /// Construct a record without validating the signature.
+    ///
+    /// Use this when the caller already ensured the slice is a single MFT record
+    /// with fixups applied. This avoids redundant checks and copying.
+    #[inline]
+    pub fn from_bytes_unchecked(bytes: Bytes) -> Self {
+        Self { data: bytes }
+    }
+
     // ---- Raw field offset constants (for clarity & reuse) ----
     const OFFSET_FOR_SIGNATURE: usize = 0x00;
     const OFFSET_FOR_UPDATE_SEQUENCE_ARRAY_OFFSET: usize = 0x04; // u16
@@ -54,24 +65,28 @@ impl MftRecord {
     // 0x2A padding
     const OFFSET_FOR_RECORD_NUMBER: usize = 0x2C; // u32 on-disk
 
-
     /// Read a single MFT record from the given drive handle at the specified location.
     /// Validates the "FILE" signature.
-    /// 
+    ///
     /// Useful for reading the $MFT record itself (record 0) or other known record numbers.
     pub fn try_from_handle(
         drive_handle: impl HandleReadExt,
         mft_record_location: MftRecordLocationOnDisk,
     ) -> eyre::Result<Self> {
         let mut data = [0u8; MFT_RECORD_SIZE as usize];
-        drive_handle.try_read_exact(mft_record_location.get::<byte>() as i64, data.as_mut_slice())?;
+        drive_handle.try_read_exact(
+            mft_record_location.get::<byte>() as i64,
+            data.as_mut_slice(),
+        )?;
         if &data[0..4] != b"FILE" {
             bail!(
                 "Invalid MFT record signature: expected 'FILE', got {:?}",
                 String::from_utf8_lossy(&data[0..4])
             );
         }
-        Ok(Self { data: Bytes::from(data.to_vec()) })
+        Ok(Self {
+            data: Bytes::from(data.to_vec()),
+        })
     }
 
     /// Zero-copy access to the 4-byte signature.
@@ -175,5 +190,7 @@ impl MftRecord {
     }
 
     /// Iterate raw attribute slices (header + body) in this record.
-    pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> { MftRecordAttributeIter::new(self) }
+    pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> {
+        MftRecordAttributeIter::new(self)
+    }
 }
