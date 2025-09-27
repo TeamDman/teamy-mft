@@ -1,5 +1,7 @@
+use crate::mft::fast_fixup::FixupStats;
+use crate::mft::fast_fixup::apply_fixups_parallel;
+use bytes::Bytes;
 use eyre::Context;
-use mft::fast_fixup::apply_fixups_parallel;
 use std::fmt::Debug;
 use std::io::Read;
 use std::ops::Deref;
@@ -9,13 +11,10 @@ use thousands::Separable;
 use tracing::debug;
 use tracing::instrument;
 use uom::si::f64::Information;
-use uom::si::f64::Time;
-use uom::si::frequency::hertz;
 use uom::si::information::byte;
-use uom::si::time::second;
 
 pub struct MftFile {
-    pub bytes: Vec<u8>,
+    bytes: Bytes,
 }
 impl Debug for MftFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,7 +26,7 @@ impl Debug for MftFile {
     }
 }
 impl Deref for MftFile {
-    type Target = [u8];
+    type Target = Bytes;
     fn deref(&self) -> &Self::Target {
         &self.bytes
     }
@@ -55,15 +54,16 @@ impl MftFile {
             self.bytes.len() / entry_size_bytes
         }
     }
-    
+
     #[instrument(level = "debug")]
-    pub fn read(mft_file_path: &Path) -> eyre::Result<Self> {
+    pub fn from_path(mft_file_path: &Path) -> eyre::Result<Self> {
+        // Open file
         let file = std::fs::File::open(mft_file_path)
             .wrap_err_with(|| format!("Failed to open {}", mft_file_path.display()))?;
 
         debug!("Opened MFT file: {}", mft_file_path.display());
 
-        // file size
+        // Determine file size
         let file_size_bytes = file
             .metadata()
             .wrap_err_with(|| format!("Failed to get metadata for {}", mft_file_path.display()))?
@@ -73,7 +73,7 @@ impl MftFile {
             eyre::bail!("MFT file too small: {}", mft_file_path.display());
         }
 
-        // read
+        // Read all bytes
         debug!("Reading cached bytes: {}", mft_file_size.get_human());
         let read_start = Instant::now();
         let bytes = {
@@ -84,9 +84,11 @@ impl MftFile {
                 .wrap_err_with(|| format!("Failed to read {}", mft_file_path.display()))?;
             buf
         };
-        
-        let rtn = MftFile { bytes };
 
+        // Defer fixups and struct construction to from_bytes
+        let rtn = MftFile::from_bytes(bytes)?;
+
+        // Log summary
         debug!(
             "Read {} in {:.2?}, found entry size {} and {} entries",
             mft_file_size.get_human(),
@@ -95,34 +97,40 @@ impl MftFile {
             rtn.entry_count().separate_with_commas()
         );
 
-
         Ok(rtn)
     }
 
-    #[instrument(level = "debug")]
-    pub fn apply_fixups_in_place(&mut self) -> eyre::Result<()> {
-        let entry_size_bytes = self.entry_size().get::<byte>() as usize;
-        if entry_size_bytes == 0 || !self.bytes.len().is_multiple_of(entry_size_bytes) {
-            eyre::bail!("Unaligned entry size");
+    /// Construct from in-memory bytes that need fixups; applies fixups and stores Bytes.
+    #[instrument(level = "debug", skip_all)]
+    pub fn from_bytes(mut raw: Vec<u8>) -> eyre::Result<Self> {
+        // Ensure we have enough bytes to read the entry size field at 0x1C..=0x1F
+        if raw.len() < 0x20 {
+            eyre::bail!(
+                "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
+                raw.len()
+            );
         }
-        let entry_count = self.bytes.len() / entry_size_bytes;
-        debug!(
-            "Detected entry size: {} bytes, total entries: {}",
-            entry_size_bytes, entry_count
-        );
 
-        let fixup_start = Instant::now();
-        let fixup_stats = apply_fixups_parallel(&mut self.bytes, entry_size_bytes);
-        let fixup_elapsed = Time::new::<second>(fixup_start.elapsed().as_secs_f64());
-        let fixup_rate = self.size() / fixup_elapsed;
-        debug!(
-            "Took {} ({}/s) applied/already/invalid={}/{}/{}",
-            fixup_elapsed.get_human(),
-            fixup_rate.get::<hertz>().trunc().separate_with_commas(),
-            fixup_stats.applied.separate_with_commas(),
-            fixup_stats.already_applied.separate_with_commas(),
-            fixup_stats.invalid.separate_with_commas()
-        );
-        Ok(())
+        // Read entry size in bytes (little-endian u32 at offset 0x1C)
+        let entry_size_bytes =
+            u32::from_le_bytes([raw[0x1C], raw[0x1D], raw[0x1E], raw[0x1F]]) as usize;
+
+        // Validate the entry size field
+        if entry_size_bytes == 0 {
+            eyre::bail!("Entry size field is zero (invalid/unknown)");
+        }
+
+        // Ensure the buffer length aligns to the entry size
+        if !raw.len().is_multiple_of(entry_size_bytes) {
+            eyre::bail!(
+                "Buffer length ({}) is not a multiple of entry size ({})",
+                raw.len(),
+                entry_size_bytes
+            );
+        }
+        let _stats: FixupStats = apply_fixups_parallel(&mut raw, entry_size_bytes);
+        Ok(MftFile {
+            bytes: Bytes::from(raw),
+        })
     }
 }

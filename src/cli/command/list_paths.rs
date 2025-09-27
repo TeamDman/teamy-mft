@@ -37,7 +37,7 @@ impl ListPathsArgs {
             .collect();
 
         for mft_file_path in &mft_files {
-            let mft_file = MftFile::read(mft_file_path)?;
+            let mft_file = MftFile::from_path(mft_file_path)?;
             let mft_bytes: &[u8] = &mft_file;
             info!("Loaded MFT file: {}", mft_file_path.display());
 

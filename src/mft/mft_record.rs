@@ -5,6 +5,7 @@ use eyre::bail;
 use teamy_windows::file::HandleReadExt;
 use uom::si::information::byte;
 use std::ops::Deref;
+use bytes::Bytes;
 
 /// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
 /// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
@@ -14,27 +15,29 @@ use std::ops::Deref;
 /// each MFT record will be 4,096 bytes instead."
 pub const MFT_RECORD_SIZE: u16 = 1024;
 
+/// Zero-copy record view backed by `bytes::Bytes`.
+/// Can be cloned cheaply and stored in ECS components.
 pub struct MftRecord {
-    pub data: [u8; MFT_RECORD_SIZE as usize],
+    data: Bytes,
 }
+
+impl Deref for MftRecord {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target { self.data.as_ref() }
+}
+
+impl std::fmt::Debug for MftRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MftRecord")
+            .field("signature", &self.get_signature())
+            .field("record_number", &self.get_record_number())
+            .field("used_size", &self.get_used_size())
+            .field("allocated_size", &self.get_allocated_size())
+            .finish()
+    }
+}
+
 impl MftRecord {
-    pub fn from_data(data: [u8; MFT_RECORD_SIZE as usize]) -> Self {
-        Self { data }
-    }
-    pub fn try_from_handle(
-        drive_handle: impl HandleReadExt,
-        mft_record_location: MftRecordLocationOnDisk,
-    ) -> eyre::Result<Self> {
-        let mut data = [0u8; MFT_RECORD_SIZE as usize];
-        drive_handle.try_read_exact(mft_record_location.get::<byte>() as i64, data.as_mut_slice())?;
-        if &data[0..4] != b"FILE" {
-            bail!(
-                "Invalid MFT record signature: expected 'FILE', got {:?}",
-                String::from_utf8_lossy(&data[0..4])
-            );
-        }
-        Ok(Self { data })
-    }
     // ---- Raw field offset constants (for clarity & reuse) ----
     const OFFSET_FOR_SIGNATURE: usize = 0x00;
     const OFFSET_FOR_UPDATE_SEQUENCE_ARRAY_OFFSET: usize = 0x04; // u16
@@ -51,6 +54,26 @@ impl MftRecord {
     // 0x2A padding
     const OFFSET_FOR_RECORD_NUMBER: usize = 0x2C; // u32 on-disk
 
+
+    /// Read a single MFT record from the given drive handle at the specified location.
+    /// Validates the "FILE" signature.
+    /// 
+    /// Useful for reading the $MFT record itself (record 0) or other known record numbers.
+    pub fn try_from_handle(
+        drive_handle: impl HandleReadExt,
+        mft_record_location: MftRecordLocationOnDisk,
+    ) -> eyre::Result<Self> {
+        let mut data = [0u8; MFT_RECORD_SIZE as usize];
+        drive_handle.try_read_exact(mft_record_location.get::<byte>() as i64, data.as_mut_slice())?;
+        if &data[0..4] != b"FILE" {
+            bail!(
+                "Invalid MFT record signature: expected 'FILE', got {:?}",
+                String::from_utf8_lossy(&data[0..4])
+            );
+        }
+        Ok(Self { data: Bytes::from(data.to_vec()) })
+    }
+
     /// Zero-copy access to the 4-byte signature.
     pub fn get_signature(&self) -> &[u8; 4] {
         // SAFETY: first 4 bytes always exist; casting to fixed array reference.
@@ -58,27 +81,27 @@ impl MftRecord {
     }
 
     #[inline(always)]
-    fn read_u16(&self, off: usize) -> u16 {
+    fn read_u16(&self, offset: usize) -> u16 {
         // SAFETY: Bounds ensured by caller placement; use unaligned read then convert LE.
         unsafe {
             u16::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(off) as *const u16
+                self.data.as_ptr().add(offset) as *const u16
             ))
         }
     }
     #[inline(always)]
-    fn read_u32(&self, off: usize) -> u32 {
+    fn read_u32(&self, offset: usize) -> u32 {
         unsafe {
             u32::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(off) as *const u32
+                self.data.as_ptr().add(offset) as *const u32
             ))
         }
     }
     #[inline(always)]
-    fn read_u64(&self, off: usize) -> u64 {
+    fn read_u64(&self, offset: usize) -> u64 {
         unsafe {
             u64::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(off) as *const u64
+                self.data.as_ptr().add(offset) as *const u64
             ))
         }
     }
@@ -151,70 +174,6 @@ impl MftRecord {
         self.read_u32(Self::OFFSET_FOR_RECORD_NUMBER).into()
     }
 
-    /// On success returns Ok(()). Any integrity issue yields an Err with context.
-    pub fn apply_update_sequence_array_fixups(&mut self) -> eyre::Result<()> {
-        if self.get_signature() != b"FILE" {
-            bail!(
-                "Cannot apply fixups: signature is not FILE (found {:?})",
-                self.get_signature()
-            );
-        }
-        let usa_offset = self.get_update_sequence_array_offset() as usize;
-        let usa_size_words = self.get_update_sequence_array_size_words() as usize; // total 2-byte words including sentinel
-        if usa_size_words < 2 {
-            bail!("Invalid USA: size words {} < 2", usa_size_words);
-        }
-        let fixup_bytes_len = usa_size_words * 2;
-        if usa_offset == 0 || usa_offset + fixup_bytes_len > self.data.len() {
-            bail!(
-                "Invalid USA bounds: offset={} length={} record_len={}",
-                usa_offset,
-                fixup_bytes_len,
-                self.data.len()
-            );
-        }
-        let usa_vec = self.data[usa_offset..usa_offset + fixup_bytes_len].to_vec();
-        let update_sequence = &usa_vec[0..2];
-        let replacements = &usa_vec[2..];
-        for (i, replacement) in replacements.chunks_exact(2).enumerate() {
-            let end = (i + 1) * 512; // logical stride size
-            if end > self.data.len() {
-                // partial final stride ok
-                break;
-            }
-            let sector_last_two = &mut self.data[end - 2..end];
-            if sector_last_two != update_sequence {
-                bail!(
-                    "Fixup mismatch at stride {}: expected {:02X?} found {:02X?}",
-                    i,
-                    update_sequence,
-                    sector_last_two
-                );
-            }
-            sector_last_two.copy_from_slice(replacement);
-        }
-        Ok(())
-    }
-
     /// Iterate raw attribute slices (header + body) in this record.
-    pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> {
-        MftRecordAttributeIter::new(self)
-    }
-}
-impl Deref for MftRecord {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-impl std::fmt::Debug for MftRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MftRecord")
-            .field("signature", &self.get_signature())
-            .field("record_number", &self.get_record_number())
-            .field("used_size", &self.get_used_size())
-            .field("allocated_size", &self.get_allocated_size())
-            .finish()
-    }
+    pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> { MftRecordAttributeIter::new(self) }
 }

@@ -5061,6 +5061,7 @@ version = "0.3.0"
 dependencies = [
  "arbitrary",
  "bevy",
+ "bytes",
  "chrono",
  "clap",
  "color-eyre",

@@ -1,8 +1,8 @@
+use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
+use crate::mft::path_resolve;
+use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
-use mft::fast_entry;
-use mft::path_resolve;
-use mft::path_resolve::MftEntryPathCollection;
 use std::path::Path;
 use std::time::Instant;
 use thousands::Separable;
@@ -30,8 +30,7 @@ pub fn process_mft_file(
 
     let start = std::time::Instant::now();
 
-    let mut mft_file = MftFile::read(mft_file_path)?;
-    mft_file.apply_fixups_in_place()?;
+    let mft_file = MftFile::from_path(mft_file_path)?;
 
     // collect filename attributes (parallel)
     let scan_start = Instant::now();
