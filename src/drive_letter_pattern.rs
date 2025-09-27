@@ -1,5 +1,7 @@
 use arbitrary::Arbitrary;
 use color_eyre::eyre::{self as eyre};
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 use std::str::FromStr;
 
@@ -42,6 +44,44 @@ impl FromStr for DriveLetterPattern {
             return Err(eyre::eyre!("empty drive letter pattern"));
         }
         Ok(DriveLetterPattern(s.to_string()))
+    }
+}
+
+impl<'de> Deserialize<'de> for DriveLetterPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for DriveLetterPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+#[cfg(test)]
+mod test {
+    use crate::drive_letter_pattern::DriveLetterPattern;
+
+    #[tokio::test]
+    async fn serialize() -> eyre::Result<()> {
+        let pattern = DriveLetterPattern("C,D;E F".to_string());
+        let serialized = serde_json::to_string(&pattern)?;
+        assert_eq!(serialized, "\"C,D;E F\"");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn deserialize() -> eyre::Result<()> {
+        let s = "\"C,D;E F\"";
+        let deserialized: DriveLetterPattern = serde_json::from_str(s)?;
+        assert_eq!(deserialized, DriveLetterPattern("C,D;E F".to_string()));
+        Ok(())
     }
 }
 

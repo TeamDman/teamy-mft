@@ -6,6 +6,7 @@ use clap::Args;
 use eyre::Context;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use tracing::instrument;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ pub struct QueryArgs {
 
 impl QueryArgs {
     pub fn invoke(self) -> eyre::Result<()> {
+        info!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
             eyre::bail!("query string required")
         }
@@ -59,9 +61,9 @@ impl QueryArgs {
             .par_iter()
             .map(|(drive_letter, mft_path)| {
                 let drive_letter = drive_letter.to_string();
-                let files = process_mft_file(&drive_letter, mft_path).wrap_err(
-                    format!("Failed to process MFT file for drive {drive_letter}"),
-                )?;
+                let files = process_mft_file(&drive_letter, mft_path).wrap_err(format!(
+                    "Failed to process MFT file for drive {drive_letter}"
+                ))?;
                 info!(
                     drive_letter = &drive_letter,
                     "Found {} paths to be queried against",
@@ -95,7 +97,9 @@ impl QueryArgs {
         let snapshot = nucleo.snapshot();
         info!("Found {} matching items", snapshot.matched_item_count());
         for (i, item) in snapshot.matched_items(..).enumerate() {
-            if i >= self.limit { break; }
+            if i >= self.limit {
+                break;
+            }
             println!("{}", item.data.display());
         }
 
