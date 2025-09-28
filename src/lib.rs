@@ -1,7 +1,7 @@
 #![feature(btree_cursors)]
-pub mod engine;
 pub mod cli;
 pub mod drive_letter_pattern;
+pub mod engine;
 pub mod mft;
 pub mod mft_check;
 pub mod mft_process;
@@ -25,15 +25,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// In debug builds, include file and line number without timestamp.
 /// In release builds, include timestamp and log level.
 pub fn init_tracing(level: Level) {
-    let builder = tracing_subscriber::fmt().with_env_filter(
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+    let builder = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::builder().parse_lossy(format!(
                 "{default_log_level},{bevy_defaults}",
                 default_log_level = level,
                 bevy_defaults = DEFAULT_FILTER
             ))
-        }),
-    );
+        }))
+        .with_writer(std::io::stderr)
+        .pretty();
     #[cfg(debug_assertions)]
     let subscriber = builder
         .with_target(false)

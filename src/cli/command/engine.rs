@@ -1,4 +1,5 @@
 use crate::cli::to_args::ToArgs;
+use crate::engine::run::run_engine;
 use arbitrary::Arbitrary;
 use clap::Args;
 use clap::Subcommand;
@@ -18,7 +19,7 @@ impl EngineArgs {
     pub fn invoke(self) -> eyre::Result<()> {
         match self.command {
             EngineCommand::Run => {
-                println!("Engine command is a work in progress.");
+                run_engine()?;
                 Ok(())
             }
         }

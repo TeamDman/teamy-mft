@@ -174,8 +174,8 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     let entry_count = buf.len() / entry_size;
     debug!(
         "Detected entry size: {} bytes, total entries: {}",
-        entry_size,
-        entry_count
+        entry_size.separate_with_commas(),
+        entry_count.separate_with_commas()
     );
 
     let start = Instant::now();
@@ -203,12 +203,13 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     let total_size = Information::new::<byte>(buf.len() as f64);
     let rate = total_size / elapsed;
     debug!(
-        "Took {} ({}/s) applied/already/invalid={}/{}/{}",
-        elapsed.get_human(),
-        rate.get::<hertz>().trunc().separate_with_commas(),
-        stats.applied.separate_with_commas(),
-        stats.already_applied.separate_with_commas(),
-        stats.invalid.separate_with_commas()
+        "Took {elapsed} to process {count} records ({rate}/s) - fixup stats: applied={applied} already-applied={already_applied} invalid={invalid}",
+        elapsed = elapsed.get_human(),
+        count = entry_count.separate_with_commas(),
+        rate = rate.get::<hertz>().trunc().separate_with_commas(),
+        applied = stats.applied.separate_with_commas(),
+        already_applied = stats.already_applied.separate_with_commas(),
+        invalid = stats.invalid.separate_with_commas()
     );
 
     stats

@@ -98,10 +98,10 @@ impl MftFile {
 
         // Log summary
         debug!(
-            "Read {} in {:.2?}, found entry size {} and {} entries",
+            "Read {} in {:.2?}, found entry size {} bytes and {} entries",
             mft_file_size.get_human(),
             read_start.elapsed(),
-            rtn.entry_size().get_human(),
+            rtn.entry_size().get::<byte>().separate_with_commas(),
             rtn.entry_count().separate_with_commas()
         );
 

@@ -54,7 +54,7 @@ pub fn on_sync_dir_added_emit_loads(
                         .map(|ext| ext.eq_ignore_ascii_case("mft"))
                         .unwrap_or(false);
                     if is_mft && path.is_file() {
-                        debug!(?path, "Queueing MFT load from path");
+                        info!(?path, "Queueing MFT load from path");
                         messages.write(MftFileMessage::LoadFromPath(path));
                     }
                 }
@@ -101,7 +101,7 @@ pub fn finish_mft_file_tasks(
         if let Some(result) = block_on(poll_once(task)) {
             match result {
                 Ok(mft) => {
-                    debug!(?path, mft=?format!("{:?}", &mft), "Loaded MFT file from disk");
+                    info!(?path, mft=?format!("{:?}", &mft), "Loaded MFT file from disk");
                     commands.spawn(mft);
                 }
                 Err(e) => {
@@ -110,6 +110,13 @@ pub fn finish_mft_file_tasks(
             }
             completed.push(path.clone());
         }
+    }
+    if !completed.is_empty() {
+        debug!(
+            "Completed {} MFT load tasks, {} remaining",
+            completed.len(),
+            tasks.loading_from_disk.len() - completed.len()
+        );
     }
     for path in completed {
         tasks.loading_from_disk.remove(&path);

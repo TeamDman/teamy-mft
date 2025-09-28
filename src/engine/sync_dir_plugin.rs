@@ -5,13 +5,14 @@ use bevy::tasks::IoTaskPool;
 use bevy::tasks::Task;
 use bevy::tasks::block_on;
 use bevy::tasks::poll_once;
+use std::any::type_name;
 use std::ops::Deref;
 use std::path::PathBuf;
 
 pub struct SyncDirectoryPlugin;
 impl Plugin for SyncDirectoryPlugin {
     fn build(&self, app: &mut App) {
-    app.register_type::<SyncDirectory>();
+        app.register_type::<SyncDirectory>();
         app.register_type::<SyncDirectoryEvents>();
         app.init_resource::<SyncDirectoryTasks>();
         app.add_message::<SyncDirectoryEvents>();
@@ -61,6 +62,7 @@ pub fn read_sync_directory_events_and_launch_task(
     mut tasks: ResMut<SyncDirectoryTasks>,
 ) -> Result<()> {
     for ev in events.read() {
+        info!(event=?ev, "Processing {}", type_name::<SyncDirectoryEvents>());
         match ev {
             SyncDirectoryEvents::ReadSyncDirectory => {
                 if tasks.get_sync_dir.is_some() {
@@ -75,7 +77,7 @@ pub fn read_sync_directory_events_and_launch_task(
                     let path = try_get_sync_dir()?;
                     Ok(SyncDirectory(path))
                 });
-                debug!(task=?task, "Spawned task to load sync dir from preferences");
+                info!(task=?task, "Spawned task to load sync dir from preferences");
                 tasks.get_sync_dir = Some(task);
             }
         }
@@ -91,7 +93,7 @@ pub fn finish_load_sync_dir_from_preferences(
     if let Some(task) = tasks.get_sync_dir.as_mut() {
         if let Some(result) = block_on(poll_once(task)) {
             let sync_dir = result?;
-            debug!(sync_dir=?sync_dir, "Loaded sync dir from preferences");
+            info!(sync_dir=?sync_dir, "Loaded sync dir from preferences");
             if let Ok(entity) = existing.single() {
                 commands.entity(entity).insert(sync_dir);
             } else {

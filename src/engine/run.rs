@@ -4,11 +4,13 @@ use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::ExitCondition;
 use compact_str::CompactString;
+use tracing::debug;
 
 #[derive(Component, Reflect)]
 pub struct PhysicalDiskLabel(pub CompactString);
 
 pub fn run_engine() -> eyre::Result<()> {
+    debug!("Building Bevy engine");
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -21,6 +23,9 @@ pub fn run_engine() -> eyre::Result<()> {
     );
     app.add_plugins(SyncDirectoryPlugin);
     app.add_plugins(MftFilePlugin);
+    debug!("Bevy engine built");
+
+    info!("Running Bevy engine");
     app.run();
     Ok(())
 }
