@@ -72,63 +72,62 @@ fn set_window_icon(
     if events.p0().is_empty() {
         return;
     }
-    WINIT_WINDOWS.with_borrow_mut(|windows| { info!("Ahoy!") });
-    // let outgoing = WINIT_WINDOWS.with_borrow_mut(|windows| {
-    //     let mut outgoing = Vec::new();
-    //     for event in events.p0().read() {
-    //         debug!(?event.window, ?windows, "Handling {}", type_name::<AddWindowIconWithRetry>());
+    let outgoing = WINIT_WINDOWS.with_borrow(|windows| {
+        let mut outgoing = Vec::new();
+        for event in events.p0().read() {
+            debug!(?event.window, ?windows, "Handling {}", type_name::<AddWindowIconWithRetry>());
 
-    //         // Identify window
-    //         let target_window = windows.get_window(event.window);
-    //         let Some(window) = target_window else {
-    //             warn!(
-    //                 ?windows,
-    //                 "Window {:?} does not exist, retrying later...",
-    //                 event.window
-    //             );
-    //             outgoing.push(event.clone());
-    //             continue;
-    //         };
+            // Identify window
+            let target_window = windows.get_window(event.window);
+            let Some(window) = target_window else {
+                warn!(
+                    ?windows,
+                    "Window {:?} does not exist, retrying later...",
+                    event.window
+                );
+                outgoing.push(event.clone());
+                continue;
+            };
 
-    //         // Fetch the image asset
-    //         let Some(image) = assets.get(&event.image) else {
-    //             error!(
-    //                 "Image handle {:?} not found in assets, the window will not have our custom icon",
-    //                 event.image
-    //             );
-    //             continue;
-    //         };
+            // Fetch the image asset
+            let Some(image) = assets.get(&event.image) else {
+                error!(
+                    "Image handle {:?} not found in assets, the window will not have our custom icon",
+                    event.image
+                );
+                continue;
+            };
 
-    //         // Acquire pixel data from the image
-    //         let Some(image_data) = image.data.clone() else {
-    //             error!(
-    //                 "Image handle {:?} has no data, the window will not have our custom icon",
-    //                 event.image
-    //             );
-    //             continue;
-    //         };
+            // Acquire pixel data from the image
+            let Some(image_data) = image.data.clone() else {
+                error!(
+                    "Image handle {:?} has no data, the window will not have our custom icon",
+                    event.image
+                );
+                continue;
+            };
 
-    //         // Convert between formats
-    //         let icon = match winit::window::Icon::from_rgba(
-    //             image_data,
-    //             image.texture_descriptor.size.width,
-    //             image.texture_descriptor.size.height,
-    //         ) {
-    //             Ok(icon) => icon,
-    //             Err(e) => {
-    //                 error!("Failed to construct window icon: {:?}", e);
-    //                 continue;
-    //             }
-    //         };
+            // Convert between formats
+            let icon = match winit::window::Icon::from_rgba(
+                image_data,
+                image.texture_descriptor.size.width,
+                image.texture_descriptor.size.height,
+            ) {
+                Ok(icon) => icon,
+                Err(e) => {
+                    error!("Failed to construct window icon: {:?}", e);
+                    continue;
+                }
+            };
 
-    //         // Set the window icon
-    //         info!(image_size = ?image.size(), "Setting window icon");
-    //         window.set_window_icon(Some(icon));
-    //     }
-    //     outgoing
-    // });
+            // Set the window icon
+            info!(image_size = ?image.size(), "Setting window icon");
+            window.set_window_icon(Some(icon));
+        }
+        outgoing
+    });
 
-    // for event in outgoing {
-    //     events.p1().write(event);
-    // }
+    for event in outgoing {
+        events.p1().write(event);
+    }
 }
