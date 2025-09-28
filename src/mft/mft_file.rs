@@ -1,6 +1,8 @@
 use crate::mft::fast_fixup::FixupStats;
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
+use bevy::ecs::component::Component;
+use bevy::reflect::Reflect;
 use bytes::Bytes;
 use eyre::Context;
 use std::fmt::Debug;
@@ -14,7 +16,9 @@ use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::usize::Information;
 
+#[derive(Component, Reflect)]
 pub struct MftFile {
+    #[reflect(ignore)]
     bytes: Bytes,
 }
 impl Debug for MftFile {

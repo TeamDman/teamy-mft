@@ -1,3 +1,4 @@
+use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft_check::check_drives;
 use arbitrary::Arbitrary;
@@ -16,4 +17,4 @@ impl CheckArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for CheckArgs {}
+impl ToArgs for CheckArgs {}

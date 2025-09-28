@@ -1,3 +1,4 @@
+use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft::mft_file::MftFile;
 use crate::sync_dir::try_get_sync_dir;
@@ -160,7 +161,7 @@ impl ListPathsArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for ListPathsArgs {
+impl ToArgs for ListPathsArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         let mut args = Vec::new();
         // drive_pattern is a positional argument with a default of "*".

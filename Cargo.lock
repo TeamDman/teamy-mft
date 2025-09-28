@@ -4446,16 +4446,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d6831663a5098ea164f89cff59c6284e95f4e3c76ce9848d4529f5ccca9bde"
 
 [[package]]
-name = "range-set"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d49e572143755710377fda7cbd3f46e8523b912339759636ab2770abb16c4c3"
-dependencies = [
- "num-traits",
- "smallvec",
-]
-
-[[package]]
 name = "rangemap"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5075,7 +5065,6 @@ dependencies = [
  "itertools 0.14.0",
  "mft",
  "nucleo",
- "range-set",
  "rayon",
  "rustc-hash 2.1.1",
  "serde",

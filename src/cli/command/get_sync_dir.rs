@@ -1,6 +1,8 @@
 use arbitrary::Arbitrary;
 use clap::Args;
 
+use crate::cli::to_args::ToArgs;
+
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct GetSyncDirArgs;
 
@@ -14,4 +16,4 @@ impl GetSyncDirArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for GetSyncDirArgs {}
+impl ToArgs for GetSyncDirArgs {}

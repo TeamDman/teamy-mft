@@ -1,3 +1,4 @@
+use crate::cli::to_args::ToArgs;
 use crate::robocopy::robocopy_log_parser::RobocopyLogParser;
 use crate::robocopy::robocopy_log_parser::RobocopyParseAdvance;
 use arbitrary::Arbitrary;
@@ -84,7 +85,7 @@ impl RobocopyLogsTuiArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for RobocopyLogsTuiArgs {
+impl ToArgs for RobocopyLogsTuiArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         vec![self.robocopy_log_file_path.clone().into()]
     }

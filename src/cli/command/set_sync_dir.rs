@@ -3,6 +3,8 @@ use clap::Args;
 use std::path::PathBuf;
 use tracing::info;
 
+use crate::cli::to_args::ToArgs;
+
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct SetSyncDirArgs {
     /// Path to set as sync directory (defaults to current working directory if omitted)
@@ -23,7 +25,7 @@ impl SetSyncDirArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for SetSyncDirArgs {
+impl ToArgs for SetSyncDirArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         let mut v = Vec::new();
         if let Some(p) = &self.path {

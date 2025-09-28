@@ -4,12 +4,14 @@ pub mod list_paths;
 pub mod query;
 pub mod robocopy_logs_tui;
 pub mod set_sync_dir;
-pub mod sync; // added
+pub mod sync;
+pub mod engine;
 
 use crate::cli::command::check::CheckArgs;
+use crate::cli::command::engine::EngineArgs;
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
-use crate::cli::command::query::QueryArgs; // added
+use crate::cli::command::query::QueryArgs;
 use crate::cli::command::robocopy_logs_tui::RobocopyLogsTuiArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
@@ -32,9 +34,11 @@ pub enum Command {
     /// Validate cached MFT files have at least one Win32 FILE_NAME attribute per entry having any FILE_NAME
     Check(CheckArgs),
     /// Query resolved file paths (substring match) across cached MFTs
-    Query(QueryArgs), // added
+    Query(QueryArgs),
     /// Explore robocopy logs in a TUI (validate file exists for now)
     RobocopyLogsTui(RobocopyLogsTuiArgs),
+    /// Run the Bevy game engine to visualize MFT data processing
+    Engine(EngineArgs),
 }
 
 impl Default for Command {
@@ -51,8 +55,9 @@ impl Command {
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
             Command::Check(args) => args.invoke(),
-            Command::Query(args) => args.invoke(), // added
+            Command::Query(args) => args.invoke(),
             Command::RobocopyLogsTui(args) => args.invoke(),
+            Command::Engine(args) => args.invoke(),
         }
     }
 }
@@ -88,6 +93,10 @@ impl ToArgs for Command {
             Command::RobocopyLogsTui(logs_args) => {
                 args.push("robocopy-logs-tui".into());
                 args.extend(logs_args.to_args());
+            }
+            Command::Engine(engine_args) => {
+                args.push("engine".into());
+                args.extend(engine_args.to_args());
             }
         }
         args

@@ -1,3 +1,4 @@
+use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft_process::process_mft_file;
 use crate::sync_dir::try_get_sync_dir;
@@ -6,7 +7,6 @@ use clap::Args;
 use eyre::Context;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use tracing::instrument;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ impl QueryArgs {
     }
 }
 
-impl crate::cli::to_args::ToArgs for QueryArgs {
+impl ToArgs for QueryArgs {
     fn to_args(&self) -> Vec<OsString> {
         let mut args = Vec::new();
         // positional query first
