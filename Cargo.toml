@@ -43,15 +43,26 @@ crossbeam-channel = "0.5"
 mft = { version = "0.6.1", git = "https://github.com/TeamDman/mft", branch = "mine" }
 rustc-hash = "2.1.1"
 winstructs = "0.3.2"
-uom = { version = "0.37.0", features = ["autoconvert", "human", "usize"], git = "https://github.com/TeamDman/uom", branch = "mine" }
+uom = { version = "0.37.0", features = [
+    "autoconvert",
+    "human",
+    "usize",
+], git = "https://github.com/TeamDman/uom", branch = "mine" }
 rayon = { version = "1.10" }
 humantime = "2.2.0"
 thousands = "0.2.0"
 nucleo = "0.5.0"
 chrono = "0.4.41"
-compact_str = {version="0.9.0", git="https://github.com/TeamDman/compact_str", branch="mine", features=["bevy-reflect"]}
+compact_str = { version = "0.9.0", git = "https://github.com/TeamDman/compact_str", branch = "mine", features = [
+    "bevy-reflect",
+] }
 teamy-windows = "0.2.0"
 bevy = "0.17.0-rc.1"
+bevy_winit = "0.17.0-rc.1"
+winit = { version = "0.30.12", default-features = false }
+
+[build-dependencies]
+embed-resource = "3.0.3"
 
 [dev-dependencies]
 tempfile = "3.20"
