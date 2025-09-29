@@ -1,7 +1,6 @@
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
-use crate::engine::window_icon_plugin::WindowIconPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::ExitCondition;
@@ -26,7 +25,6 @@ pub fn run_engine() -> eyre::Result<()> {
     app.add_plugins(SyncDirectoryPlugin);
     app.add_plugins(MftFilePlugin);
     app.add_plugins(MftFileOverviewWindowPlugin);
-    app.add_plugins(WindowIconPlugin);
     debug!("Bevy engine built");
 
     info!("Running Bevy engine");

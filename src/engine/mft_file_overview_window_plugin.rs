@@ -1,6 +1,6 @@
 use crate::engine::assets::textures::MyTexture;
-use crate::engine::window_icon_plugin::WindowIcon;
 use bevy::prelude::*;
+use bevy::window::WindowIcon;
 
 /// Marker component for the overview window entity
 #[derive(Component, Reflect, Debug, Default)]
@@ -31,7 +31,9 @@ fn spawn_overview_window_if_missing(
                 ..default()
             },
             MftFileOverviewWindow,
-            WindowIcon::new(asset_server.load(MyTexture::Icon)),
+            WindowIcon {
+                handle: asset_server.load(MyTexture::Icon),
+            },
         ));
         info!(title = WINDOW_TITLE, "Spawned MFT overview window");
     }
