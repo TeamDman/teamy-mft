@@ -57,7 +57,7 @@ compact_str = { version = "0.9.0", git = "https://github.com/TeamDman/compact_st
     "bevy-reflect",
 ], rev = "7e4f92aa131a62ffabe468f748309e06c932b616" }
 teamy-windows = "0.2.0"
-bevy = {version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", rev = "fa87d64501a6b818a2db5ab1719046cff0f4c1c2", features=["custom_window_icon"]}
+bevy = {version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", rev = "fa87d64501a6b818a2db5ab1719046cff0f4c1c2", features=["custom_window_icon","bevy_dev_tools"]}
 
 [build-dependencies]
 embed-resource = "3.0.3"
@@ -85,3 +85,7 @@ mft = { path = "D:/Repos/Rust/mft" }
 # comment out if you aint me
 [patch."https://github.com/TeamDman/uom"]
 uom = { path = "../uom" }
+
+# Enable max optimizations for dependencies, but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
