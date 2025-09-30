@@ -28,7 +28,7 @@ pub fn init_tracing(level: Level) {
     let builder = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::builder().parse_lossy(format!(
-                "{default_log_level},{bevy_defaults}",
+                "{default_log_level},{bevy_defaults},bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info",
                 default_log_level = level,
                 bevy_defaults = DEFAULT_FILTER
             ))
@@ -37,7 +37,7 @@ pub fn init_tracing(level: Level) {
         .pretty();
     #[cfg(debug_assertions)]
     let subscriber = builder
-        .with_target(false)
+        .with_target(true)
         .with_file(true)
         .with_line_number(true)
         .without_time()
