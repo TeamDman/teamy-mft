@@ -50,7 +50,7 @@ pub struct SyncDirectoryTasks {
 }
 
 pub fn begin_load_sync_dir_from_preferences(
-    mut messages: ResMut<Messages<SyncDirectoryEvents>>,
+    // mut messages: ResMut<Messages<SyncDirectoryEvents>>,
 ) -> Result<()> {
     // messages.write(SyncDirectoryEvents::ReadSyncDirectory);
     // disabled to diagnose window icon not working
