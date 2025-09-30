@@ -1,7 +1,9 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
+use crate::engine::egui_plugin::MyEguiPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
+use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
 use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;
@@ -22,7 +24,7 @@ pub fn run_engine() -> eyre::Result<()> {
         DefaultPlugins
             .set(WindowPlugin {
                 // primary_window: None,
-                // exit_condition: ExitCondition::DontExit, // we want to control the exit behavior ourselves
+                exit_condition: ExitCondition::OnAllClosed,
                 ..default()
             })
             .disable::<LogPlugin>(), // we initialized tracing already
@@ -31,6 +33,8 @@ pub fn run_engine() -> eyre::Result<()> {
     app.add_plugins(MftFilePlugin);
     app.add_plugins(MftFileOverviewWindowPlugin);
     app.add_plugins(AssetMessageLogPlugin);
+    app.add_plugins(MyEguiPlugin);
+    app.add_plugins(MyWorldInspectorPlugin);
     app.add_plugins(FpsOverlayPlugin {
         config: FpsOverlayConfig {
             text_config: TextFont {
@@ -57,12 +61,9 @@ pub fn run_engine() -> eyre::Result<()> {
         },
     });
     app.add_systems(Startup, |mut commands: Commands| {
-        commands.spawn((
-            Name::new("Primary Window Camera"),
-            Camera2d,
-        ));
+        commands.spawn((Name::new("Primary Window Camera"), Camera2d));
     });
-    
+
     debug!("Bevy engine built");
 
     info!("Running Bevy engine");

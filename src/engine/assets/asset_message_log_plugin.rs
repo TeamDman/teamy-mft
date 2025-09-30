@@ -2,8 +2,13 @@ use bevy::prelude::*;
 
 pub struct AssetMessageLogPlugin;
 
+const ENABLED: bool = false;
+
 impl Plugin for AssetMessageLogPlugin {
     fn build(&self, app: &mut App) {
+        if !ENABLED {
+            return;
+        }
         app.add_systems(Update, log_image_events);
     }
 }

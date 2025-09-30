@@ -123,8 +123,8 @@ bevy-inspector-egui = { path = "D:/Repos/Games/bevy-inspector-egui/crates/bevy-i
 [patch."https://github.com/teamdman/bevy_egui"]
 bevy_egui = { path = "D:/Repos/Games/bevy_egui" }
 
-[patch."https://github.com/TeamDman/egui_dock"]
-egui_dock = { path = "G:/Programming/Repos/egui_dock" }
+# [patch."https://github.com/TeamDman/egui_dock"]
+# egui_dock = { path = "G:/Programming/Repos/egui_dock" }
 
 # Enable max optimizations for dependencies, but not for our code:
 [profile.dev.package."*"]
