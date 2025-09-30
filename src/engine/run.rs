@@ -1,3 +1,4 @@
+use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
@@ -25,6 +26,7 @@ pub fn run_engine() -> eyre::Result<()> {
     app.add_plugins(SyncDirectoryPlugin);
     app.add_plugins(MftFilePlugin);
     app.add_plugins(MftFileOverviewWindowPlugin);
+    app.add_plugins(AssetMessageLogPlugin);
     debug!("Bevy engine built");
 
     info!("Running Bevy engine");
