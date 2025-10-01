@@ -40,7 +40,7 @@ fn spawn_overview_window_if_missing(
                 },
             ))
             .id();
-        info!(title = WINDOW_TITLE, "Spawned MFT Overview window");
+        debug!(title = WINDOW_TITLE, "Spawned MFT Overview window");
 
         commands.spawn((
             Name::new("MFT File Overview Window Camera"),

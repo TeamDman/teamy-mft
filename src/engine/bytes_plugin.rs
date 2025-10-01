@@ -5,14 +5,15 @@ pub struct BytesPlugin;
 
 impl Plugin for BytesPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<ByteSource>();
+        app.register_type::<BytesHolder>();
         app.register_type::<WriteBytesToSink>();
         app.register_type::<WriteBytesFromSources>();
+        app.register_type::<BytesReceiver>();
     }
 }
 
 #[derive(Component, Reflect, Debug)]
-pub struct ByteSource {
+pub struct BytesHolder {
     #[reflect(ignore)]
     pub bytes: Bytes,
 }
@@ -42,3 +43,16 @@ pub struct WriteBytesToSinkInProgress(pub Entity);
 #[reflect(Default)]
 #[relationship_target(relationship = WriteBytesToSinkInProgress, linked_spawn)]
 pub struct WriteBytesFromSourcesInProgress(Vec<Entity>);
+
+
+/// A component that indicates this entity is waiting to receive bytes.
+/// When bytes are received, this component is removed and replaced with BytesHolder.
+#[derive(Component, Reflect, Debug, Default)]
+#[reflect(Default)]
+pub struct BytesReceiver;
+
+/// Event triggered when bytes have been received and written to a BytesReceiver entity.
+#[derive(Event, Debug, Clone, Copy)]
+pub struct BytesReceived {
+    pub entity: Entity,
+}

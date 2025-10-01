@@ -1,5 +1,7 @@
 use crate::engine::persistence_plugin::Persistable;
 use crate::engine::persistence_plugin::PersistenceKey;
+use crate::engine::persistence_plugin::PersistenceLoad;
+use crate::engine::persistence_plugin::PersistenceLoaded;
 use crate::engine::persistence_plugin::PersistencePlugin;
 use crate::engine::persistence_plugin::PersistenceProperty;
 use bevy::app::MainSchedulePlugin;
@@ -34,7 +36,7 @@ pub struct WorldInspectorWindowCamera;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldInspectorWindowEguiContextPass;
 
-#[derive(Debug, Reflect, PartialEq)]
+#[derive(Debug, Reflect, PartialEq, Clone)]
 pub struct WindowPersistenceProperty {
     pub position: WindowPosition,
     pub resolution: WindowResolution,
@@ -57,6 +59,7 @@ impl Plugin for MyWorldInspectorPlugin {
         app.add_observer(handle_spawn_window_event);
         app.add_observer(handle_despawn_window_event);
         app.add_observer(handle_toggle_window_event);
+        app.add_observer(handle_persistence_loaded);
         app.add_systems(Startup, |mut commands: Commands| {
             // Open the window
             commands.trigger(WorldInspectorWindowEvent::SpawnWindow);
@@ -83,6 +86,7 @@ fn handle_spawn_window_event(
                     },
                     WorldInspectorWindow,
                     PersistenceKey::<WindowPersistenceProperty>::new("world_inspector_window.ron"),
+                    PersistenceLoad::<WindowPersistenceProperty>::default(),
                 ))
                 .id();
             commands.spawn((
@@ -95,9 +99,9 @@ fn handle_spawn_window_event(
                 WorldInspectorWindowCamera,
                 EguiMultipassSchedule::new(WorldInspectorWindowEguiContextPass),
             ));
-            info!("World Inspector window spawned");
+            debug!("World Inspector window spawned");
         } else {
-            info!("World Inspector window already exists, not spawning again");
+            debug!("World Inspector window already exists, not spawning again");
         }
     }
 }
@@ -172,6 +176,26 @@ fn check_plugins(app: &App, name: &str) {
         .add_plugins({name}::default())
             "#,
         );
+    }
+}
+
+fn handle_persistence_loaded(
+    event: On<PersistenceLoaded<WindowPersistenceProperty>>,
+    mut windows: Query<&mut Window, With<WorldInspectorWindow>>,
+    mut commands: Commands,
+) {
+    if let Ok(mut window) = windows.get_mut(event.entity) {
+        info!(
+            ?event.entity,
+            "Applying loaded persistence data to window"
+        );
+        window.position = event.property.position;
+        window.resolution = event.property.resolution.clone();
+        
+        // Insert the property so it can be tracked for changes
+        commands
+            .entity(event.entity)
+            .insert(event.property.clone());
     }
 }
 

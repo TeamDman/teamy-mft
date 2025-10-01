@@ -2,7 +2,7 @@
 
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::timeout_plugin::TimeoutExitConfig;
-use crate::engine::bytes_plugin::ByteSource;
+use crate::engine::bytes_plugin::BytesHolder;
 use crate::engine::bytes_plugin::WriteBytesToSink;
 use bevy::prelude::*;
 use std::time::Duration;
@@ -24,7 +24,7 @@ pub fn test_write_bytes_to_file(mut app: App) -> eyre::Result<()> {
 
     // Create byte source
     app.world_mut().spawn((
-        ByteSource {
+        BytesHolder {
             bytes: test_bytes.clone().into(),
         },
         Name::new("Test Bytes Source"),

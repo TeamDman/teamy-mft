@@ -16,7 +16,8 @@ impl Plugin for SyncDirectoryPlugin {
         app.register_type::<SyncDirectoryEvent>();
         app.init_resource::<SyncDirectoryTasks>();
         app.add_observer(read_sync_directory_events_and_launch_task);
-        app.add_systems(Update, (finish_load_sync_dir_from_preferences,));
+        app.add_systems(Update, finish_load_sync_dir_from_preferences);
+        app.add_systems(Startup, begin_load_sync_dir_from_preferences);
     }
 }
 
@@ -44,7 +45,7 @@ pub fn read_sync_directory_events_and_launch_task(
     event: On<SyncDirectoryEvent>,
     mut tasks: ResMut<SyncDirectoryTasks>,
 ) -> Result<()> {
-    info!(?event, "Processing {}", type_name::<SyncDirectoryEvent>());
+    debug!(?event, "Processing {}", type_name::<SyncDirectoryEvent>());
     match *event {
         SyncDirectoryEvent::ReadSyncDirectory => {
             if tasks.get_sync_dir.is_some() {
@@ -59,7 +60,7 @@ pub fn read_sync_directory_events_and_launch_task(
                 let path = try_get_sync_dir()?;
                 Ok(path)
             });
-            info!(task=?task, "Spawned task to load sync dir from preferences");
+            debug!(task=?task, "Spawned task to load sync dir from preferences");
             tasks.get_sync_dir = Some(task);
         }
     }
