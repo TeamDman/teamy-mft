@@ -2,8 +2,8 @@
 
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::timeout_plugin::TimeoutExitConfig;
-use crate::engine::write_file_content_plugin::ByteSource;
-use crate::engine::write_file_content_plugin::WriteBytesToSink;
+use crate::engine::bytes_plugin::ByteSource;
+use crate::engine::bytes_plugin::WriteBytesToSink;
 use bevy::prelude::*;
 use std::time::Duration;
 

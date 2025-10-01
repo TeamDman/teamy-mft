@@ -7,7 +7,7 @@ use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use crate::engine::write_file_content_plugin::BytesPlugin;
+use crate::engine::bytes_plugin::BytesPlugin;
 use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;

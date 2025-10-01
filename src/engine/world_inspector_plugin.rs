@@ -82,7 +82,7 @@ fn handle_spawn_window_event(
                         ..default()
                     },
                     WorldInspectorWindow,
-                    PersistenceKey::<WindowPersistenceProperty>::new("world_inspector_window"),
+                    PersistenceKey::<WindowPersistenceProperty>::new("world_inspector_window.ron"),
                 ))
                 .id();
             commands.spawn((

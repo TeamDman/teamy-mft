@@ -7,7 +7,7 @@ pub mod world_inspector_plugin;
 pub mod egui_plugin;
 pub mod mft_file_brick_plugin;
 pub mod persistence_plugin;
-pub mod write_file_content_plugin;
+pub mod bytes_plugin;
 pub mod timeout_plugin;
 pub mod construction;
 #[cfg(debug_assertions)]

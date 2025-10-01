@@ -17,6 +17,7 @@ pub struct ByteSource {
     pub bytes: Bytes,
 }
 
+
 /// A source can only write to one sink at a time.
 /// This is because ByteSource is cheap to clone, so we can just clone it for each sink if needed.
 #[derive(Component, Reflect, Debug)]
@@ -28,3 +29,16 @@ pub struct WriteBytesToSink(pub Entity);
 #[reflect(Default)]
 #[relationship_target(relationship = WriteBytesToSink, linked_spawn)]
 pub struct WriteBytesFromSources(Vec<Entity>);
+
+
+
+/// Debounce variant of WriteBytesToSink/WriteBytesFromSources to indicate that a write is in progress.
+#[derive(Component, Reflect, Debug)]
+#[relationship(relationship_target = WriteBytesFromSourcesInProgress)]
+pub struct WriteBytesToSinkInProgress(pub Entity);
+
+/// Debounce variant of WriteBytesToSink/WriteBytesFromSources to indicate that a write is in progress.
+#[derive(Component, Reflect, Debug, Default)]
+#[reflect(Default)]
+#[relationship_target(relationship = WriteBytesToSinkInProgress, linked_spawn)]
+pub struct WriteBytesFromSourcesInProgress(Vec<Entity>);

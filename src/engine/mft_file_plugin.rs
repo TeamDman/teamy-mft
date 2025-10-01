@@ -42,7 +42,13 @@ pub fn on_sync_dir_added_emit_loads(
     q_added_sync: Query<&PathBufHolder, Added<SyncDirectory>>,
 ) -> Result<()> {
     for sync_dir in &q_added_sync {
-        let dir = &**sync_dir;
+        let dir = match &**sync_dir {
+            Some(p) => p,
+            None => {
+                warn!("SyncDirectory added but has no path; ignoring");
+                continue;
+            }
+        };
         match std::fs::read_dir(dir) {
             Ok(entries) => {
                 for entry in entries.flatten() {

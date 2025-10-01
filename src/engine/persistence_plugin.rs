@@ -1,3 +1,6 @@
+use crate::engine::bytes_plugin::ByteSource;
+use crate::engine::bytes_plugin::WriteBytesToSink;
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use bevy::asset::ron;
 use bevy::prelude::*;
 use bevy::reflect::GetTypeRegistration;
@@ -5,9 +8,11 @@ use bevy::reflect::TypeRegistry;
 use bevy::reflect::Typed;
 use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::reflect::serde::TypedReflectSerializer;
+use bytes::Bytes;
 use eyre::OptionExt;
 use std::any::TypeId;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -46,7 +51,7 @@ pub struct PersistencePluginConfig {
 impl Default for PersistencePluginConfig {
     fn default() -> Self {
         Self {
-            autosave_timer: Timer::new(Duration::from_millis(500), TimerMode::Repeating),
+            autosave_timer: Timer::new(Duration::from_millis(5000), TimerMode::Repeating),
         }
     }
 }
@@ -86,9 +91,8 @@ pub trait Persistable:
 
 /// Indicates where the persistent data is stored on disk.
 #[derive(Debug, Component, Reflect)]
-pub struct PersistenceDestination {
-    pub path: PathBuf,
-}
+#[require(PathBufHolder)]
+pub struct PersistenceDirectory;
 
 /// Identifies that there is persistable data associated with this entity.
 /// When the key is present on an entity, the property will be loaded if missing and will be saved on autosave.
@@ -110,6 +114,11 @@ where
             key: key.into(),
             _marker: std::marker::PhantomData,
         }
+    }
+}
+impl<T: Persistable> AsRef<Path> for PersistenceKey<T> {
+    fn as_ref(&self) -> &Path {
+        self.key.as_ref()
     }
 }
 
@@ -152,23 +161,52 @@ pub fn autosave<T: Persistable>(
         (Entity, &PersistenceKey<T>, &PersistenceProperty<T>),
         With<PersistenceChangedFlag<T>>,
     >,
-    destinations: Query<&PersistenceDestination>,
+    persistence_directories: Query<&PathBufHolder, With<PersistenceDirectory>>,
     mut commands: Commands,
-) {
+    registry: Res<AppTypeRegistry>,
+) -> Result {
     config.autosave_timer.tick(time.delta());
     if !config.autosave_timer.just_finished() {
-        return;
+        return Ok(());
     }
-    debug!("Autosaving...");
     for (entity, key, prop) in to_save.iter() {
-        for dest in destinations.iter() {
-            info!(?entity, ?key, ?dest, ?prop, "Autosaving property");
-            
+        if persistence_directories.is_empty() {
+            warn!(
+                ?entity,
+                ?key,
+                "No PersistenceDirectory found; cannot autosave property"
+            );
+            continue;
+        }
+        for persistence_directory in persistence_directories.iter() {
+            let output_file_path = persistence_directory.join(&key)?;
+            info!(
+                ?entity,
+                ?key,
+                ?persistence_directory,
+                ?prop,
+                ?output_file_path,
+                "Autosaving property"
+            );
+
+            let mut bytes = Vec::new();
+            prop.value.serialize(&mut bytes, &registry.read())?;
+            let bytes = Bytes::from(bytes);
+
+            let sink = commands
+                .spawn((
+                    Name::new(format!("Autosave sink - {}", output_file_path.display())),
+                    PathBufHolder::new(output_file_path),
+                ))
+                .id();
+            commands.spawn((ByteSource { bytes }, WriteBytesToSink(sink)));
+
             commands
                 .entity(entity)
                 .remove::<PersistenceChangedFlag<T>>();
         }
     }
+    Ok(())
 }
 
 /// System that autosaves changed properties at intervals defined in the config.
@@ -177,7 +215,7 @@ pub fn mark_autosave<T: Persistable>(
     mut commands: Commands,
 ) {
     for entity in changed.iter() {
-        debug!(?entity, "Marking property as changed for autosave");
+        trace!(?entity, "Marking property as changed for autosave");
         commands
             .entity(entity)
             .insert(PersistenceChangedFlag::<T>::default());
