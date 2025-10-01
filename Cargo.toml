@@ -62,6 +62,7 @@ bevy = { version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", b
     "bevy_dev_tools",
 ] }
 bevy-inspector-egui = { git = "https://github.com/TeamDman/bevy-inspector-egui.git", branch = "teamy-mft" }
+tempfile = "3.20"
 
 [build-dependencies]
 embed-resource = "3.0.3"

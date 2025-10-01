@@ -1,3 +1,7 @@
+use crate::engine::persistence_plugin::Persistable;
+use crate::engine::persistence_plugin::PersistenceKey;
+use crate::engine::persistence_plugin::PersistencePlugin;
+use crate::engine::persistence_plugin::PersistenceProperty;
 use bevy::app::MainSchedulePlugin;
 use bevy::camera::RenderTarget;
 use bevy::ecs::schedule::ScheduleLabel;
@@ -17,7 +21,7 @@ pub enum WorldInspectorWindowEvent {
     DespawnWindow,
     ToggleWindow,
 }
-const DEFAULT_SIZE: UVec2 = UVec2::new(320, 160);
+const DEFAULT_SIZE: UVec2 = UVec2::new(500, 500);
 
 pub struct MyWorldInspectorPlugin;
 
@@ -29,6 +33,21 @@ pub struct WorldInspectorWindowCamera;
 
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldInspectorWindowEguiContextPass;
+
+#[derive(Debug, Reflect, PartialEq)]
+pub struct WindowPersistenceProperty {
+    pub position: WindowPosition,
+    pub resolution: WindowResolution,
+}
+impl Persistable for WindowPersistenceProperty {}
+impl From<&Window> for WindowPersistenceProperty {
+    fn from(window: &Window) -> Self {
+        Self {
+            position: window.position,
+            resolution: window.resolution.clone(),
+        }
+    }
+}
 
 impl Plugin for MyWorldInspectorPlugin {
     fn build(&self, app: &mut App) {
@@ -42,6 +61,8 @@ impl Plugin for MyWorldInspectorPlugin {
             // Open the window
             commands.trigger(WorldInspectorWindowEvent::SpawnWindow);
         });
+        app.add_systems(Update, handle_window_change);
+        app.add_plugins(PersistencePlugin::<WindowPersistenceProperty>::default());
     }
 }
 
@@ -61,6 +82,7 @@ fn handle_spawn_window_event(
                         ..default()
                     },
                     WorldInspectorWindow,
+                    PersistenceKey::<WindowPersistenceProperty>::new("world_inspector_window"),
                 ))
                 .id();
             commands.spawn((
@@ -77,6 +99,30 @@ fn handle_spawn_window_event(
         } else {
             info!("World Inspector window already exists, not spawning again");
         }
+    }
+}
+
+fn handle_window_change(
+    changed: Query<
+        (
+            Entity,
+            &Window,
+            Option<&PersistenceProperty<WindowPersistenceProperty>>,
+        ),
+        Changed<Window>,
+    >,
+    mut commands: Commands,
+) {
+    for (entity, window, persistence) in changed.iter() {
+        let new = WindowPersistenceProperty::from(window).into_persistence_property();
+        // Avoid change detection if nothing actually changed
+        if let Some(old) = persistence
+            && *old == new
+        {
+            continue;
+        }
+
+        commands.entity(entity).insert(new);
     }
 }
 

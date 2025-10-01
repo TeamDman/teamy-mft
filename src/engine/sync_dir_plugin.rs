@@ -1,3 +1,4 @@
+use crate::engine::construction::HeadlessEngine;
 use crate::sync_dir::try_get_sync_dir;
 use bevy::ecs::prelude::ReflectComponent;
 use bevy::prelude::*;
@@ -13,17 +14,10 @@ pub struct SyncDirectoryPlugin;
 impl Plugin for SyncDirectoryPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<SyncDirectory>();
-        app.register_type::<SyncDirectoryEvents>();
+        app.register_type::<SyncDirectoryEvent>();
         app.init_resource::<SyncDirectoryTasks>();
-        app.add_message::<SyncDirectoryEvents>();
-        app.add_systems(Startup, begin_load_sync_dir_from_preferences);
-        app.add_systems(
-            Update,
-            (
-                read_sync_directory_events_and_launch_task,
-                finish_load_sync_dir_from_preferences,
-            ),
-        );
+        app.add_observer(read_sync_directory_events_and_launch_task);
+        app.add_systems(Update, (finish_load_sync_dir_from_preferences,));
     }
 }
 
@@ -38,9 +32,9 @@ impl Deref for SyncDirectory {
     }
 }
 
-#[derive(Message, Reflect, Clone, Copy, Debug)]
+#[derive(Event, Reflect, Clone, Copy, Debug)]
 #[reflect]
-pub enum SyncDirectoryEvents {
+pub enum SyncDirectoryEvent {
     ReadSyncDirectory,
 }
 
@@ -50,39 +44,42 @@ pub struct SyncDirectoryTasks {
 }
 
 pub fn begin_load_sync_dir_from_preferences(
-    // mut messages: ResMut<Messages<SyncDirectoryEvents>>,
+    mut commands: Commands,
+    headless: Option<Res<HeadlessEngine>>,
 ) -> Result<()> {
-    // messages.write(SyncDirectoryEvents::ReadSyncDirectory);
-    // disabled to diagnose window icon not working
-    debug!("[DISABLED] Emitted ReadSyncDirectory event on startup");
+    if headless.is_some() {
+        debug!("Headless mode detected; not auto-loading sync directory from preferences");
+        return Ok(());
+    }
+    commands.trigger(SyncDirectoryEvent::ReadSyncDirectory);
+    debug!("Emitted ReadSyncDirectory event on startup");
     Ok(())
 }
 
 pub fn read_sync_directory_events_and_launch_task(
-    mut events: MessageReader<SyncDirectoryEvents>,
+    event: On<SyncDirectoryEvent>,
     mut tasks: ResMut<SyncDirectoryTasks>,
 ) -> Result<()> {
-    for ev in events.read() {
-        info!(event=?ev, "Processing {}", type_name::<SyncDirectoryEvents>());
-        match ev {
-            SyncDirectoryEvents::ReadSyncDirectory => {
-                if tasks.get_sync_dir.is_some() {
-                    warn!(
-                        "ReadSyncDirectory requested but a get_sync_dir task is already running; ignoring"
-                    );
-                    continue;
-                }
-
-                let task_pool = IoTaskPool::get();
-                let task = task_pool.spawn(async move {
-                    let path = try_get_sync_dir()?;
-                    Ok(SyncDirectory(path))
-                });
-                info!(task=?task, "Spawned task to load sync dir from preferences");
-                tasks.get_sync_dir = Some(task);
+    info!(?event, "Processing {}", type_name::<SyncDirectoryEvent>());
+    match *event {
+        SyncDirectoryEvent::ReadSyncDirectory => {
+            if tasks.get_sync_dir.is_some() {
+                warn!(
+                    "ReadSyncDirectory requested but a get_sync_dir task is already running; ignoring"
+                );
+                return Ok(());
             }
+
+            let task_pool = IoTaskPool::get();
+            let task = task_pool.spawn(async move {
+                let path = try_get_sync_dir()?;
+                Ok(SyncDirectory(path))
+            });
+            info!(task=?task, "Spawned task to load sync dir from preferences");
+            tasks.get_sync_dir = Some(task);
         }
     }
+
     Ok(())
 }
 

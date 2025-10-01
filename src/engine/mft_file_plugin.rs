@@ -9,10 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub struct MftFilePlugin;
+
 impl Plugin for MftFilePlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<MftFile>();
-        app.register_type::<MftFileMessage>();
         app.init_resource::<MftFileTasks>();
         app.add_message::<MftFileMessage>();
         app.add_systems(
@@ -102,7 +101,7 @@ pub fn finish_mft_file_tasks(
             match result {
                 Ok(mft) => {
                     info!(?path, mft=?format!("{:?}", &mft), "Loaded MFT file from disk");
-                    commands.spawn(mft);
+                    commands.spawn((mft, Name::new(format!("MFT File: {}", path.display()))));
                 }
                 Err(e) => {
                     warn!(?path, error=?e, "Failed to load MFT file from disk");
