@@ -3,7 +3,7 @@
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::timeout_plugin::TimeoutExitConfig;
 use crate::engine::bytes_plugin::BytesHolder;
-use crate::engine::bytes_plugin::WriteBytesToSink;
+use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
 use bevy::prelude::*;
 use std::time::Duration;
 
@@ -28,13 +28,13 @@ pub fn test_write_bytes_to_file(mut app: App) -> eyre::Result<()> {
             bytes: test_bytes.clone().into(),
         },
         Name::new("Test Bytes Source"),
-        WriteBytesToSink(sink_entity),
+        WriteBytesToSinkRequested(sink_entity),
     ));
 
     // Add success condition
     app.add_systems(
         Update,
-        |remaining: Query<&WriteBytesToSink>, mut exit: MessageWriter<AppExit>| {
+        |remaining: Query<&WriteBytesToSinkRequested>, mut exit: MessageWriter<AppExit>| {
             if remaining.is_empty() {
                 exit.write(AppExit::Success);
             }

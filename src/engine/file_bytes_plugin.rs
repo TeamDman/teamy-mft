@@ -1,8 +1,10 @@
 use crate::engine::bytes_plugin::BytesHolder;
 use crate::engine::bytes_plugin::BytesReceived;
 use crate::engine::bytes_plugin::BytesReceiver;
+use crate::engine::bytes_plugin::BytesSent;
 use crate::engine::bytes_plugin::WriteBytesFromSourcesInProgress;
-use crate::engine::bytes_plugin::WriteBytesToSink;
+use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
+use crate::engine::bytes_plugin::WriteBytesToSinkFinished;
 use crate::engine::bytes_plugin::WriteBytesToSinkInProgress;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use bevy::prelude::*;
@@ -21,21 +23,40 @@ impl Plugin for FileBytesPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(queue_file_write_tasks);
         app.add_observer(queue_file_read_tasks);
-        app.add_systems(Update, finish_write_tasks);
-        app.add_systems(Update, finish_read_tasks);
+        app.add_systems(Update, finish_tasks);
         app.init_resource::<FileBytesTasks>();
     }
 }
 
+enum FileTask {
+    /// Writing bytes from a BytesHolder source to a file sink.
+    Write {
+        /// The entity containing the BytesHolder being written.
+        source: Entity,
+        /// The entity containing the PathBufHolder file sink.
+        sink: Entity,
+        /// The async task performing the write operation.
+        task: Task<()>,
+    },
+    /// Reading bytes from a file source to a BytesReceiver sink.
+    Read {
+        /// The entity containing the PathBufHolder file source.
+        source: Entity,
+        /// The entity containing the BytesReceiver sink.
+        sink: Entity,
+        /// The async task performing the read operation.
+        task: Task<Result<Bytes, std::io::Error>>,
+    },
+}
+
 #[derive(Default, Resource)]
 struct FileBytesTasks {
-    write_tasks_by_sink: HashMap<Entity, Task<()>>,
-    read_tasks_by_receiver: HashMap<Entity, Task<Result<Bytes, std::io::Error>>>,
+    tasks_by_source: HashMap<Entity, FileTask>,
 }
 
 fn queue_file_write_tasks(
-    add: On<Add, WriteBytesToSink>,
-    sources: Query<(Entity, &BytesHolder, &WriteBytesToSink)>,
+    add: On<Add, WriteBytesToSinkRequested>,
+    sources: Query<(Entity, &BytesHolder, &WriteBytesToSinkRequested)>,
     sinks: Query<&PathBufHolder, Without<WriteBytesFromSourcesInProgress>>,
     mut commands: Commands,
     mut tasks: ResMut<FileBytesTasks>,
@@ -50,7 +71,7 @@ fn queue_file_write_tasks(
     };
 
     // Debounce: if a write is already in progress for this source, ignore this request
-    if tasks.write_tasks_by_sink.contains_key(&source_entity) {
+    if tasks.tasks_by_source.contains_key(&source_entity) {
         return;
     }
 
@@ -117,7 +138,14 @@ fn queue_file_write_tasks(
     });
 
     // Track task
-    tasks.write_tasks_by_sink.insert(source_entity, task);
+    tasks.tasks_by_source.insert(
+        source_entity,
+        FileTask::Write {
+            source: source_entity,
+            sink: sink_entity,
+            task,
+        },
+    );
 
     // Add debounce
     commands
@@ -126,8 +154,8 @@ fn queue_file_write_tasks(
 }
 
 fn queue_file_read_tasks(
-    add: On<Add, WriteBytesToSink>,
-    sources: Query<(Entity, &PathBufHolder, &WriteBytesToSink)>,
+    add: On<Add, WriteBytesToSinkRequested>,
+    sources: Query<(Entity, &PathBufHolder, &WriteBytesToSinkRequested)>,
     receivers: Query<&BytesReceiver>,
     mut tasks: ResMut<FileBytesTasks>,
 ) {
@@ -142,8 +170,8 @@ fn queue_file_read_tasks(
         return; // Not a read request, let write handler deal with it
     }
 
-    // Debounce: if a read is already in progress for this receiver, ignore this request
-    if tasks.read_tasks_by_receiver.contains_key(&write_request.0) {
+    // Debounce: if a read is already in progress for this source, ignore this request
+    if tasks.tasks_by_source.contains_key(&source_entity) {
         return;
     }
 
@@ -173,67 +201,104 @@ fn queue_file_read_tasks(
     // Acquire task pool
     let pool = IoTaskPool::get();
 
-    // Spawn task
+    // Spawn task that reads bytes and writes them to the receiver
     let task = pool.spawn(async move {
-        let bytes = std::fs::read(&source_path)?;
-        debug!(
-            ?source_entity,
-            ?receiver_entity,
-            ?source_path,
-            "Read {} bytes from file",
-            bytes.len()
-        );
-        Ok(Bytes::from(bytes))
+        match std::fs::read(&source_path) {
+            Ok(bytes) => {
+                debug!(
+                    ?source_entity,
+                    ?receiver_entity,
+                    ?source_path,
+                    "Read {} bytes from file",
+                    bytes.len()
+                );
+                Ok(bytes::Bytes::from(bytes))
+            }
+            Err(error) => {
+                warn!(
+                    ?source_entity,
+                    ?receiver_entity,
+                    ?source_path,
+                    ?error,
+                    "Failed to read bytes"
+                );
+                Err(error)
+            }
+        }
     });
 
-    // Track task
-    tasks.read_tasks_by_receiver.insert(receiver_entity, task);
+    // Track task with receiver entity
+    tasks.tasks_by_source.insert(
+        source_entity,
+        FileTask::Read {
+            source: source_entity,
+            sink: receiver_entity,
+            task,
+        },
+    );
 }
 
-fn finish_write_tasks(mut commands: Commands, mut tasks: ResMut<FileBytesTasks>) {
+fn finish_tasks(mut commands: Commands, mut tasks: ResMut<FileBytesTasks>) {
     let mut completed = Vec::new();
 
-    for (source_entity, pending) in tasks.write_tasks_by_sink.iter_mut() {
-        if let Some(()) = block_on(poll_once(pending)) {
-            commands.entity(*source_entity).remove::<WriteBytesToSink>();
-            commands
-                .entity(*source_entity)
-                .remove::<WriteBytesToSinkInProgress>();
-            completed.push(*source_entity);
-        }
+    for (source_entity, task) in tasks.tasks_by_source.iter_mut() {
+        let outcome = match task {
+            FileTask::Write {
+                source,
+                sink,
+                task: pending,
+            } => {
+                if let Some(()) = block_on(poll_once(pending)) {
+                    Some((source, sink))
+                } else {
+                    None
+                }
+            }
+            FileTask::Read {
+                source,
+                sink,
+                task: pending,
+            } => {
+                if let Some(result) = block_on(poll_once(pending)) {
+                    match result {
+                        Ok(bytes) => {
+                            commands.entity(*sink).insert(BytesHolder { bytes });
+                        }
+                        Err(error) => {
+                            warn!(?sink, ?error, "Read task failed");
+                        }
+                    }
+                    commands.entity(*sink).remove::<BytesReceiver>();
+                    Some((source, sink))
+                } else {
+                    None
+                }
+            }
+        };
+        let Some((source, sink)) = outcome else {
+            continue;
+        };
+
+        assert_eq!(*source_entity, *source);
+        debug!(?source, ?sink, "File task completed");
+
+        // Trigger BytesSent event
+        debug!(?source, ?sink, "Triggering BytesSent event on {source}");
+        commands.trigger(BytesSent { entity: *source });
+
+        // Trigger BytesReceived event
+        debug!(?source, ?sink, "Triggering BytesReceived event on {sink}");
+        commands.trigger(BytesReceived { entity: *sink });
+
+        commands
+            .entity(*source)
+            .remove::<WriteBytesToSinkRequested>()
+            .remove::<WriteBytesToSinkInProgress>()
+            .insert(WriteBytesToSinkFinished(*sink));
+        completed.push(*source_entity);
     }
 
     for source_entity in completed {
-        tasks.write_tasks_by_sink.remove(&source_entity);
-    }
-}
-
-fn finish_read_tasks(mut commands: Commands, mut tasks: ResMut<FileBytesTasks>) {
-    let mut completed = Vec::new();
-
-    for (receiver_entity, pending) in tasks.read_tasks_by_receiver.iter_mut() {
-        if let Some(result) = block_on(poll_once(pending)) {
-            match result {
-                Ok(bytes) => {
-                    debug!(?receiver_entity, "Read task completed successfully");
-                    commands
-                        .entity(*receiver_entity)
-                        .remove::<BytesReceiver>()
-                        .insert(BytesHolder { bytes });
-                    commands.trigger(BytesReceived {
-                        entity: *receiver_entity,
-                    });
-                }
-                Err(error) => {
-                    warn!(?receiver_entity, ?error, "Read task failed");
-                    commands.entity(*receiver_entity).remove::<BytesReceiver>();
-                }
-            }
-            completed.push(*receiver_entity);
-        }
-    }
-
-    for receiver_entity in completed {
-        tasks.read_tasks_by_receiver.remove(&receiver_entity);
+        tasks.tasks_by_source.remove(&source_entity);
     }
 }

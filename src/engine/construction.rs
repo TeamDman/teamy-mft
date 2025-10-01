@@ -1,4 +1,5 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
+use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
 use crate::engine::file_bytes_plugin::FileBytesPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
@@ -54,6 +55,7 @@ impl AppConstructionExt for App {
         self.add_plugins(BytesPlugin);
         self.add_plugins(PathBufHolderPlugin);
         self.add_plugins(FileBytesPlugin);
+        self.add_plugins(CleanupPlugin);
         self
     }
 
