@@ -1,14 +1,11 @@
-use crate::engine::construction::HeadlessEngine;
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::sync_dir::try_get_sync_dir;
-use bevy::ecs::prelude::ReflectComponent;
 use bevy::prelude::*;
 use bevy::tasks::IoTaskPool;
 use bevy::tasks::Task;
 use bevy::tasks::block_on;
 use bevy::tasks::poll_once;
 use std::any::type_name;
-use std::ops::Deref;
-use std::path::PathBuf;
 
 pub struct SyncDirectoryPlugin;
 impl Plugin for SyncDirectoryPlugin {
@@ -22,15 +19,8 @@ impl Plugin for SyncDirectoryPlugin {
 }
 
 #[derive(Component, Reflect, Default, Debug)]
-#[reflect(Component)]
-pub struct SyncDirectory(pub PathBuf);
+pub struct SyncDirectory;
 
-impl Deref for SyncDirectory {
-    type Target = PathBuf;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[derive(Event, Reflect, Clone, Copy, Debug)]
 #[reflect]
@@ -40,19 +30,14 @@ pub enum SyncDirectoryEvent {
 
 #[derive(Resource, Default)]
 pub struct SyncDirectoryTasks {
-    get_sync_dir: Option<Task<Result<SyncDirectory>>>,
+    get_sync_dir: Option<Task<Result<(SyncDirectory, PathBufHolder)>>>,
 }
 
 pub fn begin_load_sync_dir_from_preferences(
     mut commands: Commands,
-    headless: Option<Res<HeadlessEngine>>,
 ) -> Result<()> {
-    if headless.is_some() {
-        debug!("Headless mode detected; not auto-loading sync directory from preferences");
-        return Ok(());
-    }
     commands.trigger(SyncDirectoryEvent::ReadSyncDirectory);
-    debug!("Emitted ReadSyncDirectory event on startup");
+    debug!("Emitted ReadSyncDirectory event");
     Ok(())
 }
 
@@ -73,7 +58,7 @@ pub fn read_sync_directory_events_and_launch_task(
             let task_pool = IoTaskPool::get();
             let task = task_pool.spawn(async move {
                 let path = try_get_sync_dir()?;
-                Ok(SyncDirectory(path))
+                Ok((SyncDirectory, PathBufHolder::new(path)))
             });
             info!(task=?task, "Spawned task to load sync dir from preferences");
             tasks.get_sync_dir = Some(task);

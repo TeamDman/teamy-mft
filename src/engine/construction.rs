@@ -1,11 +1,13 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
+use crate::engine::file_bytes_plugin::FileBytesPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
+use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use crate::engine::write_file_content_plugin::WriteFileContentPlugin;
+use crate::engine::write_file_content_plugin::BytesPlugin;
 use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;
@@ -49,7 +51,9 @@ impl AppConstructionExt for App {
         self.add_plugins(SyncDirectoryPlugin);
         self.add_plugins(MftFilePlugin);
         self.add_plugins(AssetMessageLogPlugin);
-        self.add_plugins(WriteFileContentPlugin);
+        self.add_plugins(BytesPlugin);
+        self.add_plugins(PathBufHolderPlugin);
+        self.add_plugins(FileBytesPlugin);
         self
     }
 

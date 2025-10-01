@@ -8,7 +8,9 @@ pub mod egui_plugin;
 pub mod mft_file_brick_plugin;
 pub mod persistence_plugin;
 pub mod write_file_content_plugin;
-pub mod exit_condition;
+pub mod timeout_plugin;
 pub mod construction;
 #[cfg(debug_assertions)]
 pub mod scenarios;
+pub mod pathbuf_holder_plugin;
+pub mod file_bytes_plugin;

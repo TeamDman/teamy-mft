@@ -1,11 +1,15 @@
 #![cfg(debug_assertions)]
 
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::timeout_plugin::TimeoutExitConfig;
 use crate::engine::write_file_content_plugin::ByteSource;
-use crate::engine::write_file_content_plugin::PathBufHolder;
 use crate::engine::write_file_content_plugin::WriteBytesToSink;
 use bevy::prelude::*;
+use std::time::Duration;
 
-pub fn test_write_bytes_to_file(mut engine: App) -> eyre::Result<()> {
+pub fn test_write_bytes_to_file(mut app: App) -> eyre::Result<()> {
+    app.insert_resource(TimeoutExitConfig::from(Duration::from_secs(2)));
+
     // Create byte sink
     let tempfile = tempfile::Builder::new()
         .prefix("test_write_file_content_plugin")
@@ -13,13 +17,13 @@ pub fn test_write_bytes_to_file(mut engine: App) -> eyre::Result<()> {
         .tempfile()?;
     let path = tempfile.path().to_path_buf();
     let test_bytes = b"Hello, world!".to_vec();
-    let sink_entity = engine
+    let sink_entity = app
         .world_mut()
-        .spawn((PathBufHolder { path }, Name::new("Test Bytes Sink")))
+        .spawn((PathBufHolder::new(path), Name::new("Test Bytes Sink")))
         .id();
 
     // Create byte source
-    engine.world_mut().spawn((
+    app.world_mut().spawn((
         ByteSource {
             bytes: test_bytes.clone().into(),
         },
@@ -28,7 +32,7 @@ pub fn test_write_bytes_to_file(mut engine: App) -> eyre::Result<()> {
     ));
 
     // Add success condition
-    engine.add_systems(
+    app.add_systems(
         Update,
         |remaining: Query<&WriteBytesToSink>, mut exit: MessageWriter<AppExit>| {
             if remaining.is_empty() {
@@ -38,7 +42,7 @@ pub fn test_write_bytes_to_file(mut engine: App) -> eyre::Result<()> {
     );
 
     // Run until termination
-    assert!(engine.run().is_success());
+    assert!(app.run().is_success());
 
     // Verify file contents
     let written_bytes = std::fs::read(tempfile.path())?;
@@ -48,12 +52,10 @@ pub fn test_write_bytes_to_file(mut engine: App) -> eyre::Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::engine::construction::AppConstructionExt;
-    use crate::engine::exit_condition::AppExitExt;
     use super::test_write_bytes_to_file;
+    use crate::engine::construction::AppConstructionExt;
     use crate::init_tracing;
     use bevy::prelude::*;
-    use std::time::Duration;
     use tracing::Level;
 
     #[test]
@@ -62,9 +64,9 @@ mod test {
         init_tracing(Level::INFO);
 
         // Construct the engine
-        let mut engine = App::new_headless()?;
-        engine.add_timeout_exit_system(Duration::from_secs(2));
+        let engine = App::new_headless()?;
 
+        // Run the test
         test_write_bytes_to_file(engine)
     }
 }

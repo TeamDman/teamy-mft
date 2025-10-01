@@ -1,3 +1,4 @@
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
 use bevy::prelude::*;
@@ -38,7 +39,7 @@ pub struct MftFileTasks {
 
 pub fn on_sync_dir_added_emit_loads(
     mut messages: ResMut<Messages<MftFileMessage>>,
-    q_added_sync: Query<&SyncDirectory, Added<SyncDirectory>>,
+    q_added_sync: Query<&PathBufHolder, Added<SyncDirectory>>,
 ) -> Result<()> {
     for sync_dir in &q_added_sync {
         let dir = &**sync_dir;
