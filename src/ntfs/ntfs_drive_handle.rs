@@ -6,6 +6,10 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;
 use windows::Win32::System::Ioctl::NTFS_VOLUME_DATA_BUFFER;
+use windows::Win32::System::Ioctl::VOLUME_DISK_EXTENTS;
+use std::mem::size_of;
+
+const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x00560000;
 
 pub struct NtfsDriveHandle {
     pub handle: Owned<HANDLE>,
@@ -63,4 +67,34 @@ fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
     result.wrap_err(eyre!(
         "Drive does not appear to be using NTFS filesystem. FSCTL_GET_NTFS_VOLUME_DATA failed. MFT dumping is only supported on NTFS volumes."
     ))
+}
+
+/// Get the disk extents for the volume associated with the drive letter
+pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_EXTENTS> {
+    use teamy_windows::handle::get_read_only_drive_handle;
+
+    let handle = get_read_only_drive_handle(drive_letter)
+        .wrap_err_with(|| format!("Failed to open handle to drive {drive_letter}"))?;
+
+    let mut extents = VOLUME_DISK_EXTENTS::default();
+    let mut bytes_returned = 0u32;
+
+    unsafe {
+        DeviceIoControl(
+            *handle,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            None,
+            0,
+            Some(&mut extents as *mut _ as *mut std::ffi::c_void),
+            size_of::<VOLUME_DISK_EXTENTS>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        ).wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
+    }
+
+    if extents.NumberOfDiskExtents != 1 {
+        eyre::bail!("Volume spans multiple disks or has complex extents, not supported");
+    }
+
+    Ok(extents)
 }

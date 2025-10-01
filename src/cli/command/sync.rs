@@ -2,6 +2,7 @@ use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft::mft_physical_read::read_physical_mft;
 use crate::sync_dir::try_get_sync_dir;
+use crate::ntfs::ntfs_drive_handle::get_volume_disk_extents;
 use arbitrary::Arbitrary;
 use clap::Args;
 use crossbeam_channel::bounded;
@@ -41,6 +42,14 @@ pub enum ExistingOutputBehaviour {
     Abort,
 }
 
+#[derive(Debug)]
+struct DriveInfo {
+    drive_letter: char,
+    output_path: PathBuf,
+    disk_number: u32,
+    starting_offset: i64,
+}
+
 impl SyncArgs {
     pub fn invoke(self) -> eyre::Result<()> {
         // Ensure we have a sync directory before elevating
@@ -74,8 +83,21 @@ impl SyncArgs {
             })
             .collect::<eyre::Result<Vec<_>>>()?;
 
+        let mut drive_infos = Vec::new();
+        for (drive_letter, drive_output_path) in drives {
+            let extents = get_volume_disk_extents(drive_letter)?;
+            let extent = &extents.Extents[0];
+            drive_infos.push(DriveInfo {
+                drive_letter,
+                output_path: drive_output_path,
+                disk_number: extent.DiskNumber,
+                starting_offset: extent.StartingOffset,
+            });
+        }
+        drive_infos.sort_by_key(|info| (info.disk_number, info.starting_offset));
+
         // If no drives matched the pattern, we can't proceed
-        if drives.is_empty() {
+        if drive_infos.is_empty() {
             bail!("No drives matched the pattern: {}", self.drive_pattern);
         }
 
@@ -84,16 +106,16 @@ impl SyncArgs {
 
         info!(
             "Found {} drives to sync: {}",
-            drives.len(),
-            drives
+            drive_infos.len(),
+            drive_infos
                 .iter()
-                .map(|(drive_letter, _)| drive_letter)
+                .map(|info| info.drive_letter)
                 .join(", ")
         );
 
         // ---- IOCP worker-pool flow ----
-        let max_workers = drives.len();
-        let (tx, rx) = bounded::<(char, PathBuf)>(drives.len());
+        let max_workers = drive_infos.len();
+        let (tx, rx) = bounded::<(char, PathBuf)>(drive_infos.len());
 
         let mut handles = Vec::with_capacity(max_workers);
         for worker_id in 0..max_workers {
@@ -130,8 +152,8 @@ impl SyncArgs {
             handles.push(handle);
         }
 
-        for (drive_letter, drive_output_path) in drives {
-            tx.send((drive_letter, drive_output_path))
+        for info in &drive_infos {
+            tx.send((info.drive_letter, info.output_path.clone()))
                 .wrap_err("Failed to schedule IOCP drive job")?;
         }
         drop(tx);
