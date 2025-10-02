@@ -255,7 +255,7 @@ pub fn autosave_initiator<T: Persistable>(
             continue;
         }
         for persistence_directory in persistence_directories.iter() {
-            let output_file_path = persistence_directory.join(&key)?;
+            let output_file_path = persistence_directory.join(&key);
             debug!(
                 ?entity,
                 ?key,
@@ -321,7 +321,7 @@ pub fn autoload_initiator<T: Persistable>(
     }
     for (entity, key) in to_load.iter() {
         for persistence_directory in persistence_directories.iter() {
-            let input_file_path = persistence_directory.join(&key)?;
+            let input_file_path = persistence_directory.join(&key);
             if !input_file_path.exists() {
                 warn!(
                     ?entity,

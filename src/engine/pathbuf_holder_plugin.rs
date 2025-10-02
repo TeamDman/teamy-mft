@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub struct PathBufHolderPlugin;
 
@@ -9,23 +9,21 @@ impl Plugin for PathBufHolderPlugin {
     }
 }
 
-#[derive(Component, Reflect, Debug, Deref, DerefMut, Default)]
+#[derive(Component, Reflect, Debug, Deref, DerefMut)]
 pub struct PathBufHolder {
-    pub path: Option<PathBuf>,
+    path: PathBuf,
+}
+impl Default for PathBufHolder {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::new(),
+        }
+    }
 }
 impl PathBufHolder {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
-            path: Some(path.into()),
+            path: path.into(),
         }
-    }
-    pub fn get<'a>(&'a self) -> eyre::Result<&'a PathBuf> {
-        match self {
-            PathBufHolder { path: Some(p) } => Ok(p),
-            PathBufHolder { path: None } => Err(eyre::eyre!("PathBufHolder has no path set")),
-        }
-    }
-    pub fn join(&self, other: impl AsRef<Path>) -> eyre::Result<PathBuf> {
-        Ok(self.get()?.join(other))
     }
 }

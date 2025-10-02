@@ -42,13 +42,7 @@ pub fn on_sync_dir_added_emit_loads(
     q_added_sync: Query<&PathBufHolder, Added<SyncDirectory>>,
 ) -> Result<()> {
     for sync_dir in &q_added_sync {
-        let dir = match &**sync_dir {
-            Some(p) => p,
-            None => {
-                warn!("SyncDirectory added but has no path; ignoring");
-                continue;
-            }
-        };
+        let dir = &**sync_dir;
         
         // TODO: replace with WriteBytesToSinkRequest
         /*

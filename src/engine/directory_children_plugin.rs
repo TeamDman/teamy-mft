@@ -75,16 +75,7 @@ fn queue_directory_listing_tasks(
         }
     };
 
-    let path = match &path_holder.path {
-        Some(p) => p.clone(),
-        None => {
-            warn!(
-                ?entity,
-                "RequestDirectoryChildren added but PathBufHolder has no path; ignoring"
-            );
-            return;
-        }
-    };
+    let path = path_holder.to_path_buf();
 
     debug!(?entity, ?path, "Spawning directory listing task");
 

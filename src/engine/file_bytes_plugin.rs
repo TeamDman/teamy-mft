@@ -78,15 +78,7 @@ fn queue_file_write_tasks(
 
     // Get sink path
     let sink_path: PathBuf = match sinks.get(write_request.0) {
-        Ok(PathBufHolder { path: None }) => {
-            warn!(
-                ?source_entity,
-                ?write_request,
-                "Sink entity does not have a PathBufHolder with a path; cannot write bytes"
-            );
-            return;
-        }
-        Ok(PathBufHolder { path: Some(path) }) => path.clone(),
+        Ok(path_holder) => path_holder.to_path_buf(),
         Err(error) => {
             warn!(
                 ?source_entity,
@@ -187,17 +179,7 @@ fn queue_file_read_tasks(
     }
 
     // Get source path
-    let source_path: PathBuf = match &source_path_holder.path {
-        Some(path) => path.clone(),
-        None => {
-            warn!(
-                ?source_entity,
-                ?write_request,
-                "Source entity does not have a PathBufHolder with a path; cannot read bytes"
-            );
-            return;
-        }
-    };
+    let source_path: PathBuf = source_path_holder.to_path_buf();
 
     let receiver_entity = write_request.0;
 
