@@ -22,8 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub struct PersistencePlugin<T: Persistable> {
-    pub config: PersistencePluginConfig,
-    pub _marker: std::marker::PhantomData<T>,
+    pub config: PersistencePluginConfig<T>,
 }
 impl<T> Default for PersistencePlugin<T>
 where
@@ -31,15 +30,17 @@ where
 {
     fn default() -> Self {
         Self {
-            config: PersistencePluginConfig::default(),
-            _marker: std::marker::PhantomData,
+            config: PersistencePluginConfig::<T>::default(),
         }
     }
 }
 
 impl<T: Persistable> Plugin for PersistencePlugin<T> {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.config.clone());
+        app.insert_resource(PersistencePluginConfig::<T> {
+            autosave_timer: self.config.autosave_timer.clone(),
+            _marker: std::marker::PhantomData,
+        });
         app.register_type::<PersistenceKey<T>>();
         app.register_type::<PersistenceProperty<T>>();
         app.register_type::<PersistenceChangedFlag<T>>();
@@ -51,15 +52,18 @@ impl<T: Persistable> Plugin for PersistencePlugin<T> {
     }
 }
 
-#[derive(Resource, Debug, Reflect, Clone)]
-#[reflect(Resource)]
-pub struct PersistencePluginConfig {
+#[derive(Resource, Debug, Clone)]
+pub struct PersistencePluginConfig<T: Persistable> {
     pub autosave_timer: Timer,
+    #[allow(dead_code)]
+    _marker: std::marker::PhantomData<T>,
 }
-impl Default for PersistencePluginConfig {
+
+impl<T: Persistable> Default for PersistencePluginConfig<T> {
     fn default() -> Self {
         Self {
             autosave_timer: Timer::new(Duration::from_millis(5000), TimerMode::Repeating),
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -148,6 +152,24 @@ pub struct PersistenceLoaded<T: Persistable> {
     pub property: PersistenceProperty<T>,
 }
 
+/// Component that tracks which entity is waiting for the bytes being loaded.
+/// This is placed on the BytesReceiver entity to link it back to the waiting entity.
+#[derive(Debug, Component, Reflect)]
+pub struct PersistenceLoadWaiter<T: Persistable> {
+    pub waiter_entity: Entity,
+    #[reflect(ignore)]
+    pub _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: Persistable> PersistenceLoadWaiter<T> {
+    pub fn new(waiter_entity: Entity) -> Self {
+        Self {
+            waiter_entity,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
 /// Identifies that there is persistable data associated with this entity.
 /// When the key is present on an entity, the property will be loaded if missing and will be saved on autosave.
 #[derive(Debug, Component, Reflect, Deref, DerefMut)]
@@ -210,7 +232,7 @@ where
 /// System that autosaves changed properties at intervals defined in the config.
 pub fn autosave_initiator<T: Persistable>(
     time: Res<Time>,
-    mut config: ResMut<PersistencePluginConfig>,
+    mut config: ResMut<PersistencePluginConfig<T>>,
     to_save: Query<
         (Entity, &PersistenceKey<T>, &PersistenceProperty<T>),
         (With<PersistenceChangedFlag<T>>, Without<PersistenceLoad<T>>),
@@ -327,6 +349,7 @@ pub fn autoload_initiator<T: Persistable>(
                         input_file_path.display()
                     )),
                     BytesReceiver,
+                    PersistenceLoadWaiter::<T>::new(entity), // Track which entity is waiting
                     CleanupOnBytesReceive, // Mark for cleanup when bytes are received
                 ))
                 .id();

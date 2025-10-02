@@ -123,7 +123,7 @@ fn handle_window_change(
             &Window,
             Option<&PersistenceProperty<WorldInspectorWindowPersistenceProperty>>,
         ),
-        Changed<Window>,
+        (Changed<Window>, With<WorldInspectorWindow>),
     >,
     mut commands: Commands,
 ) {

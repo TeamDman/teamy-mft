@@ -63,13 +63,11 @@ fn setup_primary_window_persistence(
     window: Single<Entity, With<PrimaryWindow>>,
     mut commands: Commands,
 ) {
-    commands
-        .entity(*window)
-        .insert((
-            PrimaryWindowMarker,
-            PersistenceKey::<PrimaryWindowPersistenceProperty>::new("preferences/primary_window.ron"),
-            PersistenceLoad::<PrimaryWindowPersistenceProperty>::default(),
-        ));
+    commands.entity(*window).insert((
+        PrimaryWindowMarker,
+        PersistenceKey::<PrimaryWindowPersistenceProperty>::new("preferences/primary_window.ron"),
+        PersistenceLoad::<PrimaryWindowPersistenceProperty>::default(),
+    ));
     debug!("Primary window persistence configured");
 }
 
@@ -86,6 +84,10 @@ fn handle_window_change(
 ) {
     for (entity, window, persistence) in changed.iter() {
         let new = PrimaryWindowPersistenceProperty::from(window).into_persistence_property();
+        // Avoid writing minimized windows
+        if new.position == WindowPosition::At(IVec2::new(-32000, -32000)) {
+            continue;
+        }
         // Avoid change detection if nothing actually changed
         if let Some(old) = persistence
             && *old == new
@@ -103,10 +105,7 @@ fn handle_persistence_loaded(
     mut commands: Commands,
 ) {
     if let Ok(mut window) = windows.get_mut(event.entity) {
-        info!(
-            ?event,
-            "Applying loaded persistence data to primary window"
-        );
+        info!(?event, "Applying loaded persistence data to primary window");
         window.position = event.property.position;
         window.resolution = event.property.resolution.clone();
 
