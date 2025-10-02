@@ -1,3 +1,4 @@
+use crate::engine::directory_children_plugin::RequestDirectoryChildren;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::persistence_plugin::PersistenceDirectory;
 use crate::sync_dir::try_get_sync_dir;
@@ -84,6 +85,7 @@ pub fn finish_load_sync_dir_from_preferences(
                 SyncDirectory,
                 PathBufHolder::new(sync_dir),
                 PersistenceDirectory,
+                RequestDirectoryChildren,
             ));
             tasks.get_sync_dir = None;
         }

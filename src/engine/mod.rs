@@ -16,3 +16,4 @@ pub mod scenarios;
 pub mod pathbuf_holder_plugin;
 pub mod file_bytes_plugin;
 pub mod cleanup_plugin;
+pub mod directory_children_plugin;
