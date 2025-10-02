@@ -118,7 +118,7 @@ fn handle_persistence_loaded(
 ) {
     if let Ok(mut window) = windows.get_mut(event.entity) {
         info!(
-            ?event.entity,
+            ?event,
             "Applying loaded persistence data to MFT overview window"
         );
         window.position = event.property.position;

@@ -99,7 +99,7 @@ fn cleanup_on_bytes_sent(
     mut commands: Commands,
 ) {
     if query.get(trigger.event().entity).is_ok() {
-        debug!(entity = ?trigger.event().entity, "Cleaning up entity marked with CleanupOnBytesSent");
+        debug!(entity = ?trigger.event().entity, "Scheduling cleanup for entity marked with CleanupOnBytesSent");
         commands
             .entity(trigger.event().entity)
             .insert(CleanupCountdown::new(Duration::from_millis(5000)));

@@ -19,7 +19,7 @@ impl Plugin for PrimaryWindowPlugin {
         app.add_systems(Startup, setup_primary_window_persistence);
         app.add_systems(Update, handle_window_change);
         app.add_observer(handle_persistence_loaded);
-        app.add_plugins(PersistencePlugin::<WindowPersistenceProperty>::default());
+        app.add_plugins(PersistencePlugin::<PrimaryWindowPersistenceProperty>::default());
     }
 }
 
@@ -29,14 +29,14 @@ impl Plugin for PrimaryWindowPlugin {
 pub struct PrimaryWindowMarker;
 
 #[derive(Debug, Reflect, PartialEq, Clone)]
-pub struct WindowPersistenceProperty {
+pub struct PrimaryWindowPersistenceProperty {
     pub position: WindowPosition,
     pub resolution: WindowResolution,
 }
 
-impl Persistable for WindowPersistenceProperty {}
+impl Persistable for PrimaryWindowPersistenceProperty {}
 
-impl From<&Window> for WindowPersistenceProperty {
+impl From<&Window> for PrimaryWindowPersistenceProperty {
     fn from(window: &Window) -> Self {
         Self {
             position: window.position,
@@ -50,9 +50,12 @@ fn setup_primary_window_icon(
     asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
-    commands.entity(*window).insert(WindowIcon {
-        handle: asset_server.load(MyTexture::Icon),
-    });
+    commands.entity(*window).insert((
+        Name::new("Primary Window"),
+        WindowIcon {
+            handle: asset_server.load(MyTexture::Icon),
+        },
+    ));
     debug!("Primary window icon set");
 }
 
@@ -64,8 +67,8 @@ fn setup_primary_window_persistence(
         .entity(*window)
         .insert((
             PrimaryWindowMarker,
-            PersistenceKey::<WindowPersistenceProperty>::new("preferences/primary_window.ron"),
-            PersistenceLoad::<WindowPersistenceProperty>::default(),
+            PersistenceKey::<PrimaryWindowPersistenceProperty>::new("preferences/primary_window.ron"),
+            PersistenceLoad::<PrimaryWindowPersistenceProperty>::default(),
         ));
     debug!("Primary window persistence configured");
 }
@@ -75,14 +78,14 @@ fn handle_window_change(
         (
             Entity,
             &Window,
-            Option<&PersistenceProperty<WindowPersistenceProperty>>,
+            Option<&PersistenceProperty<PrimaryWindowPersistenceProperty>>,
         ),
         (Changed<Window>, With<PrimaryWindowMarker>),
     >,
     mut commands: Commands,
 ) {
     for (entity, window, persistence) in changed.iter() {
-        let new = WindowPersistenceProperty::from(window).into_persistence_property();
+        let new = PrimaryWindowPersistenceProperty::from(window).into_persistence_property();
         // Avoid change detection if nothing actually changed
         if let Some(old) = persistence
             && *old == new
@@ -95,13 +98,13 @@ fn handle_window_change(
 }
 
 fn handle_persistence_loaded(
-    event: On<PersistenceLoaded<WindowPersistenceProperty>>,
+    event: On<PersistenceLoaded<PrimaryWindowPersistenceProperty>>,
     mut windows: Query<&mut Window, With<PrimaryWindowMarker>>,
     mut commands: Commands,
 ) {
     if let Ok(mut window) = windows.get_mut(event.entity) {
         info!(
-            ?event.entity,
+            ?event,
             "Applying loaded persistence data to primary window"
         );
         window.position = event.property.position;

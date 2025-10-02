@@ -41,12 +41,12 @@ pub struct WorldInspectorWindowCamera;
 pub struct WorldInspectorWindowEguiContextPass;
 
 #[derive(Debug, Reflect, PartialEq, Clone)]
-pub struct WindowPersistenceProperty {
+pub struct WorldInspectorWindowPersistenceProperty {
     pub position: WindowPosition,
     pub resolution: WindowResolution,
 }
-impl Persistable for WindowPersistenceProperty {}
-impl From<&Window> for WindowPersistenceProperty {
+impl Persistable for WorldInspectorWindowPersistenceProperty {}
+impl From<&Window> for WorldInspectorWindowPersistenceProperty {
     fn from(window: &Window) -> Self {
         Self {
             position: window.position,
@@ -69,7 +69,7 @@ impl Plugin for MyWorldInspectorPlugin {
             commands.trigger(WorldInspectorWindowEvent::SpawnWindow);
         });
         app.add_systems(Update, handle_window_change);
-        app.add_plugins(PersistencePlugin::<WindowPersistenceProperty>::default());
+        app.add_plugins(PersistencePlugin::<WorldInspectorWindowPersistenceProperty>::default());
     }
 }
 
@@ -90,13 +90,13 @@ fn handle_spawn_window_event(
                         ..default()
                     },
                     WindowIcon {
-                        handle: asset_server.load(MyTexture::Icon),
+                        handle: asset_server.load(MyTexture::WorldInspectorIcon),
                     },
                     WorldInspectorWindow,
-                    PersistenceKey::<WindowPersistenceProperty>::new(
+                    PersistenceKey::<WorldInspectorWindowPersistenceProperty>::new(
                         "preferences/world_inspector_window.ron",
                     ),
-                    PersistenceLoad::<WindowPersistenceProperty>::default(),
+                    PersistenceLoad::<WorldInspectorWindowPersistenceProperty>::default(),
                 ))
                 .id();
             commands.spawn((
@@ -121,14 +121,14 @@ fn handle_window_change(
         (
             Entity,
             &Window,
-            Option<&PersistenceProperty<WindowPersistenceProperty>>,
+            Option<&PersistenceProperty<WorldInspectorWindowPersistenceProperty>>,
         ),
         Changed<Window>,
     >,
     mut commands: Commands,
 ) {
     for (entity, window, persistence) in changed.iter() {
-        let new = WindowPersistenceProperty::from(window).into_persistence_property();
+        let new = WorldInspectorWindowPersistenceProperty::from(window).into_persistence_property();
         // Avoid change detection if nothing actually changed
         if let Some(old) = persistence
             && *old == new
@@ -190,13 +190,13 @@ fn check_plugins(app: &App, name: &str) {
 }
 
 fn handle_persistence_loaded(
-    event: On<PersistenceLoaded<WindowPersistenceProperty>>,
+    event: On<PersistenceLoaded<WorldInspectorWindowPersistenceProperty>>,
     mut windows: Query<&mut Window, With<WorldInspectorWindow>>,
     mut commands: Commands,
 ) {
     if let Ok(mut window) = windows.get_mut(event.entity) {
         info!(
-            ?event.entity,
+            ?event,
             "Applying loaded persistence data to window"
         );
         window.position = event.property.position;
