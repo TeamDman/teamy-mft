@@ -18,9 +18,9 @@ impl Plugin for MftFilePlugin {
         app.add_systems(
             Update,
             (
-                // on_sync_dir_added_emit_loads,
                 handle_mft_file_messages,
                 finish_mft_file_tasks,
+                on_sync_dir_child_discovered,
             ),
         );
     }
@@ -37,49 +37,28 @@ pub struct MftFileTasks {
     pub loading_from_disk: HashMap<PathBuf, Task<Result<MftFile>>>,
 }
 
-pub fn on_sync_dir_added_emit_loads(
+pub fn on_sync_dir_child_discovered(
+    new_children: Query<&Children, (Changed<Children>, With<SyncDirectory>)>,
+    path_holders: Query<&PathBufHolder>,
     mut messages: ResMut<Messages<MftFileMessage>>,
-    q_added_sync: Query<&PathBufHolder, Added<SyncDirectory>>,
-) -> Result<()> {
-    for sync_dir in &q_added_sync {
-        let dir = &**sync_dir;
-        
-        // TODO: replace with WriteBytesToSinkRequest
-        /*
-        we can create a read operation from
-        PathBufHolder
-        to
-        DirectoryListing (new component) {
-            predicate: Option<fn(&PathBuf) -> bool> # fs metadata filter maybe?
-        }
-        when the request is completing
-        it will spawn an entity for each file found as a child of the DirectoryListing entity
-        with a PathBufHolder component set to the file path
-         */
-
-
-        match std::fs::read_dir(dir) {
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    // only enqueue .mft files
-                    let is_mft = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|ext| ext.eq_ignore_ascii_case("mft"))
-                        .unwrap_or(false);
-                    if is_mft && path.is_file() {
-                        info!(?path, "Queueing MFT load from path");
-                        messages.write(MftFileMessage::LoadFromPath(path));
-                    }
+) {
+    for children in &new_children {
+        for child in children.iter() {
+            if let Ok(path_holder) = path_holders.get(child) {
+                let path = path_holder.to_path_buf();
+                // only enqueue .mft files
+                let is_mft = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("mft"))
+                    .unwrap_or(false);
+                if is_mft && path.is_file() {
+                    info!(?path, "Discovered MFT file from sync directory child");
+                    messages.write(MftFileMessage::LoadFromPath(path));
                 }
-            }
-            Err(e) => {
-                warn!(?dir, error=?e, "Failed to read sync directory");
             }
         }
     }
-    Ok(())
 }
 
 pub fn handle_mft_file_messages(
