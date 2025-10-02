@@ -18,7 +18,7 @@ impl Plugin for MftFilePlugin {
         app.add_systems(
             Update,
             (
-                // on_sync_dir_added_emit_loads,
+                on_sync_dir_added_emit_loads,
                 handle_mft_file_messages,
                 finish_mft_file_tasks,
             ),

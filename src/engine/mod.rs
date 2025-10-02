@@ -10,6 +10,7 @@ pub mod persistence_plugin;
 pub mod bytes_plugin;
 pub mod timeout_plugin;
 pub mod construction;
+pub mod primary_window_plugin;
 #[cfg(debug_assertions)]
 pub mod scenarios;
 pub mod pathbuf_holder_plugin;

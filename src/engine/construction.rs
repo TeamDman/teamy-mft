@@ -6,6 +6,7 @@ use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
+use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
 use crate::engine::bytes_plugin::BytesPlugin;
@@ -75,6 +76,7 @@ impl AppConstructionExt for App {
 
             app.add_common_plugins();
 
+            app.add_plugins(PrimaryWindowPlugin);
             app.add_plugins(MftFileOverviewWindowPlugin);
             app.add_plugins(MyEguiPlugin);
             app.add_plugins(MyWorldInspectorPlugin);

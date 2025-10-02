@@ -77,6 +77,10 @@ pub fn finish_load_sync_dir_from_preferences(
             let sync_dir = result?;
             info!(sync_dir=?sync_dir, "Loaded sync dir from preferences");
             commands.spawn((
+                Name::new(format!(
+                    "SyncDirectory ({})",
+                    sync_dir.to_string_lossy()
+                )),
                 SyncDirectory,
                 PathBufHolder::new(sync_dir),
                 PersistenceDirectory,
