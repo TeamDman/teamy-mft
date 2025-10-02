@@ -372,13 +372,13 @@ pub fn autoload_initiator<T: Persistable>(
 
 pub fn autoload_completer<T: Persistable>(
     trigger: On<BytesReceived>,
-    sinks: Query<&BytesHolder>,
-    waiter: Query<(Entity, &PersistenceKey<T>), With<PersistenceLoad<T>>>,
+    sinks: Query<(&BytesHolder, &PersistenceLoadWaiter<T>)>,
+    waiter: Query<&PersistenceKey<T>, With<PersistenceLoad<T>>>,
     mut commands: Commands,
     registry: Res<AppTypeRegistry>,
 ) {
     let sink = trigger.event().entity;
-    let Ok(sink_bytes) = sinks.get(sink) else {
+    let Ok((sink_bytes, load_waiter)) = sinks.get(sink) else {
         return;
     };
 
@@ -388,42 +388,43 @@ pub fn autoload_completer<T: Persistable>(
         "BytesReceived for autoload"
     );
 
-    // Find which entity is waiting for this data
-    // In a real scenario, we'd track the association, but for now we just load for any waiting entity
-    for (waiter_entity, waiter_key) in waiter.iter() {
-        debug!(?waiter_entity, ?waiter_key, "Deserializing loaded bytes");
+    // Get the entity that's waiting for this specific data
+    let waiter_entity = load_waiter.waiter_entity;
+    let Ok(waiter_key) = waiter.get(waiter_entity) else {
+        warn!(?waiter_entity, ?sink, "Waiter entity no longer exists or doesn't have PersistenceLoad component");
+        return;
+    };
 
-        let mut cursor = std::io::Cursor::new(sink_bytes.bytes.as_ref());
-        match T::deserialize(&mut cursor, &registry.read()) {
-            Ok(value) => {
-                let property = PersistenceProperty::new(value);
+    debug!(?waiter_entity, ?waiter_key, "Deserializing loaded bytes");
 
-                // Trigger the loaded event
-                commands.trigger(PersistenceLoaded {
-                    entity: waiter_entity,
-                    property: property.clone(),
-                });
+    let mut cursor = std::io::Cursor::new(sink_bytes.bytes.as_ref());
+    match T::deserialize(&mut cursor, &registry.read()) {
+        Ok(value) => {
+            let property = PersistenceProperty::new(value);
 
-                // Remove the load marker
-                commands
-                    .entity(waiter_entity)
-                    .remove::<PersistenceLoad<T>>();
-                commands
-                    .entity(waiter_entity)
-                    .remove::<PersistenceLoadInProgress<T>>();
+            // Trigger the loaded event
+            commands.trigger(PersistenceLoaded {
+                entity: waiter_entity,
+                property: property.clone(),
+            });
 
-                info!(?waiter_entity, ?waiter_key, "Autoload complete");
+            // Remove the load marker
+            commands
+                .entity(waiter_entity)
+                .remove::<PersistenceLoad<T>>();
+            commands
+                .entity(waiter_entity)
+                .remove::<PersistenceLoadInProgress<T>>();
 
-                break; // Only load for the first waiting entity
-            }
-            Err(error) => {
-                warn!(
-                    ?waiter_entity,
-                    ?waiter_key,
-                    ?error,
-                    "Failed to deserialize for key"
-                );
-            }
+            info!(?waiter_entity, ?waiter_key, "Autoload complete");
+        }
+        Err(error) => {
+            warn!(
+                ?waiter_entity,
+                ?waiter_key,
+                ?error,
+                "Failed to deserialize for key"
+            );
         }
     }
 }
