@@ -49,6 +49,21 @@ pub fn on_sync_dir_added_emit_loads(
                 continue;
             }
         };
+        
+        // TODO: replace with WriteBytesToSinkRequest
+        /*
+        we can create a read operation from
+        PathBufHolder
+        to
+        DirectoryListing (new component) {
+            predicate: Option<fn(&PathBuf) -> bool> # fs metadata filter maybe?
+        }
+        when the request is completing
+        it will spawn an entity for each file found as a child of the DirectoryListing entity
+        with a PathBufHolder component set to the file path
+         */
+
+
         match std::fs::read_dir(dir) {
             Ok(entries) => {
                 for entry in entries.flatten() {

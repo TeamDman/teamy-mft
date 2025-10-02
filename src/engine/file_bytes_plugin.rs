@@ -3,10 +3,11 @@ use crate::engine::bytes_plugin::BytesReceived;
 use crate::engine::bytes_plugin::BytesReceiver;
 use crate::engine::bytes_plugin::BytesSent;
 use crate::engine::bytes_plugin::WriteBytesFromSourcesInProgress;
-use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
 use crate::engine::bytes_plugin::WriteBytesToSinkFinished;
 use crate::engine::bytes_plugin::WriteBytesToSinkInProgress;
+use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::paths::EnsureParentDirExists;
 use bevy::prelude::*;
 use bevy::tasks::IoTaskPool;
 use bevy::tasks::Task;
@@ -115,6 +116,16 @@ fn queue_file_write_tasks(
 
     // Spawn task
     let task = pool.spawn(async move {
+        if let Err(e) = sink_path.ensure_parent_dir_exists() {
+            warn!(
+                ?source_entity,
+                ?sink_entity,
+                ?sink_path,
+                ?e,
+                "Failed to ensure parent directory exists; cannot write bytes"
+            );
+            return;
+        }
         match std::fs::write(&sink_path, bytes.as_ref()) {
             Ok(()) => {
                 debug!(

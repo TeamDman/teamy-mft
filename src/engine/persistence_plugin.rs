@@ -6,6 +6,7 @@ use crate::engine::bytes_plugin::CleanupOnBytesSent;
 use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use bevy::asset::ron;
+use bevy::asset::ron::ser::PrettyConfig;
 use bevy::prelude::*;
 use bevy::reflect::GetTypeRegistration;
 use bevy::reflect::TypeRegistry;
@@ -77,7 +78,7 @@ pub trait Persistable:
 {
     fn serialize(&self, writer: &mut dyn std::io::Write, registry: &TypeRegistry) -> Result<()> {
         let reflect_serializer = TypedReflectSerializer::new(self, registry);
-        let output = ron::to_string(&reflect_serializer)?;
+        let output = ron::ser::to_string_pretty(&reflect_serializer, PrettyConfig::default())?;
         writer.write_all(output.as_bytes())?;
         Ok(())
     }
@@ -307,6 +308,7 @@ pub fn autoload_initiator<T: Persistable>(
                     ?input_file_path,
                     "File does not exist; cannot autoload property"
                 );
+                commands.entity(entity).remove::<PersistenceLoad<T>>();
                 continue;
             }
             info!(

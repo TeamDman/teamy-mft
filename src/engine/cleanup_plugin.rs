@@ -29,7 +29,7 @@ pub fn tick_cleanup_countdown(
     for (entity, mut countdown) in query.iter_mut() {
         countdown.timer.tick(time.delta());
         if countdown.timer.just_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

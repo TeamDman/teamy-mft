@@ -1,3 +1,4 @@
+use crate::engine::assets::textures::MyTexture;
 use crate::engine::persistence_plugin::Persistable;
 use crate::engine::persistence_plugin::PersistenceKey;
 use crate::engine::persistence_plugin::PersistenceLoad;
@@ -8,6 +9,7 @@ use bevy::app::MainSchedulePlugin;
 use bevy::camera::RenderTarget;
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
+use bevy::window::WindowIcon;
 use bevy::window::WindowRef;
 use bevy::window::WindowResolution;
 use bevy_inspector_egui::DefaultInspectorConfigPlugin;
@@ -16,6 +18,8 @@ use bevy_inspector_egui::bevy_egui::EguiMultipassSchedule;
 use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::bevy_inspector;
 use bevy_inspector_egui::egui;
+use bevy_inspector_egui::egui::gui_zoom::zoom_menu_buttons;
+use itertools::Itertools;
 
 #[derive(Event, Debug, Clone)]
 pub enum WorldInspectorWindowEvent {
@@ -73,6 +77,7 @@ fn handle_spawn_window_event(
     event: On<WorldInspectorWindowEvent>,
     mut commands: Commands,
     query: Query<Entity, With<WorldInspectorWindow>>,
+    asset_server: Res<AssetServer>,
 ) {
     if let WorldInspectorWindowEvent::SpawnWindow = *event {
         if query.iter().next().is_none() {
@@ -84,8 +89,13 @@ fn handle_spawn_window_event(
                         resolution: WindowResolution::new(DEFAULT_SIZE.x, DEFAULT_SIZE.y),
                         ..default()
                     },
+                    WindowIcon {
+                        handle: asset_server.load(MyTexture::Icon),
+                    },
                     WorldInspectorWindow,
-                    PersistenceKey::<WindowPersistenceProperty>::new("world_inspector_window.ron"),
+                    PersistenceKey::<WindowPersistenceProperty>::new(
+                        "preferences/world_inspector_window.ron",
+                    ),
                     PersistenceLoad::<WindowPersistenceProperty>::default(),
                 ))
                 .id();
@@ -191,25 +201,33 @@ fn handle_persistence_loaded(
         );
         window.position = event.property.position;
         window.resolution = event.property.resolution.clone();
-        
+
         // Insert the property so it can be tracked for changes
-        commands
-            .entity(event.entity)
-            .insert(event.property.clone());
+        commands.entity(event.entity).insert(event.property.clone());
     }
 }
 
-fn ui(world: &mut World) -> Result {
-    let mut egui_context = world
+fn ui(world: &mut World) {
+    for mut egui_context in world
         .query_filtered::<&mut EguiContext, With<WorldInspectorWindowCamera>>()
-        .single_mut(world)?
-        .clone();
+        .iter_mut(world)
+        .map(|ctx| ctx.clone())
+        .collect_vec()
+    {
+        let ctx = egui_context.get_mut();
+        // ctx.set_zoom_factor(2.0);
+        // ctx.set_pixels_per_point(2.0);
 
-    egui::CentralPanel::default().show(egui_context.get_mut(), |ui| {
-        egui::ScrollArea::both().show(ui, |ui| {
-            bevy_inspector::ui_for_world(world, ui);
-            ui.allocate_space(ui.available_size());
+        egui::CentralPanel::default().show(ctx, |ui| {
+            // Optional: Add zoom controls at the top
+            ui.horizontal(|ui| {
+                zoom_menu_buttons(ui);
+            });
+
+            egui::ScrollArea::both().show(ui, |ui| {
+                bevy_inspector::ui_for_world(world, ui);
+                ui.allocate_space(ui.available_size());
+            });
         });
-    });
-    Ok(())
+    }
 }
