@@ -39,7 +39,7 @@ pub struct DespawnPredicateWhenDone;
 /// Timestamp of when this predicate last performed work (evaluated entities, emitted outcomes).
 /// Updated by predicate evaluation systems when they process entities.
 #[derive(Component, Debug, Reflect)]
-pub struct LastUsedAt(pub Instant);
+pub struct LastWorkAt(pub Instant);
 
 /// On a predicate entity: the entities that have requested evaluation of this predicate.
 #[derive(Component, Debug, Reflect, Default)]
@@ -120,7 +120,7 @@ fn on_explicit_evaluation_request(
 
 fn cleanup_stale_predicates(
     predicates: Query<
-        (Entity, Option<&LastUsedAt>),
+        (Entity, Option<&LastWorkAt>),
         (With<Predicate>, With<DespawnPredicateWhenDone>),
     >,
     config: Res<PredicateCleanupConfig>,
