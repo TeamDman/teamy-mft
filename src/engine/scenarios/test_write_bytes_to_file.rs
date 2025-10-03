@@ -1,14 +1,14 @@
-#![cfg(debug_assertions)]
-
-use crate::engine::pathbuf_holder_plugin::PathBufHolder;
-use crate::engine::timeout_plugin::TimeoutExitConfig;
 use crate::engine::bytes_plugin::BytesHolder;
 use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::timeout_plugin::TimeoutExitConfig;
 use bevy::prelude::*;
 use std::time::Duration;
 
-pub fn test_write_bytes_to_file(mut app: App) -> eyre::Result<()> {
-    app.insert_resource(TimeoutExitConfig::from(Duration::from_secs(2)));
+pub fn test_write_bytes_to_file(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
+    app.insert_resource(TimeoutExitConfig::from(
+        timeout.unwrap_or_else(|| Duration::from_secs(2)),
+    ));
 
     // Create byte sink
     let tempfile = tempfile::Builder::new()
@@ -60,13 +60,7 @@ mod test {
 
     #[test]
     fn test_write_bytes_to_file_headless() -> eyre::Result<()> {
-        // Initialize logging
         init_tracing(Level::INFO);
-
-        // Construct the engine
-        let engine = App::new_headless()?;
-
-        // Run the test
-        test_write_bytes_to_file(engine)
+        test_write_bytes_to_file(App::new_headless()?, None)
     }
 }

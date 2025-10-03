@@ -391,7 +391,11 @@ pub fn autoload_completer<T: Persistable>(
     // Get the entity that's waiting for this specific data
     let waiter_entity = load_waiter.waiter_entity;
     let Ok(waiter_key) = waiter.get(waiter_entity) else {
-        warn!(?waiter_entity, ?sink, "Waiter entity no longer exists or doesn't have PersistenceLoad component");
+        warn!(
+            ?waiter_entity,
+            ?sink,
+            "Waiter entity no longer exists or doesn't have PersistenceLoad component"
+        );
         return;
     };
 
@@ -409,12 +413,10 @@ pub fn autoload_completer<T: Persistable>(
             });
 
             // Remove the load marker
-            commands
-                .entity(waiter_entity)
-                .remove::<PersistenceLoad<T>>();
-            commands
-                .entity(waiter_entity)
-                .remove::<PersistenceLoadInProgress<T>>();
+            let mut waiter = commands.entity(waiter_entity);
+            waiter.remove::<PersistenceLoad<T>>();
+            waiter.remove::<PersistenceLoadInProgress<T>>();
+            waiter.insert(property); // not sure why autosave is happening after launch still :(
 
             info!(?waiter_entity, ?waiter_key, "Autoload complete");
         }

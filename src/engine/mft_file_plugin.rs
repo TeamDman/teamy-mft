@@ -1,3 +1,5 @@
+use crate::engine::construction::Headless;
+use crate::engine::construction::Testing;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
@@ -41,7 +43,12 @@ pub fn on_sync_dir_child_discovered(
     new_children: Query<&Children, (Changed<Children>, With<SyncDirectory>)>,
     path_holders: Query<&PathBufHolder>,
     mut messages: ResMut<Messages<MftFileMessage>>,
+    headless: Option<Res<Headless>>,
+    testing: Option<Res<Testing>>,
 ) {
+    if headless.is_some() || testing.is_some() {
+        return;
+    }
     for children in &new_children {
         for child in children.iter() {
             if let Ok(path_holder) = path_holders.get(child) {

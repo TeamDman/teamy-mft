@@ -2,8 +2,10 @@
 
 use crate::cli::to_args::ToArgs;
 use crate::engine::construction::AppConstructionExt;
+use crate::engine::construction::Testing;
+use crate::engine::scenarios::test_predicate_string_ends_with::test_predicate_string_ends_with;
+use crate::engine::scenarios::test_timeout::test_timeout;
 use crate::engine::scenarios::test_write_bytes_to_file::test_write_bytes_to_file;
-use crate::engine::timeout_plugin::TimeoutExitConfig;
 use arbitrary::Arbitrary;
 use bevy::app::App;
 use clap::Args;
@@ -21,18 +23,25 @@ pub struct TestArgs {
 #[derive(Subcommand, Arbitrary, PartialEq, Debug)]
 pub enum TestCommand {
     WriteBytesToFile,
+    Timeout,
+    StringEndsWith,
 }
 
 impl TestArgs {
     pub fn invoke(self) -> eyre::Result<()> {
+        let mut app = App::new_headed()?;
+        app.insert_resource(Testing);
         match self.command {
             TestCommand::WriteBytesToFile => {
-                let mut engine = App::new_headed()?;
-                if let Some(timeout) = self.timeout {
-                    // Override default timeout if specified
-                    engine.insert_resource(TimeoutExitConfig::from(timeout));
-                }
-                test_write_bytes_to_file(engine)?;
+                test_write_bytes_to_file(app, self.timeout)?;
+                Ok(())
+            }
+            TestCommand::Timeout => {
+                test_timeout(app, self.timeout)?;
+                Ok(())
+            }
+            TestCommand::StringEndsWith => {
+                test_predicate_string_ends_with(app, self.timeout)?;
                 Ok(())
             }
         }
@@ -42,7 +51,12 @@ impl TestArgs {
 impl ToArgs for TestArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         match &self.command {
-            TestCommand::WriteBytesToFile => vec!["run".into()],
+            TestCommand::WriteBytesToFile => vec!["run"],
+            TestCommand::Timeout => vec!["timeout"],
+            TestCommand::StringEndsWith => vec!["string-ends-with"],
         }
+        .into_iter()
+        .map(Into::into)
+        .collect()
     }
 }
