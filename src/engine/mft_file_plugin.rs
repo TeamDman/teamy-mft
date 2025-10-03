@@ -1,170 +1,228 @@
-use crate::engine::construction::Headless;
-use crate::engine::construction::Testing;
+use crate::engine::bytes_plugin::BytesHolder;
+use crate::engine::bytes_plugin::BytesReceived;
+use crate::engine::bytes_plugin::BytesReceiver;
+use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
+use crate::engine::file_metadata_plugin::Exists;
+use crate::engine::file_metadata_plugin::IsFile;
+use crate::engine::file_metadata_plugin::NotExists;
+use crate::engine::file_metadata_plugin::RequestFileMetadata;
+use crate::engine::file_metadata_plugin::RequestFileMetadataInProgress;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
-use crate::engine::predicate::predicate::DespawnPredicateWhenDone;
-use crate::engine::predicate::predicate::Predicate;
-use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
-use crate::engine::predicate::predicate::RequestPredicateEvaluation;
-use crate::engine::predicate::predicate_file_extension::FileExtensionPredicate;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
+use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
-use bevy::tasks::IoTaskPool;
-use bevy::tasks::Task;
-use bevy::tasks::block_on;
-use bevy::tasks::poll_once;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 pub struct MftFilePlugin;
 
 impl Plugin for MftFilePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<MftFileTasks>();
-        app.add_message::<MftFileMessage>();
+        app.register_type::<LoadCachedMftFilesGoal>();
+        app.register_type::<IsMftFile>();
+        app.register_type::<MftFileBytesSink>();
+        app.init_resource::<LoadCachedMftFilesGoal>();
         app.add_systems(
             Update,
             (
-                handle_mft_file_messages,
-                finish_mft_file_tasks,
-                on_sync_dir_child_discovered,
+                request_metadata_for_sync_dir_children,
+                mark_mft_files,
+                queue_mft_file_reads,
             ),
         );
+        app.add_observer(load_mft_file_on_bytes_received);
     }
 }
 
-#[derive(Message, Reflect, Clone, Debug)]
-#[reflect]
-pub enum MftFileMessage {
-    LoadFromPath(PathBuf),
+#[derive(Resource, Reflect, Debug, Clone)]
+#[reflect(Resource)]
+pub struct LoadCachedMftFilesGoal {
+    pub enabled: bool,
 }
 
-#[derive(Resource, Default)]
-pub struct MftFileTasks {
-    pub loading_from_disk: HashMap<PathBuf, Task<Result<MftFile>>>,
+impl Default for LoadCachedMftFilesGoal {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
 }
 
-/// Marker component indicating this PathBufHolder entity needs to have its MFT file loaded.
+/// Marker component indicating this PathBufHolder entity represents an on-disk `.mft` file.
 #[derive(Component, Debug, Reflect, Default)]
-pub struct MftFileNeedsLoading;
+#[reflect(Component)]
+pub struct IsMftFile;
 
-pub fn on_sync_dir_child_discovered(
-    new_children: Query<&Children, (Changed<Children>, With<SyncDirectory>)>,
-    headless: Option<Res<Headless>>,
-    testing: Option<Res<Testing>>,
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component)]
+struct MftFileBytesSink {
+    source: Entity,
+}
+
+pub fn request_metadata_for_sync_dir_children(
+    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
+    sync_dirs: Query<(), With<SyncDirectory>>,
+    candidates: Query<
+        (Entity, &ChildOf, &PathBufHolder),
+        (
+            Without<RequestFileMetadata>,
+            Without<RequestFileMetadataInProgress>,
+            Without<Exists>,
+            Without<NotExists>,
+        ),
+    >,
 ) {
-    if headless.is_some() || testing.is_some() {
+    if !goal.enabled {
         return;
     }
-    for children in &new_children {
-        // Collect all child entities
-        let child_entities: Vec<Entity> = children.iter().collect();
 
-        if child_entities.is_empty() {
+    for (entity, child_of, holder) in &candidates {
+        let parent_entity = child_of.get();
+        if sync_dirs.get(parent_entity).is_err() {
             continue;
         }
 
         debug!(
-            "Discovered {} children in sync directory, spawning MFT file extension predicate",
-            child_entities.len()
+            ?entity,
+            path = ?holder.as_path(),
+            "Requesting metadata for SyncDirectory child"
         );
-
-        // Spawn a one-time predicate to filter for .mft files
-        let predicate = commands
-            .spawn((
-                Name::new("MFT File Extension Filter"),
-                Predicate,
-                DespawnPredicateWhenDone,
-                FileExtensionPredicate::new("mft"),
-            ))
-            .observe(on_mft_predicate_success)
-            .id();
-
-        // Request evaluation of all children
-        commands.trigger(RequestPredicateEvaluation {
-            predicate,
-            to_evaluate: child_entities.into_iter().collect(),
-        });
+        commands.entity(entity).insert(RequestFileMetadata);
     }
 }
 
-pub fn handle_mft_file_messages(
-    mut reader: MessageReader<MftFileMessage>,
-    mut tasks: ResMut<MftFileTasks>,
-) -> Result<()> {
-    let pool = IoTaskPool::get();
-    for msg in reader.read() {
-        match msg {
-            MftFileMessage::LoadFromPath(path) => {
-                if tasks.loading_from_disk.contains_key(path) {
-                    warn!(
-                        ?path,
-                        "LoadFromPath requested but task already running; ignoring"
-                    );
-                    continue;
-                }
-                let path_clone = path.clone();
-                let task = pool.spawn(async move { Ok(MftFile::from_path(&path_clone)?) });
-                debug!(task=?task, path=?path, "Spawned task to load MFT from disk");
-                tasks.loading_from_disk.insert(path.clone(), task);
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn finish_mft_file_tasks(
+pub fn mark_mft_files(
+    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
-    mut tasks: ResMut<MftFileTasks>,
-) -> Result<()> {
-    let mut completed: Vec<PathBuf> = Vec::new();
-    for (path, task) in tasks.loading_from_disk.iter_mut() {
-        if let Some(result) = block_on(poll_once(task)) {
-            match result {
-                Ok(mft) => {
-                    info!(?path, mft=?format!("{:?}", &mft), "Loaded MFT file from disk");
-                    commands.spawn((mft, Name::new(format!("MFT File: {}", path.display()))));
-                }
-                Err(e) => {
-                    warn!(?path, error=?e, "Failed to load MFT file from disk");
-                }
-            }
-            completed.push(path.clone());
-        }
-    }
-    if !completed.is_empty() {
-        debug!(
-            "Completed {} MFT load tasks, {} remaining",
-            completed.len(),
-            tasks.loading_from_disk.len() - completed.len()
-        );
-    }
-    for path in completed {
-        tasks.loading_from_disk.remove(&path);
-    }
-    Ok(())
-}
-
-/// Observer that responds to successful MFT file extension predicate evaluations.
-fn on_mft_predicate_success(
-    trigger: On<PredicateOutcomeSuccess>,
-    path_holders: Query<&PathBufHolder>,
-    mut commands: Commands,
-    mut messages: ResMut<Messages<MftFileMessage>>,
+    sync_dirs: Query<(), With<SyncDirectory>>,
+    candidates: Query<
+        (Entity, &ChildOf, &PathBufHolder),
+        (With<Exists>, With<IsFile>, Without<IsMftFile>),
+    >,
 ) {
-    let evaluated = trigger.event().evaluated;
+    if !goal.enabled {
+        return;
+    }
 
-    let Ok(path_holder) = path_holders.get(evaluated) else {
+    for (entity, child_of, holder) in &candidates {
+        let parent_entity = child_of.get();
+        if sync_dirs.get(parent_entity).is_err() {
+            continue;
+        }
+
+        if is_mft_path(holder.as_path()) {
+            debug!(?entity, path = ?holder.as_path(), "Identified .mft file");
+            commands.entity(entity).insert(IsMftFile);
+        }
+    }
+}
+
+pub fn queue_mft_file_reads(
+    goal: Res<LoadCachedMftFilesGoal>,
+    mut commands: Commands,
+    candidates: Query<
+        Entity,
+        (
+            With<IsMftFile>,
+            With<PathBufHolder>,
+            With<Exists>,
+            With<IsFile>,
+            Without<BytesHolder>,
+            Without<BytesReceiver>,
+            Without<WriteBytesToSinkRequested>,
+        ),
+    >,
+) {
+    if !goal.enabled {
+        return;
+    }
+
+    for entity in &candidates {
+        debug!(?entity, "Queueing read bytes request for MFT file");
+        let sink = commands
+            .spawn((BytesReceiver, MftFileBytesSink { source: entity }))
+            .id();
+        commands
+            .entity(entity)
+            .insert(WriteBytesToSinkRequested(sink));
+    }
+}
+
+fn load_mft_file_on_bytes_received(
+    trigger: On<BytesReceived>,
+    goal: Res<LoadCachedMftFilesGoal>,
+    mut commands: Commands,
+    sinks: Query<&MftFileBytesSink>,
+    is_mft_entities: Query<(), With<IsMftFile>>,
+    bytes: Query<&BytesHolder>,
+    existing: Query<(), With<MftFile>>,
+) {
+    if !goal.enabled {
+        return;
+    }
+
+    let entity = trigger.event().entity;
+
+    if let Ok(sink) = sinks.get(entity) {
+        let source = sink.source;
+        if existing.get(source).is_ok() {
+            return;
+        }
+
+        let Ok(bytes_holder) = bytes.get(entity) else {
+            warn!(?entity, "BytesReceived sink missing BytesHolder");
+            return;
+        };
+
+        let bytes_clone = bytes_holder.bytes.clone();
+        let bytes_vec = bytes_holder.bytes.to_vec();
+        commands
+            .entity(source)
+            .insert(BytesHolder { bytes: bytes_clone });
+
+        match MftFile::from_bytes(bytes_vec) {
+            Ok(mft) => {
+                info!(?source, mft = ?mft, "Constructed MFT from cached bytes");
+                commands.entity(source).insert(mft);
+            }
+            Err(error) => {
+                warn!(?source, ?error, "Failed to construct MFT from bytes");
+            }
+        }
+
+        commands
+            .entity(entity)
+            .remove::<MftFileBytesSink>()
+            .remove::<BytesHolder>();
+
+        return;
+    }
+
+    if is_mft_entities.get(entity).is_err() {
+        return;
+    }
+    if existing.get(entity).is_ok() {
+        return;
+    }
+
+    let Ok(bytes_holder) = bytes.get(entity) else {
+        warn!(?entity, "BytesReceived for MFT entity without BytesHolder");
         return;
     };
-    // If it is not a file, then that will be handled later.
-    let path = path_holder.to_path_buf();
-    debug!(
-        ?evaluated,
-        ?path,
-        "MFT file identified, marking for loading"
-    );
-    commands.entity(evaluated).insert(MftFileNeedsLoading);
-    messages.write(MftFileMessage::LoadFromPath(path));
+
+    match MftFile::from_bytes(bytes_holder.bytes.to_vec()) {
+        Ok(mft) => {
+            info!(?entity, mft = ?mft, "Constructed MFT from cached bytes");
+            commands.entity(entity).insert(mft);
+        }
+        Err(error) => {
+            warn!(?entity, ?error, "Failed to construct MFT from bytes");
+        }
+    }
+}
+
+fn is_mft_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("mft"))
+        .unwrap_or(false)
 }

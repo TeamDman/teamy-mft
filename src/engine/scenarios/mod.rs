@@ -1,5 +1,6 @@
 #![cfg(debug_assertions)]
 
+pub mod test_load_cached_mft_files;
 pub mod test_predicate_file_extension;
 pub mod test_predicate_path_exists;
 pub mod test_predicate_string_ends_with;
