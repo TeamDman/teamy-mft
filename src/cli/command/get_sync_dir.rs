@@ -1,7 +1,6 @@
+use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Args;
-
-use crate::cli::to_args::ToArgs;
 
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct GetSyncDirArgs;

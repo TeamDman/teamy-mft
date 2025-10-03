@@ -195,10 +195,7 @@ fn handle_persistence_loaded(
     mut commands: Commands,
 ) {
     if let Ok(mut window) = windows.get_mut(event.entity) {
-        info!(
-            ?event,
-            "Applying loaded persistence data to window"
-        );
+        info!(?event, "Applying loaded persistence data to window");
         window.position = event.property.position;
         window.resolution = event.property.resolution.clone();
 

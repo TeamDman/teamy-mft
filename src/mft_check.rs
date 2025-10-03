@@ -22,38 +22,36 @@ pub fn check_drives(drive_letter_pattern: DriveLetterPattern) -> eyre::Result<()
         mft_files.iter().map(|(_, p)| p).collect::<Vec<_>>()
     );
 
-        let handles: Vec<_> = mft_files
-            .into_iter()
-            .map(|(drive_letter, mft_file_path)| {
-                std::thread::spawn(move || {
-                    process_mft_file(&drive_letter.to_string(), &mft_file_path)
-                })
-            })
-            .collect();
-        let mut first_err: Option<eyre::Report> = None;
-        for h in handles {
-            match h.join() {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    if first_err.is_none() {
-                        first_err = Some(e);
-                    }
-                }
-                Err(panic) => {
-                    let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                        *s
-                    } else if let Some(s) = panic.downcast_ref::<String>() {
-                        s.as_str()
-                    } else {
-                        "unknown panic"
-                    };
-                    return Err(eyre::eyre!("Thread panicked: {msg}"));
+    let handles: Vec<_> = mft_files
+        .into_iter()
+        .map(|(drive_letter, mft_file_path)| {
+            std::thread::spawn(move || process_mft_file(&drive_letter.to_string(), &mft_file_path))
+        })
+        .collect();
+    let mut first_err: Option<eyre::Report> = None;
+    for h in handles {
+        match h.join() {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
                 }
             }
+            Err(panic) => {
+                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                    *s
+                } else if let Some(s) = panic.downcast_ref::<String>() {
+                    s.as_str()
+                } else {
+                    "unknown panic"
+                };
+                return Err(eyre::eyre!("Thread panicked: {msg}"));
+            }
         }
-        if let Some(e) = first_err {
-            return Err(e);
-        }
-    
+    }
+    if let Some(e) = first_err {
+        return Err(e);
+    }
+
     Ok(())
 }

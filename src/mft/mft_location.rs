@@ -46,7 +46,7 @@ mod tests {
         let base = Information::new::<byte>(1_048_576);
         let mft_loc = MftLocationOnDisk { offset: base };
 
-    let bpr = Information::new::<byte>(1024); // 1 KiB records
+        let bpr = Information::new::<byte>(1024); // 1 KiB records
         let n0 = MftRecordNumber::new(0);
         let n1 = MftRecordNumber::new(1);
         let n5 = MftRecordNumber::new(5);

@@ -44,11 +44,11 @@ impl TestArgs {
             App::new_headed()?
         };
         app.insert_resource(Testing);
-        
+
         if self.keep_open {
             app.insert_resource(ExitTimerJustLog);
         }
-        
+
         match self.command {
             TestCommand::WriteBytesToFile => {
                 test_write_bytes_to_file(app, self.timeout)?;

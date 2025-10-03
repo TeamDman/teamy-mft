@@ -140,11 +140,7 @@ impl ActivePhysicalReadRequest {
                 // sound under the invariants documented above.
                 let req_ptr = lp_overlapped as *mut ActivePhysicalReadRequest;
                 let boxed_req = unsafe { Box::from_raw(req_ptr) };
-                debug!(
-                    ?boxed_req,
-                    bytes_transferred,
-                    "Completed IOCP read",
-                );
+                debug!(?boxed_req, bytes_transferred, "Completed IOCP read",);
                 let mut data = boxed_req.buffer;
                 let copy_len =
                     (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());

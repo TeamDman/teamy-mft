@@ -1,13 +1,13 @@
 use eyre::Context;
 use eyre::eyre;
-use windows::core::Owned;
+use std::mem::size_of;
 use std::ops::Deref;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;
 use windows::Win32::System::Ioctl::NTFS_VOLUME_DATA_BUFFER;
 use windows::Win32::System::Ioctl::VOLUME_DISK_EXTENTS;
-use std::mem::size_of;
+use windows::core::Owned;
 
 const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x00560000;
 
@@ -89,7 +89,8 @@ pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_E
             size_of::<VOLUME_DISK_EXTENTS>() as u32,
             Some(&mut bytes_returned),
             None,
-        ).wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
+        )
+        .wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
     }
 
     if extents.NumberOfDiskExtents != 1 {

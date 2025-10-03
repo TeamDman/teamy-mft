@@ -1,4 +1,5 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
+use crate::engine::bytes_plugin::BytesPlugin;
 use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::directory_children_plugin::DirectoryChildrenPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
@@ -16,7 +17,6 @@ use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use crate::engine::bytes_plugin::BytesPlugin;
 use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;

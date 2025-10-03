@@ -1,8 +1,7 @@
-use uom::si::usize::Information;
-
 use crate::mft::mft_location::MftLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use std::ops::Deref;
+use uom::si::usize::Information;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MftRecordLocationOnDisk(Information);

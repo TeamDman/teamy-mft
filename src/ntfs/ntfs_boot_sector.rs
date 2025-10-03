@@ -72,7 +72,12 @@ impl std::fmt::Debug for NtfsBootSector {
 mod tests {
     use super::*;
 
-    fn mk_boot_sector(bytes_per_sector: u16, sectors_per_cluster: u8, mft_cluster: u64, rec_byte: i8) -> NtfsBootSector {
+    fn mk_boot_sector(
+        bytes_per_sector: u16,
+        sectors_per_cluster: u8,
+        mft_cluster: u64,
+        rec_byte: i8,
+    ) -> NtfsBootSector {
         let mut bs = NtfsBootSector { data: [0u8; 512] };
         // bytes per sector @ 0x0B
         bs.data[0x0b] = (bytes_per_sector & 0xFF) as u8;

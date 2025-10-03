@@ -2,7 +2,8 @@ use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistration;
 use bevy::time::common_conditions::on_timer;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 pub struct PredicatePlugin;
 
@@ -12,7 +13,10 @@ impl Plugin for PredicatePlugin {
         app.insert_resource(PredicateCleanupConfig {
             staleness_threshold: Duration::from_secs(5),
         });
-        app.add_systems(Update, cleanup_stale_predicates.run_if(on_timer(Duration::from_secs(1))));
+        app.add_systems(
+            Update,
+            cleanup_stale_predicates.run_if(on_timer(Duration::from_secs(1))),
+        );
     }
 }
 
@@ -24,7 +28,7 @@ pub struct PredicateCleanupConfig {
 
 /// Marker component for a predicate entity.
 /// A predicate entity should have exactly one other component that defines the predicate logic.
-/// 
+///
 /// Predicates are useful instead of just using Events because it lets us have more control on the load balancing.
 /// If we have an expensive operation, we can manipulate the way the predicate empties its request buffer.
 /// Even a small amount of work over a large amount of entities can add up, I imagine.
@@ -39,7 +43,7 @@ pub struct DespawnPredicateWhenDone;
 /// Timestamp of when this predicate last performed work (evaluated entities, emitted outcomes).
 /// Updated by predicate evaluation systems when they process entities.
 #[derive(Component, Debug, Reflect)]
-pub struct LastWorkAt(pub Instant);
+pub struct LastUsedAt(pub Instant);
 
 /// On a predicate entity: the entities that have requested evaluation of this predicate.
 #[derive(Component, Debug, Reflect, Default)]
@@ -120,20 +124,20 @@ fn on_explicit_evaluation_request(
 
 fn cleanup_stale_predicates(
     predicates: Query<
-        (Entity, Option<&LastWorkAt>),
+        (Entity, Option<&LastUsedAt>),
         (With<Predicate>, With<DespawnPredicateWhenDone>),
     >,
     config: Res<PredicateCleanupConfig>,
     mut commands: Commands,
 ) {
     let now = Instant::now();
-    
+
     for (predicate, last_used) in predicates.iter() {
         let Some(last_used) = last_used else {
             // No LastUsedAt means predicate never did work - skip for now
             continue;
         };
-        
+
         let age = now.duration_since(last_used.0);
         if age > config.staleness_threshold {
             debug!(
@@ -144,9 +148,10 @@ fn cleanup_stale_predicates(
             );
             commands.entity(predicate).insert((
                 crate::engine::cleanup_plugin::CleanupCountdown::new(Duration::ZERO),
-                crate::engine::cleanup_plugin::CleanupReason::new(
-                    format!("Predicate stale for {:?}", age)
-                ),
+                crate::engine::cleanup_plugin::CleanupReason::new(format!(
+                    "Predicate stale for {:?}",
+                    age
+                )),
             ));
         }
     }

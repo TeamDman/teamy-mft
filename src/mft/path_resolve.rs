@@ -1,11 +1,11 @@
 //! Basic sequential path resolution over collected FileNameRef entries.
 //! This is a first-pass simple implementation (non-parallel) to be optimized later.
 
-use std::borrow::Cow;
-use std::ops::{Deref, DerefMut};
-use std::path::PathBuf;
-
 use crate::mft::fast_entry::FileNameCollection;
+use std::borrow::Cow;
+use std::ops::Deref;
+use std::ops::DerefMut;
+use std::path::PathBuf;
 
 /// Decode UTF-16 little endian slice to String (lossy ASCII fast-path optional later).
 fn decode_name(units: &[u16]) -> Cow<'_, str> {

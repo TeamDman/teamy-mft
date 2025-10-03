@@ -1,6 +1,6 @@
 use crate::mft::mft_record::MftRecord;
-use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
+use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
@@ -17,7 +17,9 @@ use uom::si::usize::Information;
 /// Read the complete MFT using IOCP overlapped reads.
 /// drive_letter: 'C', 'D', ...
 /// output_path: file path to write final MFT blob
-pub fn read_physical_mft(drive_letter: char) -> eyre::Result<(LogicalReadPlan, PhysicalReadResults)> {
+pub fn read_physical_mft(
+    drive_letter: char,
+) -> eyre::Result<(LogicalReadPlan, PhysicalReadResults)> {
     let drive_letter = drive_letter.to_ascii_uppercase();
     let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path
@@ -66,9 +68,15 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<(LogicalReadPlan, P
         let plan = physical_read_plan.chunked(chunk_size);
         let physical_read_results: PhysicalReadResults = plan.read(&volume_path)?;
 
-        info!("Completed MFT read from drive {drive_letter} - read {} physical segments totalling {}",
+        info!(
+            "Completed MFT read from drive {drive_letter} - read {} physical segments totalling {}",
             physical_read_results.entries.len(),
-            physical_read_results.entries.iter().map(|e| e.request.length).sum::<Information>().get_human(),
+            physical_read_results
+                .entries
+                .iter()
+                .map(|e| e.request.length)
+                .sum::<Information>()
+                .get_human(),
         );
         Ok((logical_read_plan, physical_read_results))
     }

@@ -1,8 +1,8 @@
 use crate::cli::to_args::ToArgs;
 use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft::mft_physical_read::read_physical_mft;
-use crate::sync_dir::try_get_sync_dir;
 use crate::ntfs::ntfs_drive_handle::get_volume_disk_extents;
+use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
 use crossbeam_channel::bounded;
@@ -107,10 +107,7 @@ impl SyncArgs {
         info!(
             "Found {} drives to sync: {}",
             drive_infos.len(),
-            drive_infos
-                .iter()
-                .map(|info| info.drive_letter)
-                .join(", ")
+            drive_infos.iter().map(|info| info.drive_letter).join(", ")
         );
 
         // ---- IOCP worker-pool flow ----

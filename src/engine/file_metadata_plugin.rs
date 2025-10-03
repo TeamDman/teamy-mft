@@ -32,9 +32,7 @@ pub struct RequestFileMetadataInProgress {
 
 /// The instant when file metadata was observed.
 #[derive(Component, Debug)]
-pub struct FileMetadataObservedAt(
-    pub Instant
-);
+pub struct FileMetadataObservedAt(pub Instant);
 
 /// The path exists on the filesystem.
 #[derive(Component, Debug, Reflect, Default)]
@@ -49,18 +47,12 @@ pub struct NotExists;
 /// Last modified timestamp.
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
-pub struct LastModified(
-    #[reflect(ignore)]
-    pub DateTime<Local>
-);
+pub struct LastModified(#[reflect(ignore)] pub DateTime<Local>);
 
 /// Created timestamp.
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
-pub struct CreatedAt(
-    #[reflect(ignore)]
-    pub DateTime<Local>
-);
+pub struct CreatedAt(#[reflect(ignore)] pub DateTime<Local>);
 
 /// The path is a file.
 #[derive(Component, Debug, Reflect, Default)]
@@ -93,22 +85,24 @@ fn on_request_file_metadata(
     mut commands: Commands,
 ) {
     let entity = trigger.entity;
-    
+
     let Ok(path_holder) = path_holders.get(entity) else {
-        warn!(?entity, "RequestFileMetadata added to entity without PathBufHolder");
+        warn!(
+            ?entity,
+            "RequestFileMetadata added to entity without PathBufHolder"
+        );
         commands.entity(entity).remove::<RequestFileMetadata>();
         return;
     };
-    
+
     let path = path_holder.to_path_buf();
     debug!(?entity, ?path, "Spawning file metadata fetch task");
-    
+
     let pool = IoTaskPool::get();
-    let task = pool.spawn(async move {
-        std::fs::metadata(&path)
-    });
-    
-    commands.entity(entity)
+    let task = pool.spawn(async move { std::fs::metadata(&path) });
+
+    commands
+        .entity(entity)
         .insert(RequestFileMetadataInProgress { task });
 }
 
@@ -120,17 +114,19 @@ fn finish_file_metadata_tasks(
         let Some(result) = block_on(poll_once(&mut in_progress.task)) else {
             continue;
         };
-        
+
         debug!(?entity, "File metadata task completed");
-        
+
         // Insert observation timestamp
-        commands.entity(entity).insert(FileMetadataObservedAt(Instant::now()));
-        
+        commands
+            .entity(entity)
+            .insert(FileMetadataObservedAt(Instant::now()));
+
         match result {
             Ok(metadata) => {
                 // Path exists
                 commands.entity(entity).insert(Exists);
-                
+
                 // File type
                 if metadata.is_file() {
                     commands.entity(entity).insert(IsFile);
@@ -141,37 +137,42 @@ fn finish_file_metadata_tasks(
                 if metadata.is_symlink() {
                     commands.entity(entity).insert(IsSymlink);
                 }
-                
+
                 // File size
                 commands.entity(entity).insert(FileSize(metadata.len()));
-                
+
                 // Timestamps
                 if let Ok(modified) = metadata.modified() {
                     let datetime: DateTime<Local> = modified.into();
                     commands.entity(entity).insert(LastModified(datetime));
                 }
-                
+
                 if let Ok(created) = metadata.created() {
                     let datetime: DateTime<Local> = created.into();
                     commands.entity(entity).insert(CreatedAt(datetime));
                 }
-                
+
                 // Permissions
                 if metadata.permissions().readonly() {
                     commands.entity(entity).insert(IsReadOnly);
                 }
-                
+
                 debug!(?entity, "Inserted file metadata components");
             }
             Err(error) => {
                 // Path does not exist (or other error)
-                debug!(?entity, ?error, "Path does not exist or metadata inaccessible");
+                debug!(
+                    ?entity,
+                    ?error,
+                    "Path does not exist or metadata inaccessible"
+                );
                 commands.entity(entity).insert(NotExists);
             }
         }
-        
+
         // Remove request and in-progress markers
-        commands.entity(entity)
+        commands
+            .entity(entity)
             .remove::<RequestFileMetadata>()
             .remove::<RequestFileMetadataInProgress>();
     }

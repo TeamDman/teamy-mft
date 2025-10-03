@@ -1,5 +1,5 @@
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
-use crate::engine::predicate::predicate::LastWorkAt;
+use crate::engine::predicate::predicate::LastUsedAt;
 use crate::engine::predicate::predicate::Predicate;
 use crate::engine::predicate::predicate::PredicateEvaluationRequests;
 use crate::engine::predicate::predicate::PredicateOutcomeFailure;
@@ -36,7 +36,11 @@ impl FileExtensionPredicate {
 
 fn evaluate(
     mut predicates: Query<
-        (Entity, &FileExtensionPredicate, &mut PredicateEvaluationRequests),
+        (
+            Entity,
+            &FileExtensionPredicate,
+            &mut PredicateEvaluationRequests,
+        ),
         With<Predicate>,
     >,
     to_evaluate: Query<&PathBufHolder>,
@@ -86,9 +90,11 @@ fn evaluate(
                 });
             }
         }
-        
+
         if did_work {
-            commands.entity(predicate).insert(LastWorkAt(Instant::now()));
+            commands
+                .entity(predicate)
+                .insert(LastUsedAt(Instant::now()));
         }
     }
 }

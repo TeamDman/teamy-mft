@@ -157,12 +157,11 @@ impl PhysicalReadPlan {
 
 #[cfg(test)]
 mod test {
-    use uom::si::information::byte;
-    use uom::si::usize::Information;
-
     use crate::read::physical_read_plan::PhysicalReadPlan;
     use crate::read::physical_read_plan::ZeroLengthPushBehaviour;
     use crate::read::physical_read_request::PhysicalReadRequest;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     fn info(bytes: impl Into<usize>) -> Information {
         Information::new::<byte>(bytes.into())
@@ -196,11 +195,7 @@ mod test {
         r.push(PhysicalReadRequest::new(info(0usize), info(300usize))); // single extent
         let chunked = r.chunked(info(128usize));
         // 300 bytes in 128-byte chunks => 128,128,44 (3 chunks)
-        assert_eq!(
-            chunked.len(),
-            3usize,
-            "Chunking should split into 3 parts"
-        );
+        assert_eq!(chunked.len(), 3usize, "Chunking should split into 3 parts");
         let reqs: Vec<_> = chunked.clone().into_iter().collect();
         assert_eq!(reqs[0].offset.get::<byte>(), 0usize);
         assert_eq!(reqs[0].length.get::<byte>(), 128usize);

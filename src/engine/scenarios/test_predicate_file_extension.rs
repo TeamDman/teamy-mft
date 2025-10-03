@@ -9,10 +9,7 @@ use bevy::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
 
-pub fn test_predicate_file_extension(
-    mut app: App,
-    timeout: Option<Duration>,
-) -> eyre::Result<()> {
+pub fn test_predicate_file_extension(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
@@ -29,7 +26,7 @@ pub fn test_predicate_file_extension(
 
     // Set up the scenario
     let world = app.world_mut();
-    
+
     // Create a case-insensitive predicate for .txt files
     let predicate_txt = world
         .spawn((
@@ -92,7 +89,7 @@ pub fn test_predicate_file_extension(
             predicate: predicate_txt,
             to_evaluate: [txt_lowercase, txt_uppercase, png_file].into(),
         });
-        
+
         // Test case-sensitive .MFT predicate
         commands.trigger(RequestPredicateEvaluation {
             predicate: predicate_mft,

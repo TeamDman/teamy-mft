@@ -70,7 +70,11 @@ impl ListPathsArgs {
                 let entry = match entry {
                     Ok(x) => x,
                     Err(e) => {
-                        warn!("Failed to parse entry from {}: {}", mft_file_path.display(), e);
+                        warn!(
+                            "Failed to parse entry from {}: {}",
+                            mft_file_path.display(),
+                            e
+                        );
                         continue;
                     }
                 };

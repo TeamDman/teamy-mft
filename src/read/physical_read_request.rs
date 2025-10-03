@@ -14,14 +14,8 @@ pub struct PhysicalReadRequest {
     pub length: Information,
 }
 impl PhysicalReadRequest {
-    pub fn new(
-        offset: Information,
-        length: Information,
-    ) -> Self {
-        Self {
-            offset,
-            length,
-        }
+    pub fn new(offset: Information, length: Information) -> Self {
+        Self { offset, length }
     }
 
     pub fn align_to_sector_size(&mut self, sector_size: Information) {
@@ -67,10 +61,8 @@ mod test {
 
     #[test]
     fn it_works() -> eyre::Result<()> {
-        let request = PhysicalReadRequest::new(
-            Information::new::<byte>(100),
-            Information::new::<byte>(50),
-        );
+        let request =
+            PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(50));
         assert_eq!(request.physical_end(), Information::new::<byte>(150));
 
         let aligned = {
@@ -90,8 +82,10 @@ mod test {
     fn ord_eq_consistency_same_offset_different_length() {
         use std::collections::BTreeSet;
         let mut set = BTreeSet::new();
-        let a = PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(10));
-        let b = PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(20));
+        let a =
+            PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(10));
+        let b =
+            PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(20));
         assert!(set.insert(a));
         assert!(set.insert(b)); // both should be kept, as they are not equal
         let v: Vec<_> = set.into_iter().collect();
@@ -104,8 +98,10 @@ mod test {
     fn set_deduplicates_identical_requests() {
         use std::collections::BTreeSet;
         let mut set = BTreeSet::new();
-        let a = PhysicalReadRequest::new(Information::new::<byte>(200), Information::new::<byte>(5));
-        let b = PhysicalReadRequest::new(Information::new::<byte>(200), Information::new::<byte>(5));
+        let a =
+            PhysicalReadRequest::new(Information::new::<byte>(200), Information::new::<byte>(5));
+        let b =
+            PhysicalReadRequest::new(Information::new::<byte>(200), Information::new::<byte>(5));
         assert!(set.insert(a));
         assert!(!set.insert(b)); // identical
         assert_eq!(set.len(), 1);

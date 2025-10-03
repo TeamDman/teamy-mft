@@ -1,8 +1,7 @@
+use crate::engine::construction::Testing;
 use bevy::prelude::*;
 use compact_str::CompactString;
 use std::time::Duration;
-
-use crate::engine::construction::Testing;
 
 pub struct CleanupPlugin;
 

@@ -136,9 +136,7 @@ impl MftRecordAttributeRunListOwned {
         let mut segments = Default::default();
         let mut logical_offset = Information::ZERO;
         if cluster_size == Information::ZERO {
-            return LogicalReadPlan {
-                segments,
-            };
+            return LogicalReadPlan { segments };
         }
         for run in self.iter() {
             let length_clusters = run.length_clusters;
@@ -159,9 +157,7 @@ impl MftRecordAttributeRunListOwned {
             });
             logical_offset += length;
         }
-        LogicalReadPlan {
-            segments,
-        }
+        LogicalReadPlan { segments }
     }
 }
 impl Deref for MftRecordAttributeRunListOwned {

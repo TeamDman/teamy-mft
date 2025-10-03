@@ -5,7 +5,7 @@ use strum::VariantArray;
 #[derive(VariantArray, Clone, Copy, Eq, Debug, PartialEq)]
 pub enum MyTexture {
     Icon,
-    WorldInspectorIcon
+    WorldInspectorIcon,
 }
 impl From<MyTexture> for AssetPath<'static> {
     fn from(value: MyTexture) -> Self {

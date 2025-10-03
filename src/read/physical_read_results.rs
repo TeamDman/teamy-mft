@@ -76,15 +76,15 @@ impl PhysicalReadResults {
                 // Identify the entry that contains this offset
                 // Find the entry containing this offset. Use lower_bound and if it overshoots,
                 // step back to the predecessor and verify containment.
-                let mut cursor = self
-                    .entries
-                    .lower_bound(Bound::Included(&PhysicalReadResultEntry {
-                        request: PhysicalReadRequest::new(
-                            physical_offset_current,
-                            Information::new::<byte>(1),
-                        ),
-                        data: vec![],
-                    }));
+                let mut cursor =
+                    self.entries
+                        .lower_bound(Bound::Included(&PhysicalReadResultEntry {
+                            request: PhysicalReadRequest::new(
+                                physical_offset_current,
+                                Information::new::<byte>(1),
+                            ),
+                            data: vec![],
+                        }));
                 let mut entry = cursor.next();
                 if let Some(e) = entry {
                     if e.request.offset > physical_offset_current {
@@ -95,12 +95,16 @@ impl PhysicalReadResults {
                     entry = self.entries.last();
                 }
                 let Some(entry) = entry else {
-                    eyre::bail!("Missing physical read data at offset {physical_offset_current:?} - no entries available");
+                    eyre::bail!(
+                        "Missing physical read data at offset {physical_offset_current:?} - no entries available"
+                    );
                 };
                 if !(entry.request.offset <= physical_offset_current
                     && physical_offset_current < entry.request.offset + entry.request.length)
                 {
-                    eyre::bail!("Missing physical read data at offset {physical_offset_current:?} - not contained in any entry");
+                    eyre::bail!(
+                        "Missing physical read data at offset {physical_offset_current:?} - not contained in any entry"
+                    );
                 }
 
                 // Identify what part of this entry to write

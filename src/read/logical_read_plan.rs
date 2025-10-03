@@ -1,9 +1,8 @@
-use std::collections::BTreeSet;
-
 use crate::read::physical_read_plan::PhysicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
-use uom::si::usize::Information;
+use std::collections::BTreeSet;
 use uom::ConstZero;
+use uom::si::usize::Information;
 
 /// A plan for reading a file logically, including sparse segments.
 ///
@@ -50,10 +49,7 @@ impl LogicalFileSegment {
         match self.kind {
             LogicalFileSegmentKind::Physical {
                 physical_offset: physical_offset_bytes,
-            } => Some(PhysicalReadRequest::new(
-                physical_offset_bytes,
-                self.length,
-            )),
+            } => Some(PhysicalReadRequest::new(physical_offset_bytes, self.length)),
             LogicalFileSegmentKind::Sparse => None,
         }
     }

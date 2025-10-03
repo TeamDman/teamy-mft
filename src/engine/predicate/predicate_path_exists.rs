@@ -2,7 +2,7 @@ use crate::engine::file_metadata_plugin::Exists;
 use crate::engine::file_metadata_plugin::NotExists;
 use crate::engine::file_metadata_plugin::RequestFileMetadata;
 use crate::engine::file_metadata_plugin::RequestFileMetadataInProgress;
-use crate::engine::predicate::predicate::LastWorkAt;
+use crate::engine::predicate::predicate::LastUsedAt;
 use crate::engine::predicate::predicate::Predicate;
 use crate::engine::predicate::predicate::PredicateEvaluationRequests;
 use crate::engine::predicate::predicate::PredicateOutcomeFailure;
@@ -25,12 +25,22 @@ pub struct PathExistsPredicate;
 /// System that evaluates path existence once metadata is available.
 fn evaluate(
     mut predicates: Query<
-        (Entity, &PathExistsPredicate, &mut PredicateEvaluationRequests),
+        (
+            Entity,
+            &PathExistsPredicate,
+            &mut PredicateEvaluationRequests,
+        ),
         With<Predicate>,
     >,
     exists: Query<(), With<Exists>>,
     not_exists: Query<(), With<NotExists>>,
-    requested: Query<(), Or<(With<RequestFileMetadata>, With<RequestFileMetadataInProgress>)>>,
+    requested: Query<
+        (),
+        Or<(
+            With<RequestFileMetadata>,
+            With<RequestFileMetadataInProgress>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
     for (predicate, _rule, mut requests) in predicates.iter_mut() {
@@ -38,17 +48,23 @@ fn evaluate(
         // Process entities that have metadata available
         let mut to_remove = Vec::new();
         let mut requested_metadata = false;
-        
+
         for evaluated in requests.to_evaluate.iter() {
             let evaluated = *evaluated;
             if exists.contains(evaluated) {
-                commands.trigger(PredicateOutcomeSuccess { predicate, evaluated });
+                commands.trigger(PredicateOutcomeSuccess {
+                    predicate,
+                    evaluated,
+                });
                 to_remove.push(evaluated);
                 continue;
             }
 
             if not_exists.contains(evaluated) {
-                commands.trigger(PredicateOutcomeFailure { predicate, evaluated });
+                commands.trigger(PredicateOutcomeFailure {
+                    predicate,
+                    evaluated,
+                });
                 to_remove.push(evaluated);
                 continue;
             }
@@ -59,19 +75,24 @@ fn evaluate(
             }
 
             // No metadata available yet; request it now
-            debug!(?evaluated, "Requesting file metadata for path exists evaluation");
+            debug!(
+                ?evaluated,
+                "Requesting file metadata for path exists evaluation"
+            );
             commands.entity(evaluated).insert(RequestFileMetadata);
             requested_metadata = true;
         }
-        
+
         // Remove evaluated entities from the queue
         let did_work = !to_remove.is_empty();
         for evaluated in to_remove {
             requests.to_evaluate.remove(&evaluated);
         }
-        
+
         if did_work || requested_metadata {
-            commands.entity(predicate).insert(LastWorkAt(Instant::now()));
+            commands
+                .entity(predicate)
+                .insert(LastUsedAt(Instant::now()));
         }
 
         if !did_work && !requested_metadata {
@@ -82,11 +103,13 @@ fn evaluate(
                     && not_exists.get(evaluated).is_err()
                     && requested.get(evaluated).is_err()
                 {
-                    commands.trigger(PredicateOutcomeUnknown { predicate, evaluated });
+                    commands.trigger(PredicateOutcomeUnknown {
+                        predicate,
+                        evaluated,
+                    });
                     requests.to_evaluate.remove(&evaluated);
                 }
             }
         }
     }
 }
-

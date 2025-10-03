@@ -5,7 +5,10 @@ pub struct TimeoutPlugin;
 
 impl Plugin for TimeoutPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, exit_on_timeout);
+        app.add_systems(
+            Update,
+            exit_on_timeout.run_if(|timer: Option<Res<ExitTimer>>| timer.is_some()),
+        );
     }
 }
 

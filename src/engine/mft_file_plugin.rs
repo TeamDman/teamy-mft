@@ -20,6 +20,7 @@ impl Plugin for MftFilePlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<LoadCachedMftFilesGoal>();
         app.register_type::<IsMftFile>();
+        app.register_type::<IsNotMftFile>();
         app.register_type::<MftFileBytesSink>();
         app.init_resource::<LoadCachedMftFilesGoal>();
         app.add_systems(
@@ -50,6 +51,11 @@ impl Default for LoadCachedMftFilesGoal {
 #[derive(Component, Debug, Reflect, Default)]
 #[reflect(Component)]
 pub struct IsMftFile;
+
+/// Marker component indicating the entity is known not to be an `.mft` file.
+#[derive(Component, Debug, Reflect, Default)]
+#[reflect(Component)]
+pub struct IsNotMftFile;
 
 #[derive(Component, Debug, Reflect)]
 #[reflect(Component)]
@@ -96,7 +102,12 @@ pub fn mark_mft_files(
     sync_dirs: Query<(), With<SyncDirectory>>,
     candidates: Query<
         (Entity, &ChildOf, &PathBufHolder),
-        (With<Exists>, With<IsFile>, Without<IsMftFile>),
+        (
+            With<Exists>,
+            With<IsFile>,
+            Without<IsMftFile>,
+            Without<IsNotMftFile>,
+        ),
     >,
 ) {
     if !goal.enabled {
@@ -111,7 +122,15 @@ pub fn mark_mft_files(
 
         if is_mft_path(holder.as_path()) {
             debug!(?entity, path = ?holder.as_path(), "Identified .mft file");
-            commands.entity(entity).insert(IsMftFile);
+            commands
+                .entity(entity)
+                .insert(IsMftFile)
+                .remove::<IsNotMftFile>();
+        } else {
+            commands
+                .entity(entity)
+                .insert(IsNotMftFile)
+                .remove::<IsMftFile>();
         }
     }
 }

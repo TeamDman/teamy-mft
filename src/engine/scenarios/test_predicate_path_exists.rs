@@ -1,14 +1,16 @@
+use crate::engine::file_metadata_plugin::Exists;
+use crate::engine::file_metadata_plugin::NotExists;
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::predicate::predicate::DespawnPredicateWhenDone;
+use crate::engine::predicate::predicate::Predicate;
+use crate::engine::predicate::predicate::PredicateEvaluationRequests;
+use crate::engine::predicate::predicate::PredicateOutcomeFailure;
+use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
+use crate::engine::predicate::predicate::PredicateOutcomeUnknown;
+use crate::engine::predicate::predicate_path_exists::PathExistsPredicate;
+use crate::engine::timeout_plugin::ExitTimer;
 use bevy::prelude::*;
 use std::time::Duration;
-
-use crate::engine::predicate::predicate::{
-    DespawnPredicateWhenDone, Predicate, PredicateEvaluationRequests,
-    PredicateOutcomeFailure, PredicateOutcomeSuccess, PredicateOutcomeUnknown,
-};
-use crate::engine::predicate::predicate_path_exists::PathExistsPredicate;
-use crate::engine::pathbuf_holder_plugin::PathBufHolder;
-use crate::engine::timeout_plugin::ExitTimer;
-use crate::engine::file_metadata_plugin::{Exists, NotExists};
 
 #[derive(Resource)]
 pub struct TestProgress {
@@ -72,7 +74,9 @@ fn check_completion(
     mut exit: MessageWriter<AppExit>,
 ) {
     let existing_path_has_exists = existing_path.get(progress.existing_path_entity).is_ok();
-    let nonexistent_path_has_not_exists = nonexistent_path.get(progress.nonexistent_path_entity).is_ok();
+    let nonexistent_path_has_not_exists = nonexistent_path
+        .get(progress.nonexistent_path_entity)
+        .is_ok();
 
     if existing_path_has_exists && nonexistent_path_has_not_exists {
         info!("PathExistsPredicateTest: ✅ PASSED - completion criteria met");
@@ -80,24 +84,18 @@ fn check_completion(
     }
 }
 
-pub fn run_path_exists_predicate_test(
-    mut app: App,
-    timeout: Option<Duration>,
-) -> eyre::Result<()> {
+pub fn run_path_exists_predicate_test(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(5)),
     ));
-    
+
     // Add the completion check system
     app.add_systems(Update, check_completion);
 
     info!("PathExistsPredicateTest: Starting");
 
     // Create entity with path that exists (Cargo.toml in project root)
-    let existing_path = app
-        .world_mut()
-        .spawn(PathBufHolder::new("Cargo.toml"))
-        .id();
+    let existing_path = app.world_mut().spawn(PathBufHolder::new("Cargo.toml")).id();
 
     // Create entity with path that doesn't exist
     let nonexistent_path = app
@@ -155,11 +153,20 @@ pub fn run_path_exists_predicate_test(
     error!("PathExistsPredicateTest: ❌ FAILED - test timed out before completion");
 
     if let Some(progress) = app.world().get_resource::<TestProgress>() {
-        let existing_path_has_exists = app.world().get::<Exists>(progress.existing_path_entity).is_some();
-        let nonexistent_path_has_not_exists = app.world().get::<NotExists>(progress.nonexistent_path_entity).is_some();
+        let existing_path_has_exists = app
+            .world()
+            .get::<Exists>(progress.existing_path_entity)
+            .is_some();
+        let nonexistent_path_has_not_exists = app
+            .world()
+            .get::<NotExists>(progress.nonexistent_path_entity)
+            .is_some();
 
         error!("  existing_path has Exists: {}", existing_path_has_exists);
-        error!("  nonexistent_path has NotExists: {}", nonexistent_path_has_not_exists);
+        error!(
+            "  nonexistent_path has NotExists: {}",
+            nonexistent_path_has_not_exists
+        );
         error!(
             "  progress: existing(success={}, failure={}, unknown={}), nonexistent(success={}, failure={}, unknown={})",
             progress.existing_path_success,
@@ -173,33 +180,25 @@ pub fn run_path_exists_predicate_test(
         error!("  TestProgress resource missing when inspecting failure state");
     }
 
-    Err(eyre::eyre!("Test timed out before completion criteria were met"))
+    Err(eyre::eyre!(
+        "Test timed out before completion criteria were met"
+    ))
 }
 
-fn on_predicate_success(
-    trigger: On<PredicateOutcomeSuccess>,
-    mut progress: ResMut<TestProgress>,
-) {
+fn on_predicate_success(trigger: On<PredicateOutcomeSuccess>, mut progress: ResMut<TestProgress>) {
     let evaluated = trigger.event().evaluated;
     info!(?evaluated, "PathExistsPredicateTest: Predicate SUCCESS");
     progress.record_success(evaluated);
 }
 
-fn on_predicate_failure(
-    trigger: On<PredicateOutcomeFailure>,
-    mut progress: ResMut<TestProgress>,
-) {
+fn on_predicate_failure(trigger: On<PredicateOutcomeFailure>, mut progress: ResMut<TestProgress>) {
     let evaluated = trigger.event().evaluated;
     info!(?evaluated, "PathExistsPredicateTest: Predicate FAILURE");
     progress.record_failure(evaluated);
 }
 
-fn on_predicate_unknown(
-    trigger: On<PredicateOutcomeUnknown>,
-    mut progress: ResMut<TestProgress>,
-) {
+fn on_predicate_unknown(trigger: On<PredicateOutcomeUnknown>, mut progress: ResMut<TestProgress>) {
     let evaluated = trigger.event().evaluated;
     info!(?evaluated, "PathExistsPredicateTest: Predicate UNKNOWN");
     progress.record_unknown(evaluated);
 }
-
