@@ -3,6 +3,7 @@
 use crate::cli::to_args::ToArgs;
 use crate::engine::construction::AppConstructionExt;
 use crate::engine::construction::Testing;
+use crate::engine::scenarios::test_predicate_file_extension::test_predicate_file_extension;
 use crate::engine::scenarios::test_predicate_string_ends_with::test_predicate_string_ends_with;
 use crate::engine::scenarios::test_timeout::test_timeout;
 use crate::engine::scenarios::test_write_bytes_to_file::test_write_bytes_to_file;
@@ -25,6 +26,7 @@ pub enum TestCommand {
     WriteBytesToFile,
     Timeout,
     StringEndsWith,
+    FileExtension,
 }
 
 impl TestArgs {
@@ -44,6 +46,10 @@ impl TestArgs {
                 test_predicate_string_ends_with(app, self.timeout)?;
                 Ok(())
             }
+            TestCommand::FileExtension => {
+                test_predicate_file_extension(app, self.timeout)?;
+                Ok(())
+            }
         }
     }
 }
@@ -54,6 +60,7 @@ impl ToArgs for TestArgs {
             TestCommand::WriteBytesToFile => vec!["run"],
             TestCommand::Timeout => vec!["timeout"],
             TestCommand::StringEndsWith => vec!["string-ends-with"],
+            TestCommand::FileExtension => vec!["file-extension"],
         }
         .into_iter()
         .map(Into::into)

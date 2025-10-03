@@ -1,6 +1,11 @@
 use crate::engine::construction::Headless;
 use crate::engine::construction::Testing;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::predicate::predicate::DespawnPredicateWhenDone;
+use crate::engine::predicate::predicate::Predicate;
+use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
+use crate::engine::predicate::predicate::RequestPredicateEvaluation;
+use crate::engine::predicate::predicate_file_extension::FileExtensionPredicate;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
 use bevy::prelude::*;
@@ -25,6 +30,7 @@ impl Plugin for MftFilePlugin {
                 on_sync_dir_child_discovered,
             ),
         );
+        app.add_observer(on_mft_predicate_success);
     }
 }
 
@@ -39,32 +45,47 @@ pub struct MftFileTasks {
     pub loading_from_disk: HashMap<PathBuf, Task<Result<MftFile>>>,
 }
 
+/// Marker component indicating this PathBufHolder entity needs to have its MFT file loaded.
+#[derive(Component, Debug, Reflect, Default)]
+pub struct MftFileNeedsLoading;
+
 pub fn on_sync_dir_child_discovered(
     new_children: Query<&Children, (Changed<Children>, With<SyncDirectory>)>,
-    path_holders: Query<&PathBufHolder>,
-    mut messages: ResMut<Messages<MftFileMessage>>,
     headless: Option<Res<Headless>>,
     testing: Option<Res<Testing>>,
+    mut commands: Commands,
 ) {
     if headless.is_some() || testing.is_some() {
         return;
     }
     for children in &new_children {
-        for child in children.iter() {
-            if let Ok(path_holder) = path_holders.get(child) {
-                let path = path_holder.to_path_buf();
-                // only enqueue .mft files
-                let is_mft = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|ext| ext.eq_ignore_ascii_case("mft"))
-                    .unwrap_or(false);
-                if is_mft && path.is_file() {
-                    info!(?path, "Discovered MFT file from sync directory child");
-                    messages.write(MftFileMessage::LoadFromPath(path));
-                }
-            }
+        // Collect all child entities
+        let child_entities: Vec<Entity> = children.iter().collect();
+        
+        if child_entities.is_empty() {
+            continue;
         }
+        
+        debug!(
+            "Discovered {} children in sync directory, spawning MFT file extension predicate",
+            child_entities.len()
+        );
+        
+        // Spawn a one-time predicate to filter for .mft files
+        let predicate = commands
+            .spawn((
+                Name::new("MFT File Extension Filter"),
+                Predicate,
+                DespawnPredicateWhenDone,
+                FileExtensionPredicate::new("mft"),
+            ))
+            .id();
+        
+        // Request evaluation of all children
+        commands.trigger(RequestPredicateEvaluation {
+            predicate,
+            to_evaluate: child_entities.into_iter().collect(),
+        });
     }
 }
 
@@ -123,4 +144,24 @@ pub fn finish_mft_file_tasks(
         tasks.loading_from_disk.remove(&path);
     }
     Ok(())
+}
+
+/// Observer that responds to successful MFT file extension predicate evaluations.
+fn on_mft_predicate_success(
+    trigger: On<PredicateOutcomeSuccess>,
+    path_holders: Query<&PathBufHolder>,
+    mut commands: Commands,
+    mut messages: ResMut<Messages<MftFileMessage>>,
+) {
+    let entity = trigger.event().entity;
+    
+    // Check if this entity has a PathBufHolder and if it's a file
+    if let Ok(path_holder) = path_holders.get(entity) {
+        let path = path_holder.to_path_buf();
+        if path.is_file() {
+            debug!(?entity, ?path, "MFT file identified, marking for loading");
+            commands.entity(entity).insert(MftFileNeedsLoading);
+            messages.write(MftFileMessage::LoadFromPath(path));
+        }
+    }
 }

@@ -6,6 +6,7 @@ use crate::engine::predicate::predicate::RequestPredicateEvaluation;
 use crate::engine::predicate::predicate_string_ends_with::StringEndsWithPredicate;
 use crate::engine::timeout_plugin::TimeoutExitConfig;
 use bevy::prelude::*;
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub fn test_predicate_string_ends_with(
@@ -15,6 +16,14 @@ pub fn test_predicate_string_ends_with(
     app.insert_resource(TimeoutExitConfig::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
+
+    // Track evaluation results using a resource
+    #[derive(Resource, Default)]
+    struct TestResults {
+        success: HashSet<Entity>,
+        failure: HashSet<Entity>,
+    }
+    app.init_resource::<TestResults>();
 
     // Set up the scenario
     let world = app.world_mut();
@@ -49,13 +58,24 @@ pub fn test_predicate_string_ends_with(
         });
     });
 
+    // Add observers to track results
+    app.add_observer(
+        move |trigger: On<PredicateOutcomeSuccess>, mut results: ResMut<TestResults>| {
+            results.success.insert(trigger.event().entity);
+        },
+    );
+
+    app.add_observer(
+        move |trigger: On<PredicateOutcomeFailure>, mut results: ResMut<TestResults>| {
+            results.failure.insert(trigger.event().entity);
+        },
+    );
+
     // Add success condition
     app.add_systems(
         Update,
-        move |predicate: Single<(&PredicateOutcomeSuccess, &PredicateOutcomeFailure)>,
-              mut exit: MessageWriter<AppExit>| {
-            let (pass, fail) = *predicate;
-            if pass.contains_key(&entity1) && fail.contains_key(&entity2) {
+        move |results: Res<TestResults>, mut exit: MessageWriter<AppExit>| {
+            if results.success.contains(&entity1) && results.failure.contains(&entity2) {
                 exit.write(AppExit::Success);
             }
         },

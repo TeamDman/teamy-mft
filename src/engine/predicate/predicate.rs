@@ -1,26 +1,25 @@
-use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::reflect::TypeRegistration;
-use std::time::Instant;
 
 pub struct PredicatePlugin;
 
 impl Plugin for PredicatePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_explicit_evaluation_request);
+        app.add_systems(Update, despawn_predicates_when_done);
     }
 }
 
 /// Marker component for a predicate entity.
 /// A predicate entity should have exactly one other component that defines the predicate logic.
 #[derive(Component, Debug, Reflect)]
-#[require(
-    PredicateEvaluationRequests::default(),
-    PredicateOutcomeSuccess::default(),
-    PredicateOutcomeFailure::default()
-)]
+#[require(PredicateEvaluationRequests::default())]
 pub struct Predicate;
+
+/// Marker component that causes the predicate entity to be despawned when evaluation is complete.
+#[derive(Component, Debug, Reflect, Default)]
+pub struct DespawnPredicateWhenDone;
 
 /// On a predicate entity: the entities that have requested evaluation of this predicate.
 #[derive(Component, Debug, Reflect, Default)]
@@ -45,13 +44,25 @@ pub struct RequestPredicateEvaluationForRelatedEntities {
     pub relationship: TypeRegistration,
 }
 
-/// On a predicate entity: the entities for which this predicate has been evaluated.
-#[derive(Component, Debug, Reflect, Default, Deref, DerefMut)]
-pub struct PredicateOutcomeSuccess(HashMap<Entity, Instant>);
+/// Fired when a predicate evaluation succeeds for an entity.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct PredicateOutcomeSuccess {
+    /// The entity that was evaluated
+    #[event_target]
+    pub entity: Entity,
+    /// The predicate entity that performed the evaluation
+    pub predicate: Entity,
+}
 
-/// On a predicate entity: the entities for which this predicate has been evaluated.
-#[derive(Component, Debug, Reflect, Default, Deref, DerefMut)]
-pub struct PredicateOutcomeFailure(HashMap<Entity, Instant>);
+/// Fired when a predicate evaluation fails for an entity.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct PredicateOutcomeFailure {
+    /// The entity that was evaluated
+    #[event_target]
+    pub entity: Entity,
+    /// The predicate entity that performed the evaluation
+    pub predicate: Entity,
+}
 
 fn on_explicit_evaluation_request(
     request: On<RequestPredicateEvaluation>,
@@ -74,5 +85,25 @@ fn on_explicit_evaluation_request(
                 "RequestPredicateEvaluation received but could not find predicate"
             );
         }
+    }
+}
+
+fn despawn_predicates_when_done(
+    predicates: Query<
+        (Entity, &PredicateEvaluationRequests),
+        (
+            Changed<PredicateEvaluationRequests>,
+            With<Predicate>,
+            With<DespawnPredicateWhenDone>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for (entity, requests) in predicates.iter() {
+        if !requests.to_evaluate.is_empty() {
+            continue;
+        }
+        debug!(?entity, "Predicate evaluation complete, despawning");
+        commands.entity(entity).despawn();
     }
 }

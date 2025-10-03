@@ -6,22 +6,34 @@ use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
 use bevy::prelude::*;
 use compact_str::CompactString;
 
-pub struct StringEndsWithPredicatePlugin;
+pub struct FileExtensionPredicatePlugin;
 
-impl Plugin for StringEndsWithPredicatePlugin {
+impl Plugin for FileExtensionPredicatePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, evaluate);
     }
 }
 
 #[derive(Component, Debug, Reflect)]
-pub struct StringEndsWithPredicate {
-    pub suffix: CompactString,
+pub struct FileExtensionPredicate {
+    /// The file extension to match (without the leading dot, e.g., "txt", "mft")
+    pub extension: CompactString,
+    /// Whether to perform case-insensitive matching
+    pub case_insensitive: bool,
+}
+
+impl FileExtensionPredicate {
+    pub fn new(extension: impl Into<CompactString>) -> Self {
+        Self {
+            extension: extension.into(),
+            case_insensitive: true,
+        }
+    }
 }
 
 fn evaluate(
     mut predicates: Query<
-        (Entity, &StringEndsWithPredicate, &mut PredicateEvaluationRequests),
+        (Entity, &FileExtensionPredicate, &mut PredicateEvaluationRequests),
         With<Predicate>,
     >,
     to_evaluate: Query<&PathBufHolder>,
@@ -32,7 +44,7 @@ fn evaluate(
             continue;
         }
         debug!(
-            "Evaluating StringEndsWithPredicate for {} entities",
+            "Evaluating FileExtensionPredicate for {} entities",
             requests.to_evaluate.len()
         );
         for entity in requests.to_evaluate.drain() {
@@ -44,9 +56,20 @@ fn evaluate(
                 continue;
             };
 
-            // ugly, inefficient, should use a dedicated FileExtensionPredicate
-            let path_str = path_holder.to_string_lossy();
-            if path_str.ends_with((&predicate.suffix).as_str()) {
+            // Efficiently get the extension without allocating a full string
+            let matches = path_holder
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| {
+                    if predicate.case_insensitive {
+                        ext.eq_ignore_ascii_case(predicate.extension.as_str())
+                    } else {
+                        ext == predicate.extension.as_str()
+                    }
+                })
+                .unwrap_or(false);
+
+            if matches {
                 commands.trigger(PredicateOutcomeSuccess {
                     entity,
                     predicate: predicate_entity,

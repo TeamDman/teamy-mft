@@ -8,6 +8,7 @@ use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::predicate::predicate::PredicatePlugin;
+use crate::engine::predicate::predicate_file_extension::FileExtensionPredicatePlugin;
 use crate::engine::predicate::predicate_path_exists::PathExistsPredicatePlugin;
 use crate::engine::predicate::predicate_string_ends_with::StringEndsWithPredicatePlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
@@ -69,6 +70,7 @@ impl AppConstructionExt for App {
         self.add_plugins(DirectoryChildrenPlugin);
         self.add_plugins(TimeoutPlugin);
         self.add_plugins(PredicatePlugin);
+        self.add_plugins(FileExtensionPredicatePlugin);
         self.add_plugins(StringEndsWithPredicatePlugin);
         self.add_plugins(PathExistsPredicatePlugin);
         self
