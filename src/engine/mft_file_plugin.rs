@@ -30,7 +30,6 @@ impl Plugin for MftFilePlugin {
                 on_sync_dir_child_discovered,
             ),
         );
-        app.add_observer(on_mft_predicate_success);
     }
 }
 
@@ -61,16 +60,16 @@ pub fn on_sync_dir_child_discovered(
     for children in &new_children {
         // Collect all child entities
         let child_entities: Vec<Entity> = children.iter().collect();
-        
+
         if child_entities.is_empty() {
             continue;
         }
-        
+
         debug!(
             "Discovered {} children in sync directory, spawning MFT file extension predicate",
             child_entities.len()
         );
-        
+
         // Spawn a one-time predicate to filter for .mft files
         let predicate = commands
             .spawn((
@@ -79,8 +78,9 @@ pub fn on_sync_dir_child_discovered(
                 DespawnPredicateWhenDone,
                 FileExtensionPredicate::new("mft"),
             ))
+            .observe(on_mft_predicate_success)
             .id();
-        
+
         // Request evaluation of all children
         commands.trigger(RequestPredicateEvaluation {
             predicate,
@@ -153,15 +153,18 @@ fn on_mft_predicate_success(
     mut commands: Commands,
     mut messages: ResMut<Messages<MftFileMessage>>,
 ) {
-    let entity = trigger.event().entity;
-    
-    // Check if this entity has a PathBufHolder and if it's a file
-    if let Ok(path_holder) = path_holders.get(entity) {
-        let path = path_holder.to_path_buf();
-        if path.is_file() {
-            debug!(?entity, ?path, "MFT file identified, marking for loading");
-            commands.entity(entity).insert(MftFileNeedsLoading);
-            messages.write(MftFileMessage::LoadFromPath(path));
-        }
-    }
+    let evaluated = trigger.event().evaluated;
+
+    let Ok(path_holder) = path_holders.get(evaluated) else {
+        return;
+    };
+    // If it is not a file, then that will be handled later.
+    let path = path_holder.to_path_buf();
+    debug!(
+        ?evaluated,
+        ?path,
+        "MFT file identified, marking for loading"
+    );
+    commands.entity(evaluated).insert(MftFileNeedsLoading);
+    messages.write(MftFileMessage::LoadFromPath(path));
 }

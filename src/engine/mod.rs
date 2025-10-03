@@ -5,6 +5,7 @@ pub mod construction;
 pub mod directory_children_plugin;
 pub mod egui_plugin;
 pub mod file_bytes_plugin;
+pub mod file_metadata_plugin;
 pub mod mft_file_brick_plugin;
 pub mod mft_file_overview_window_plugin;
 pub mod mft_file_plugin;

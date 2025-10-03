@@ -3,6 +3,7 @@ use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::directory_children_plugin::DirectoryChildrenPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
 use crate::engine::file_bytes_plugin::FileBytesPlugin;
+use crate::engine::file_metadata_plugin::FileMetadataPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
@@ -66,6 +67,7 @@ impl AppConstructionExt for App {
         self.add_plugins(BytesPlugin);
         self.add_plugins(PathBufHolderPlugin);
         self.add_plugins(FileBytesPlugin);
+        self.add_plugins(FileMetadataPlugin);
         self.add_plugins(CleanupPlugin);
         self.add_plugins(DirectoryChildrenPlugin);
         self.add_plugins(TimeoutPlugin);

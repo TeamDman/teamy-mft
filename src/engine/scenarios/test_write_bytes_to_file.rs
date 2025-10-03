@@ -1,12 +1,12 @@
 use crate::engine::bytes_plugin::BytesHolder;
 use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
-use crate::engine::timeout_plugin::TimeoutExitConfig;
+use crate::engine::timeout_plugin::ExitTimer;
 use bevy::prelude::*;
 use std::time::Duration;
 
 pub fn test_write_bytes_to_file(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
-    app.insert_resource(TimeoutExitConfig::from(
+    app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
 

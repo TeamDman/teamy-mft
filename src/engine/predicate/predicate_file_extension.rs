@@ -1,10 +1,13 @@
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::predicate::predicate::LastUsedAt;
 use crate::engine::predicate::predicate::Predicate;
 use crate::engine::predicate::predicate::PredicateEvaluationRequests;
 use crate::engine::predicate::predicate::PredicateOutcomeFailure;
 use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
+use crate::engine::predicate::predicate::PredicateOutcomeUnknown;
 use bevy::prelude::*;
 use compact_str::CompactString;
+use std::time::Instant;
 
 pub struct FileExtensionPredicatePlugin;
 
@@ -39,7 +42,7 @@ fn evaluate(
     to_evaluate: Query<&PathBufHolder>,
     mut commands: Commands,
 ) {
-    for (predicate_entity, predicate, mut requests) in predicates.iter_mut() {
+    for (predicate, rule, mut requests) in predicates.iter_mut() {
         if requests.to_evaluate.is_empty() {
             continue;
         }
@@ -47,11 +50,13 @@ fn evaluate(
             "Evaluating FileExtensionPredicate for {} entities",
             requests.to_evaluate.len()
         );
-        for entity in requests.to_evaluate.drain() {
-            let Ok(path_holder) = to_evaluate.get(entity) else {
-                commands.trigger(PredicateOutcomeFailure {
-                    entity,
-                    predicate: predicate_entity,
+        let mut did_work = false;
+        for evaluated in requests.to_evaluate.drain() {
+            did_work = true;
+            let Ok(path_holder) = to_evaluate.get(evaluated) else {
+                commands.trigger(PredicateOutcomeUnknown {
+                    predicate,
+                    evaluated,
                 });
                 continue;
             };
@@ -61,25 +66,29 @@ fn evaluate(
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .map(|ext| {
-                    if predicate.case_insensitive {
-                        ext.eq_ignore_ascii_case(predicate.extension.as_str())
+                    if rule.case_insensitive {
+                        ext.eq_ignore_ascii_case(rule.extension.as_str())
                     } else {
-                        ext == predicate.extension.as_str()
+                        ext == rule.extension.as_str()
                     }
                 })
                 .unwrap_or(false);
 
             if matches {
                 commands.trigger(PredicateOutcomeSuccess {
-                    entity,
-                    predicate: predicate_entity,
+                    predicate,
+                    evaluated,
                 });
             } else {
                 commands.trigger(PredicateOutcomeFailure {
-                    entity,
-                    predicate: predicate_entity,
+                    predicate,
+                    evaluated,
                 });
             }
+        }
+        
+        if did_work {
+            commands.entity(predicate).insert(LastUsedAt(Instant::now()));
         }
     }
 }

@@ -4,7 +4,7 @@ use crate::engine::predicate::predicate::PredicateOutcomeFailure;
 use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
 use crate::engine::predicate::predicate::RequestPredicateEvaluation;
 use crate::engine::predicate::predicate_file_extension::FileExtensionPredicate;
-use crate::engine::timeout_plugin::TimeoutExitConfig;
+use crate::engine::timeout_plugin::ExitTimer;
 use bevy::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -13,7 +13,7 @@ pub fn test_predicate_file_extension(
     mut app: App,
     timeout: Option<Duration>,
 ) -> eyre::Result<()> {
-    app.insert_resource(TimeoutExitConfig::from(
+    app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
 
@@ -105,9 +105,9 @@ pub fn test_predicate_file_extension(
         move |trigger: On<PredicateOutcomeSuccess>, mut results: ResMut<TestResults>| {
             let event = trigger.event();
             if event.predicate == predicate_txt {
-                results.txt_success.insert(event.entity);
+                results.txt_success.insert(event.evaluated);
             } else if event.predicate == predicate_mft {
-                results.mft_success.insert(event.entity);
+                results.mft_success.insert(event.evaluated);
             }
         },
     );
@@ -116,9 +116,9 @@ pub fn test_predicate_file_extension(
         move |trigger: On<PredicateOutcomeFailure>, mut results: ResMut<TestResults>| {
             let event = trigger.event();
             if event.predicate == predicate_txt {
-                results.txt_failure.insert(event.entity);
+                results.txt_failure.insert(event.evaluated);
             } else if event.predicate == predicate_mft {
-                results.mft_failure.insert(event.entity);
+                results.mft_failure.insert(event.evaluated);
             }
         },
     );

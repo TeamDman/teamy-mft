@@ -11,25 +11,38 @@ impl Plugin for TimeoutPlugin {
 
 #[derive(Resource, Debug, Reflect)]
 #[reflect(Resource)]
-pub struct TimeoutExitConfig {
-    pub duration: Duration,
-}
-impl From<Duration> for TimeoutExitConfig {
-    fn from(duration: Duration) -> Self {
-        Self { duration }
+pub struct ExitTimer(pub Timer);
+
+impl ExitTimer {
+    pub fn new(duration: Duration) -> Self {
+        Self(Timer::new(duration, TimerMode::Once))
     }
 }
 
+impl From<Duration> for ExitTimer {
+    fn from(duration: Duration) -> Self {
+        Self::new(duration)
+    }
+}
+
+/// When present, the timeout will only log a warning instead of exiting the app
+#[derive(Resource, Debug, Reflect, Default)]
+#[reflect(Resource)]
+pub struct ExitTimerJustLog;
+
 fn exit_on_timeout(
-    mut timeout: Local<Option<Timer>>,
+    mut timer: ResMut<ExitTimer>,
     time: Res<Time>,
-    config: Res<TimeoutExitConfig>,
     mut exit: MessageWriter<AppExit>,
+    just_log: Option<Res<ExitTimerJustLog>>,
 ) {
-    let timer = timeout.get_or_insert_with(|| Timer::new(config.duration, TimerMode::Once));
-    timer.tick(time.delta());
-    if timer.just_finished() {
-        warn!("Test timed out waiting for write to complete");
-        exit.write(AppExit::error());
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        warn!("Test timed out");
+        if just_log.is_none() {
+            exit.write(AppExit::error());
+        } else {
+            warn!("Not exiting because ExitTimerJustLog resource is present");
+        }
     }
 }

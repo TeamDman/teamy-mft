@@ -4,7 +4,7 @@ use crate::engine::predicate::predicate::PredicateOutcomeFailure;
 use crate::engine::predicate::predicate::PredicateOutcomeSuccess;
 use crate::engine::predicate::predicate::RequestPredicateEvaluation;
 use crate::engine::predicate::predicate_string_ends_with::StringEndsWithPredicate;
-use crate::engine::timeout_plugin::TimeoutExitConfig;
+use crate::engine::timeout_plugin::ExitTimer;
 use bevy::prelude::*;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -13,7 +13,7 @@ pub fn test_predicate_string_ends_with(
     mut app: App,
     timeout: Option<Duration>,
 ) -> eyre::Result<()> {
-    app.insert_resource(TimeoutExitConfig::from(
+    app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
 
@@ -61,13 +61,13 @@ pub fn test_predicate_string_ends_with(
     // Add observers to track results
     app.add_observer(
         move |trigger: On<PredicateOutcomeSuccess>, mut results: ResMut<TestResults>| {
-            results.success.insert(trigger.event().entity);
+            results.success.insert(trigger.event().evaluated);
         },
     );
 
     app.add_observer(
         move |trigger: On<PredicateOutcomeFailure>, mut results: ResMut<TestResults>| {
-            results.failure.insert(trigger.event().entity);
+            results.failure.insert(trigger.event().evaluated);
         },
     );
 
