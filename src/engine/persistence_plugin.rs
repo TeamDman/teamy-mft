@@ -11,7 +11,6 @@ use bevy::reflect::TypeRegistry;
 use bevy::reflect::Typed;
 use bevy::reflect::serde::TypedReflectDeserializer;
 use bevy::reflect::serde::TypedReflectSerializer;
-use bytes::Bytes;
 use eyre::OptionExt;
 use std::any::TypeId;
 use std::fmt::Debug;
@@ -293,7 +292,7 @@ pub fn autosave_initiator<T: Persistable>(
             commands.spawn((
                 Name::new(format!("Autosave - {}", output_file_path.display())),
                 PathBufHolder::new(output_file_path.clone()),
-                FileContents::new(Bytes::from(bytes)),
+                FileContents::from_vec(bytes),
                 RequestWriteFileBytes,
                 PersistenceSaveRequest::<T>::new(entity),
             ));

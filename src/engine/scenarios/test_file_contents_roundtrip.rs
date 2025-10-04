@@ -47,7 +47,7 @@ pub fn test_file_contents_roundtrip(mut app: App, timeout: Option<Duration>) -> 
     app.world_mut().spawn((
         Name::new("Writer"),
         PathBufHolder::new(to_write.path().to_path_buf()),
-        FileContents::new(Bytes::copy_from_slice(content_to_write.as_bytes())),
+        FileContents::from_slice(content_to_write.as_bytes()),
         RequestWriteFileBytes,
         TestWriter,
     ));

@@ -91,7 +91,7 @@ impl MftFile {
             reader
                 .read_to_end(&mut buf)
                 .wrap_err_with(|| format!("Failed to read {}", mft_file_path.display()))?;
-            Bytes::from(buf)
+            BytesMut::from(Bytes::from(buf))
         };
 
         // Defer fixups and struct construction to from_bytes
@@ -111,8 +111,7 @@ impl MftFile {
 
     /// Construct from in-memory bytes that need fixups; applies fixups and stores Bytes.
     #[instrument(level = "debug", skip_all)]
-    pub fn from_bytes(raw: Bytes) -> eyre::Result<Self> {
-        let mut raw = BytesMut::from(raw.as_ref());
+    pub fn from_bytes(mut raw: BytesMut) -> eyre::Result<Self> {
         // Ensure we have enough bytes to read the entry size field at 0x1C..=0x1F
         if raw.len() < 0x20 {
             eyre::bail!(

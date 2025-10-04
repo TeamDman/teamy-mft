@@ -28,14 +28,40 @@ pub struct FileContents {
 }
 
 impl FileContents {
-    pub fn new(bytes: impl Into<Bytes>) -> Self {
-        Self {
-            bytes: bytes.into(),
-        }
+    pub fn new(bytes: Bytes) -> Self {
+        Self { bytes }
+    }
+
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        Self::new(bytes)
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Self {
+        Self::new(Bytes::copy_from_slice(slice))
+    }
+
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        Self::new(Bytes::from(bytes))
     }
 
     pub fn bytes(&self) -> &Bytes {
         &self.bytes
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+
+    pub fn to_bytes(&self) -> Bytes {
+        self.bytes.clone()
+    }
+
+    pub fn take_bytes(&mut self) -> Bytes {
+        std::mem::replace(&mut self.bytes, Bytes::new())
+    }
+
+    pub fn into_bytes(self) -> Bytes {
+        self.bytes
     }
 }
 
@@ -89,7 +115,9 @@ fn spawn_file_read_tasks(
         let path: PathBuf = holder.to_path_buf();
         let pool = IoTaskPool::get();
         let read_path = path.clone();
-        let task = pool.spawn(async move { std::fs::read(&read_path).map(Bytes::from) });
+        let task = pool.spawn(async move {
+            std::fs::read(&read_path).map(Bytes::from)
+        });
         debug!(?entity, ?path, "Spawning file read task");
         commands
             .entity(entity)

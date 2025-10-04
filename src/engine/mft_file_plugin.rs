@@ -9,6 +9,7 @@ use crate::engine::file_metadata_plugin::RequestFileMetadataInProgress;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
+use bytes::BytesMut;
 use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
 use std::path::Path;
@@ -156,7 +157,7 @@ pub fn queue_mft_file_reads(
 fn load_mft_files_from_contents(
     goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
-    mut query: Query<
+    query: Query<
         (Entity, &FileContents),
         (With<IsMftFile>, Added<FileContents>, Without<MftFile>),
     >,
@@ -165,10 +166,20 @@ fn load_mft_files_from_contents(
         return;
     }
 
-    for (entity, contents) in query.iter_mut() {
-        match MftFile::from_bytes(contents.bytes().clone()) {
+    for (entity, contents) in &query {
+        let bytes = contents.bytes().clone();
+        let is_unique = bytes.is_unique();
+
+        if !is_unique {
+            warn!(?entity, len = bytes.len(), "Converting shared Bytes to BytesMut will clone, this MftFile construction may be slow");
+        }
+
+        let mut_bytes = BytesMut::from(bytes);
+
+        match MftFile::from_bytes(mut_bytes) {
             Ok(mft) => {
                 info!(?entity, "Constructed MFT from cached bytes");
+                commands.entity(entity).remove::<FileContents>();
                 commands.entity(entity).insert(mft);
             }
             Err(error) => {

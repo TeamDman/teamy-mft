@@ -8,8 +8,13 @@ impl Plugin for ExpectedFileContentsPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<ExpectedFileContents>();
         app.register_type::<HasCorrectFileContents>();
-        app.add_observer(on_file_contents_inserted);
-        app.add_observer(on_expected_inserted);
+        app.add_systems(
+            Update,
+            (
+                evaluate_expected_on_file_contents_changes,
+                evaluate_expected_on_expected_changes,
+            ),
+        );
         app.add_observer(on_file_contents_removed);
     }
 }
@@ -39,32 +44,35 @@ impl ExpectedFileContents {
 #[reflect(Component, Default)]
 pub struct HasCorrectFileContents;
 
-fn on_file_contents_inserted(
-    trigger: On<Insert, FileContents>,
+fn evaluate_expected_on_file_contents_changes(
+    entities: Query<
+        Entity,
+        (
+            With<ExpectedFileContents>,
+            Or<(Changed<FileContents>, Added<FileContents>)>,
+        ),
+    >,
     expected_query: Query<&ExpectedFileContents>,
     file_contents: Query<&FileContents>,
     mut commands: Commands,
 ) {
-    evaluate_expected(
-        trigger.entity,
-        &expected_query,
-        &file_contents,
-        &mut commands,
-    );
+    for entity in &entities {
+        evaluate_expected(entity, &expected_query, &file_contents, &mut commands);
+    }
 }
 
-fn on_expected_inserted(
-    trigger: On<Insert, ExpectedFileContents>,
+fn evaluate_expected_on_expected_changes(
+    entities: Query<
+        Entity,
+        Or<(Changed<ExpectedFileContents>, Added<ExpectedFileContents>)>,
+    >,
     expected_query: Query<&ExpectedFileContents>,
     file_contents: Query<&FileContents>,
     mut commands: Commands,
 ) {
-    evaluate_expected(
-        trigger.entity,
-        &expected_query,
-        &file_contents,
-        &mut commands,
-    );
+    for entity in &entities {
+        evaluate_expected(entity, &expected_query, &file_contents, &mut commands);
+    }
 }
 
 fn on_file_contents_removed(trigger: On<Remove, FileContents>, mut commands: Commands) {
