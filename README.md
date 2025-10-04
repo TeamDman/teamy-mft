@@ -74,3 +74,11 @@ https://www.disk-editor.org/index.html#features
 [Jonathan Adkins - The Master File Table Lecture Video Part 2](https://www.youtube.com/watch?v=gKDJLa0OoDc)
 
 [Jonathan Adkins - The Master File Table Lecture Video Part 3](https://www.youtube.com/watch?v=GHLwl77b36s)
+
+[You Suck at Programming - Unix/Linux Files Explained - what is an inode? (hardlinks, symlinks, etc.)](https://www.youtube.com/watch?v=ScDv02ff8oc)
+
+https://github.com/bahamas10/ysap/blob/main/code/2025-09-26-what-is-an-inode/make-diagram
+
+[Pavel Yosifovich - NTFS Alternate Streams](https://www.youtube.com/watch?v=61rGOwV-Fk8)
+
+https://flatcap.github.io/linux-ntfs/ntfs/index.html

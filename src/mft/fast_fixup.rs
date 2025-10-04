@@ -65,7 +65,7 @@ pub fn detect_entry_size(entry0: &[u8]) -> Option<u32> {
 }
 
 #[inline]
-fn read_usa_fields(entry: &[u8]) -> Option<(usize, usize)> {
+fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
     if entry.len() < 8 {
         return None;
     }
@@ -77,7 +77,7 @@ fn read_usa_fields(entry: &[u8]) -> Option<(usize, usize)> {
 /// Quick check if an entry still needs fixup application.
 #[inline]
 pub fn needs_fixup(entry: &[u8]) -> bool {
-    let (usa_offset, usa_size) = match read_usa_fields(entry) {
+    let (usa_offset, usa_size) = match read_update_sequence_array_fields(entry) {
         Some(v) => v,
         None => return false,
     };
@@ -99,7 +99,7 @@ pub fn needs_fixup(entry: &[u8]) -> bool {
 /// Returns the state of the operation.
 #[inline]
 pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
-    let (usa_offset, usa_size) = match read_usa_fields(entry) {
+    let (usa_offset, usa_size) = match read_update_sequence_array_fields(entry) {
         Some(v) => v,
         None => return FixupState::Invalid,
     };
