@@ -10,10 +10,12 @@ use crate::engine::file_text_plugin::FileTextContents;
 use crate::engine::file_text_plugin::TryInterpretAsText;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::timeout_plugin::ExitTimer;
+use crate::engine::timeout_plugin::KeepOpen;
 use bevy::prelude::*;
 use bytes::Bytes;
 use std::fs;
 use std::time::Duration;
+use tracing::info;
 
 pub fn test_file_contents_roundtrip(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
@@ -131,6 +133,7 @@ fn exit_when_expectations_met(
     expected_status: Query<Option<&HasCorrectFileContents>, With<ExpectedFileContents>>,
     reader_text: Query<&FileTextContents, With<TestReader>>,
     mut exit: MessageWriter<AppExit>,
+    just_log: Option<Res<KeepOpen>>,
 ) {
     if expected_status.iter().any(|status| status.is_none()) {
         return;
@@ -144,7 +147,10 @@ fn exit_when_expectations_met(
         return;
     }
 
-    exit.write(AppExit::Success);
+    info!("Test succeeded");
+    if just_log.is_none() {
+        exit.write(AppExit::Success);
+    }
 }
 
 #[cfg(test)]

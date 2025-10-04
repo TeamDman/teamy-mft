@@ -3,9 +3,15 @@ use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::engine::timeout_plugin::ExitTimer;
+use crate::engine::timeout_plugin::KeepOpen;
 use crate::mft::mft_file::MftFile;
 use bevy::prelude::*;
+use std::path::PathBuf;
 use std::time::Duration;
+use tracing::info;
+
+#[derive(Resource)]
+struct ExpectedPath(PathBuf);
 
 pub fn test_load_cached_mft_files(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
@@ -23,6 +29,8 @@ pub fn test_load_cached_mft_files(mut app: App, timeout: Option<Duration>) -> ey
     bytes[0x1F] = 0x00;
     std::fs::write(&mft_path, &bytes)?;
 
+    app.insert_resource(ExpectedPath(mft_path.clone()));
+
     app.world_mut().spawn((
         Name::new(format!(
             "SyncDirectory Test ({})",
@@ -33,21 +41,33 @@ pub fn test_load_cached_mft_files(mut app: App, timeout: Option<Duration>) -> ey
         RequestDirectoryChildren,
     ));
 
-    let expected_path = mft_path.clone();
-    app.add_systems(
-        Update,
-        move |query: Query<(&PathBufHolder, &MftFile)>, mut exit: MessageWriter<AppExit>| {
-            if query
-                .iter()
-                .any(|(holder, _)| holder.as_path() == expected_path.as_path())
-            {
-                exit.write(AppExit::Success);
-            }
-        },
-    );
+    app.add_systems(Update, check_success);
 
     assert!(app.run().is_success());
     Ok(())
+}
+
+fn check_success(
+    mut has_succeeded: Local<bool>,
+    query: Query<(&PathBufHolder, &MftFile)>,
+    mut exit: MessageWriter<AppExit>,
+    just_log: Option<Res<KeepOpen>>,
+    expected: Res<ExpectedPath>,
+) {
+    if *has_succeeded {
+        return;
+    }
+
+    if query
+        .iter()
+        .any(|(holder, _)| holder.as_path() == expected.0.as_path())
+    {
+        *has_succeeded = true;
+        info!("Test succeeded");
+        if just_log.is_none() {
+            exit.write(AppExit::Success);
+        }
+    }
 }
 
 #[cfg(test)]

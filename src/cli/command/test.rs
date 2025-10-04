@@ -6,7 +6,7 @@ use crate::engine::construction::Testing;
 use crate::engine::scenarios::test_file_contents_roundtrip::test_file_contents_roundtrip;
 use crate::engine::scenarios::test_load_cached_mft_files::test_load_cached_mft_files;
 use crate::engine::scenarios::test_timeout::test_timeout;
-use crate::engine::timeout_plugin::ExitTimerJustLog;
+use crate::engine::timeout_plugin::KeepOpen;
 use arbitrary::Arbitrary;
 use bevy::app::App;
 use clap::Args;
@@ -42,7 +42,7 @@ impl TestArgs {
         app.insert_resource(Testing);
 
         if self.keep_open {
-            app.insert_resource(ExitTimerJustLog);
+            app.insert_resource(KeepOpen);
         }
 
         match self.command {

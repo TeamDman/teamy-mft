@@ -31,13 +31,13 @@ impl From<Duration> for ExitTimer {
 /// When present, the timeout will only log a warning instead of exiting the app
 #[derive(Resource, Debug, Reflect, Default)]
 #[reflect(Resource)]
-pub struct ExitTimerJustLog;
+pub struct KeepOpen;
 
 fn exit_on_timeout(
     mut timer: ResMut<ExitTimer>,
     time: Res<Time>,
     mut exit: MessageWriter<AppExit>,
-    just_log: Option<Res<ExitTimerJustLog>>,
+    just_log: Option<Res<KeepOpen>>,
 ) {
     timer.0.tick(time.delta());
     if timer.0.just_finished() {

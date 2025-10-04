@@ -29,7 +29,7 @@ impl Plugin for MftFilePlugin {
                 mark_mft_files,
                 queue_mft_file_reads,
                 load_mft_files_from_contents,
-            ),
+            ).run_if(|goal: Res<LoadCachedMftFilesGoal>| goal.enabled),
         );
     }
 }
@@ -57,7 +57,6 @@ pub struct IsMftFile;
 pub struct IsNotMftFile;
 
 pub fn request_metadata_for_sync_dir_children(
-    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
     sync_dirs: Query<(), With<SyncDirectory>>,
     candidates: Query<
@@ -70,10 +69,6 @@ pub fn request_metadata_for_sync_dir_children(
         ),
     >,
 ) {
-    if !goal.enabled {
-        return;
-    }
-
     for (entity, child_of, holder) in &candidates {
         let parent_entity = child_of.get();
         if sync_dirs.get(parent_entity).is_err() {
@@ -90,7 +85,6 @@ pub fn request_metadata_for_sync_dir_children(
 }
 
 pub fn mark_mft_files(
-    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
     sync_dirs: Query<(), With<SyncDirectory>>,
     candidates: Query<
@@ -103,10 +97,6 @@ pub fn mark_mft_files(
         ),
     >,
 ) {
-    if !goal.enabled {
-        return;
-    }
-
     for (entity, child_of, holder) in &candidates {
         let parent_entity = child_of.get();
         if sync_dirs.get(parent_entity).is_err() {
@@ -129,7 +119,6 @@ pub fn mark_mft_files(
 }
 
 pub fn queue_mft_file_reads(
-    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
     candidates: Query<
         Entity,
@@ -144,10 +133,6 @@ pub fn queue_mft_file_reads(
         ),
     >,
 ) {
-    if !goal.enabled {
-        return;
-    }
-
     for entity in &candidates {
         debug!(?entity, "Queueing read bytes request for MFT file");
         commands.entity(entity).insert(RequestReadFileBytes);
@@ -155,17 +140,12 @@ pub fn queue_mft_file_reads(
 }
 
 fn load_mft_files_from_contents(
-    goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
     query: Query<
         (Entity, &FileContents),
         (With<IsMftFile>, Added<FileContents>, Without<MftFile>),
     >,
 ) {
-    if !goal.enabled {
-        return;
-    }
-
     for (entity, contents) in &query {
         let bytes = contents.bytes().clone();
         let is_unique = bytes.is_unique();
