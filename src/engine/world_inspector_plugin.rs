@@ -182,7 +182,7 @@ fn check_plugins(app: &App, name: &str) {
     if !app.is_plugin_added::<EguiPlugin>() {
         panic!(
             r#"`{name}` needs to be added after `EguiPlugin`:
-        .add_plugins(EguiPlugin {{ enable_multipass_for_primary_context: true }})
+        .add_plugins(EguiPlugin::default())
         .add_plugins({name}::default())
             "#,
         );

@@ -11,6 +11,7 @@ use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
+use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
@@ -91,6 +92,7 @@ impl AppConstructionExt for App {
             app.add_plugins(PrimaryWindowPlugin);
             app.add_plugins(MftFileOverviewWindowPlugin);
             app.add_plugins(MyEguiPlugin);
+            app.add_plugins(QuitButtonWindowPlugin);
             app.add_plugins(MyWorldInspectorPlugin);
             app.add_plugins(MftFileBrickPlugin);
             app.add_plugins(FpsOverlayPlugin {

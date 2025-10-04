@@ -14,6 +14,7 @@ pub mod mft_file_plugin;
 pub mod pathbuf_holder_plugin;
 pub mod persistence_plugin;
 pub mod primary_window_plugin;
+pub mod quit_button_window_plugin;
 pub mod run;
 #[cfg(debug_assertions)]
 pub mod scenarios;
