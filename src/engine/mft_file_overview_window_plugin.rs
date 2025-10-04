@@ -1,4 +1,5 @@
 use crate::engine::assets::textures::MyTexture;
+use crate::engine::camera_controller::CameraController;
 use crate::engine::persistence_plugin::Persistable;
 use crate::engine::persistence_plugin::PersistenceKey;
 use crate::engine::persistence_plugin::PersistenceLoad;
@@ -80,6 +81,7 @@ fn spawn_overview_window_if_missing(
                 ..default()
             },
             Camera3d::default(),
+            CameraController::default(),
             Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
         ));
 

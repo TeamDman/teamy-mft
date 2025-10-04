@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod camera_controller;
 pub mod cleanup_plugin;
 pub mod construction;
 pub mod directory_children_plugin;
@@ -19,5 +20,6 @@ pub mod run;
 #[cfg(debug_assertions)]
 pub mod scenarios;
 pub mod sync_dir_plugin;
+pub mod sync_dir_brick_plugin;
 pub mod timeout_plugin;
 pub mod world_inspector_plugin;

@@ -9,9 +9,9 @@ use crate::engine::file_metadata_plugin::RequestFileMetadataInProgress;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use crate::mft::mft_file::MftFile;
-use bytes::BytesMut;
 use bevy::ecs::relationship::Relationship;
 use bevy::prelude::*;
+use bytes::BytesMut;
 use std::path::Path;
 
 pub struct MftFilePlugin;
@@ -29,7 +29,8 @@ impl Plugin for MftFilePlugin {
                 mark_mft_files,
                 queue_mft_file_reads,
                 load_mft_files_from_contents,
-            ).run_if(|goal: Res<LoadCachedMftFilesGoal>| goal.enabled),
+            )
+                .run_if(|goal: Res<LoadCachedMftFilesGoal>| goal.enabled),
         );
     }
 }
@@ -142,17 +143,20 @@ pub fn queue_mft_file_reads(
 
 fn load_mft_files_from_contents(
     mut commands: Commands,
-    query: Query<
-        (Entity, &FileContents),
+    mut query: Query<
+        (Entity, &mut FileContents),
         (With<IsMftFile>, Added<FileContents>, Without<MftFile>),
     >,
 ) {
-    for (entity, contents) in &query {
-        let bytes = contents.bytes().clone();
-        let is_unique = bytes.is_unique();
-
-        if !is_unique {
-            warn!(?entity, len = bytes.len(), "Converting shared Bytes to BytesMut will clone, this MftFile construction may be slow");
+    for (entity, mut contents) in query.iter_mut() {
+        commands.entity(entity).remove::<FileContents>();
+        let bytes = contents.take_bytes();
+        if !bytes.is_unique() {
+            warn!(
+                ?entity,
+                len = bytes.len(),
+                "Converting shared Bytes to BytesMut will clone, this MftFile construction may be slow"
+            );
         }
 
         let mut_bytes = BytesMut::from(bytes);
@@ -160,7 +164,6 @@ fn load_mft_files_from_contents(
         match MftFile::from_bytes(mut_bytes) {
             Ok(mft) => {
                 info!(?entity, "Constructed MFT from cached bytes");
-                commands.entity(entity).remove::<FileContents>();
                 commands.entity(entity).insert(mft);
             }
             Err(error) => {

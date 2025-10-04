@@ -1,4 +1,5 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
+use crate::engine::camera_controller::CameraControllerPlugin;
 use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::directory_children_plugin::DirectoryChildrenPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
@@ -12,6 +13,7 @@ use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
+use crate::engine::sync_dir_brick_plugin::SyncDirBrickPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
@@ -86,15 +88,18 @@ impl AppConstructionExt for App {
                     })
                     .disable::<LogPlugin>(), // we initialized tracing already
             );
+            app.add_plugins(MeshPickingPlugin);
 
             app.add_common_plugins();
 
             app.add_plugins(PrimaryWindowPlugin);
             app.add_plugins(MftFileOverviewWindowPlugin);
+            app.add_plugins(CameraControllerPlugin);
             app.add_plugins(MyEguiPlugin);
             app.add_plugins(QuitButtonWindowPlugin);
             app.add_plugins(MyWorldInspectorPlugin);
             app.add_plugins(MftFileBrickPlugin);
+            app.add_plugins(SyncDirBrickPlugin);
             app.add_plugins(FpsOverlayPlugin {
                 config: FpsOverlayConfig {
                     text_config: TextFont {
@@ -122,6 +127,11 @@ impl AppConstructionExt for App {
             });
             app.add_systems(Startup, |mut commands: Commands| {
                 commands.spawn((Name::new("Primary Window Camera"), Camera2d));
+                commands.insert_resource(AmbientLight {
+                    color: Color::WHITE,
+                    brightness: 200.0,
+                    ..default()
+                });
             });
 
             debug!("Headed Bevy engine built");
