@@ -15,11 +15,11 @@ use std::time::Duration;
 
 #[derive(Args, Arbitrary, PartialEq, Debug)]
 pub struct TestArgs {
-    #[arg(long, value_parser = humantime::parse_duration)]
+    #[arg(long, value_parser = humantime::parse_duration, global = true)]
     pub timeout: Option<Duration>,
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "false", global = true)]
     pub headless: bool,
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "false", global = true)]
     pub keep_open: bool,
     #[clap(subcommand)]
     pub command: TestCommand,
