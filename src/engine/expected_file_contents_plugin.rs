@@ -70,7 +70,7 @@ fn on_expected_inserted(
 fn on_file_contents_removed(trigger: On<Remove, FileContents>, mut commands: Commands) {
     commands
         .entity(trigger.entity)
-        .remove::<HasCorrectFileContents>();
+        .try_remove::<HasCorrectFileContents>();
 }
 
 fn evaluate_expected(
@@ -91,6 +91,6 @@ fn evaluate_expected(
     if contents.bytes() == expected.as_bytes() {
         entity_commands.insert(HasCorrectFileContents);
     } else {
-        entity_commands.remove::<HasCorrectFileContents>();
+        entity_commands.try_remove::<HasCorrectFileContents>();
     }
 }
