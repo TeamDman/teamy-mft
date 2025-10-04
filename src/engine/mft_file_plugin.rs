@@ -127,6 +127,7 @@ pub fn queue_mft_file_reads(
             With<PathBufHolder>,
             With<Exists>,
             With<IsFile>,
+            Without<MftFile>,
             Without<FileContents>,
             Without<FileContentsInProgress>,
             Without<RequestReadFileBytes>,

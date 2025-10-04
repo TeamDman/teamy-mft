@@ -74,7 +74,7 @@ impl Plugin for QuitButtonWindowPlugin {
 const DEFAULT_SIZE: UVec2 = UVec2::new(400, 200);
 
 const QUIT_BUTTON_NORMAL: Color = Color::srgb(0.15, 0.15, 0.18);
-const QUIT_BUTTON_HOVERED: Color = Color::srgb(0.25, 0.25, 0.32);
+const QUIT_BUTTON_HOVERED: Color = Color::srgb(0.55, 0.25, 0.32);
 const QUIT_BUTTON_PRESSED: Color = Color::srgb(0.35, 0.15, 0.2);
 
 const QUIT_BUTTON_BORDER_NORMAL: Color = Color::srgb(0.75, 0.75, 0.82);
@@ -125,48 +125,44 @@ fn spawn_window_if_missing(
     let button_font: Handle<Font> = asset_server.load("fonts/ISOCPEUR.ttf");
 
     // Spawn the UI
-    commands
-        .spawn((
-            Name::new("Quit Button UI Root"),
+    commands.spawn((
+        Name::new("Quit Button UI Root"),
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        UiTargetCamera(camera),
+        RenderLayers::layer(QUIT_BUTTON_WINDOW_LAYER),
+        children![(
+            Name::new("Quit Button"),
+            Button,
+            QuitButton,
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
+                width: Val::Px(200.0),
+                height: Val::Px(96.0),
+                border: UiRect::all(Val::Px(6.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
-            UiTargetCamera(camera),
-            RenderLayers::layer(QUIT_BUTTON_WINDOW_LAYER),
-        ))
-        .with_children(|parent| {
-            parent
-                .spawn((
-                    Name::new("Quit Button"),
-                    Button,
-                    QuitButton,
-                    Node {
-                        width: Val::Px(200.0),
-                        height: Val::Px(96.0),
-                        border: UiRect::all(Val::Px(6.0)),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BorderColor::all(QUIT_BUTTON_BORDER_NORMAL),
-                    BorderRadius::all(Val::Px(24.0)),
-                    BackgroundColor(QUIT_BUTTON_NORMAL),
-                ))
-                .with_child((
-                    Text::new("Quit"),
-                    TextFont {
-                        font: button_font.clone(),
-                        font_size: 48.0,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    TextShadow::default(),
-                ));
-        });
+            BorderColor::all(QUIT_BUTTON_BORDER_NORMAL),
+            BorderRadius::all(Val::Px(24.0)),
+            BackgroundColor(QUIT_BUTTON_NORMAL),
+            children![(
+                Text::new("Quit"),
+                TextFont {
+                    font: button_font.clone(),
+                    font_size: 48.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                TextShadow::default(),
+            )]
+        )],
+    ));
 }
 
 fn handle_window_change(
@@ -229,24 +225,32 @@ fn update_quit_button_visuals(
             &mut BackgroundColor,
             &mut BorderColor,
             &mut Button,
+            &Children,
         ),
         (Changed<Interaction>, With<QuitButton>),
     >,
+    mut text_query: Query<&mut Text>,
 ) {
-    for (interaction, mut background_color, mut border_color, mut button) in &mut interaction_query
+    for (interaction, mut background_color, mut border_color, mut button, children) in
+        &mut interaction_query
     {
+        let mut text = text_query.get_mut(children[0]).unwrap();
+
         match *interaction {
             Interaction::Pressed => {
+                **text = "Quit!".to_string();
                 *background_color = BackgroundColor(QUIT_BUTTON_PRESSED);
                 *border_color = BorderColor::all(QUIT_BUTTON_BORDER_PRESSED);
                 button.set_changed();
             }
             Interaction::Hovered => {
+                **text = "Quit?".to_string();
                 *background_color = BackgroundColor(QUIT_BUTTON_HOVERED);
                 *border_color = BorderColor::all(QUIT_BUTTON_BORDER_HOVERED);
                 button.set_changed();
             }
             Interaction::None => {
+                **text = "Quit".to_string();
                 *background_color = BackgroundColor(QUIT_BUTTON_NORMAL);
                 *border_color = BorderColor::all(QUIT_BUTTON_BORDER_NORMAL);
             }

@@ -605,7 +605,6 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "js-sys",
- "parking_lot",
  "ron",
  "serde",
  "stackfuture",
@@ -1072,7 +1071,6 @@ dependencies = [
 name = "bevy_macro_utils"
 version = "0.18.0-dev"
 dependencies = [
- "parking_lot",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
