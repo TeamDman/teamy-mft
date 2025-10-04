@@ -1,18 +1,15 @@
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
-use crate::engine::bytes_plugin::BytesPlugin;
 use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::directory_children_plugin::DirectoryChildrenPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
-use crate::engine::file_bytes_plugin::FileBytesPlugin;
+use crate::engine::file_contents_plugin::FileContentsPlugin;
+use crate::engine::file_contents_refresh_plugin::FileContentsRefreshPlugin;
 use crate::engine::file_metadata_plugin::FileMetadataPlugin;
+use crate::engine::file_text_plugin::FileTextPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
-use crate::engine::predicate::predicate::PredicatePlugin;
-use crate::engine::predicate::predicate_file_extension::FileExtensionPredicatePlugin;
-use crate::engine::predicate::predicate_path_exists::PathExistsPredicatePlugin;
-use crate::engine::predicate::predicate_string_ends_with::StringEndsWithPredicatePlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
@@ -64,17 +61,14 @@ impl AppConstructionExt for App {
         self.add_plugins(SyncDirectoryPlugin);
         self.add_plugins(MftFilePlugin);
         self.add_plugins(AssetMessageLogPlugin);
-        self.add_plugins(BytesPlugin);
         self.add_plugins(PathBufHolderPlugin);
-        self.add_plugins(FileBytesPlugin);
+        self.add_plugins(FileContentsPlugin);
+        self.add_plugins(FileContentsRefreshPlugin);
+        self.add_plugins(FileTextPlugin);
         self.add_plugins(FileMetadataPlugin);
         self.add_plugins(CleanupPlugin);
         self.add_plugins(DirectoryChildrenPlugin);
         self.add_plugins(TimeoutPlugin);
-        self.add_plugins(PredicatePlugin);
-        self.add_plugins(FileExtensionPredicatePlugin);
-        self.add_plugins(StringEndsWithPredicatePlugin);
-        self.add_plugins(PathExistsPredicatePlugin);
         self
     }
 

@@ -1,7 +1,6 @@
-use crate::engine::bytes_plugin::BytesHolder;
-use crate::engine::bytes_plugin::BytesReceived;
-use crate::engine::bytes_plugin::BytesReceiver;
-use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
+use crate::engine::file_contents_plugin::FileContents;
+use crate::engine::file_contents_plugin::FileContentsInProgress;
+use crate::engine::file_contents_plugin::RequestReadFileBytes;
 use crate::engine::file_metadata_plugin::Exists;
 use crate::engine::file_metadata_plugin::IsFile;
 use crate::engine::file_metadata_plugin::NotExists;
@@ -21,7 +20,6 @@ impl Plugin for MftFilePlugin {
         app.register_type::<LoadCachedMftFilesGoal>();
         app.register_type::<IsMftFile>();
         app.register_type::<IsNotMftFile>();
-        app.register_type::<MftFileBytesSink>();
         app.init_resource::<LoadCachedMftFilesGoal>();
         app.add_systems(
             Update,
@@ -29,9 +27,9 @@ impl Plugin for MftFilePlugin {
                 request_metadata_for_sync_dir_children,
                 mark_mft_files,
                 queue_mft_file_reads,
+                load_mft_files_from_contents,
             ),
         );
-        app.add_observer(load_mft_file_on_bytes_received);
     }
 }
 
@@ -56,12 +54,6 @@ pub struct IsMftFile;
 #[derive(Component, Debug, Reflect, Default)]
 #[reflect(Component)]
 pub struct IsNotMftFile;
-
-#[derive(Component, Debug, Reflect)]
-#[reflect(Component)]
-struct MftFileBytesSink {
-    source: Entity,
-}
 
 pub fn request_metadata_for_sync_dir_children(
     goal: Res<LoadCachedMftFilesGoal>,
@@ -145,9 +137,9 @@ pub fn queue_mft_file_reads(
             With<PathBufHolder>,
             With<Exists>,
             With<IsFile>,
-            Without<BytesHolder>,
-            Without<BytesReceiver>,
-            Without<WriteBytesToSinkRequested>,
+            Without<FileContents>,
+            Without<FileContentsInProgress>,
+            Without<RequestReadFileBytes>,
         ),
     >,
 ) {
@@ -157,84 +149,31 @@ pub fn queue_mft_file_reads(
 
     for entity in &candidates {
         debug!(?entity, "Queueing read bytes request for MFT file");
-        let sink = commands
-            .spawn((BytesReceiver, MftFileBytesSink { source: entity }))
-            .id();
-        commands
-            .entity(entity)
-            .insert(WriteBytesToSinkRequested(sink));
+        commands.entity(entity).insert(RequestReadFileBytes);
     }
 }
 
-fn load_mft_file_on_bytes_received(
-    trigger: On<BytesReceived>,
+fn load_mft_files_from_contents(
     goal: Res<LoadCachedMftFilesGoal>,
     mut commands: Commands,
-    sinks: Query<&MftFileBytesSink>,
-    is_mft_entities: Query<(), With<IsMftFile>>,
-    bytes: Query<&BytesHolder>,
-    existing: Query<(), With<MftFile>>,
+    mut query: Query<
+        (Entity, &FileContents),
+        (With<IsMftFile>, Added<FileContents>, Without<MftFile>),
+    >,
 ) {
     if !goal.enabled {
         return;
     }
 
-    let entity = trigger.event().entity;
-
-    if let Ok(sink) = sinks.get(entity) {
-        let source = sink.source;
-        if existing.get(source).is_ok() {
-            return;
-        }
-
-        let Ok(bytes_holder) = bytes.get(entity) else {
-            warn!(?entity, "BytesReceived sink missing BytesHolder");
-            return;
-        };
-
-        let bytes_clone = bytes_holder.bytes.clone();
-        let bytes_vec = bytes_holder.bytes.to_vec();
-        commands
-            .entity(source)
-            .insert(BytesHolder { bytes: bytes_clone });
-
-        match MftFile::from_bytes(bytes_vec) {
+    for (entity, contents) in query.iter_mut() {
+        match MftFile::from_bytes(contents.bytes().clone()) {
             Ok(mft) => {
-                info!(?source, mft = ?mft, "Constructed MFT from cached bytes");
-                commands.entity(source).insert(mft);
+                info!(?entity, "Constructed MFT from cached bytes");
+                commands.entity(entity).insert(mft);
             }
             Err(error) => {
-                warn!(?source, ?error, "Failed to construct MFT from bytes");
+                warn!(?entity, ?error, "Failed to construct MFT from bytes");
             }
-        }
-
-        commands
-            .entity(entity)
-            .remove::<MftFileBytesSink>()
-            .remove::<BytesHolder>();
-
-        return;
-    }
-
-    if is_mft_entities.get(entity).is_err() {
-        return;
-    }
-    if existing.get(entity).is_ok() {
-        return;
-    }
-
-    let Ok(bytes_holder) = bytes.get(entity) else {
-        warn!(?entity, "BytesReceived for MFT entity without BytesHolder");
-        return;
-    };
-
-    match MftFile::from_bytes(bytes_holder.bytes.to_vec()) {
-        Ok(mft) => {
-            info!(?entity, mft = ?mft, "Constructed MFT from cached bytes");
-            commands.entity(entity).insert(mft);
-        }
-        Err(error) => {
-            warn!(?entity, ?error, "Failed to construct MFT from bytes");
         }
     }
 }

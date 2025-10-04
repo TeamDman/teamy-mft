@@ -1,17 +1,18 @@
 pub mod assets;
-pub mod bytes_plugin;
 pub mod cleanup_plugin;
 pub mod construction;
 pub mod directory_children_plugin;
 pub mod egui_plugin;
-pub mod file_bytes_plugin;
+pub mod expected_file_contents_plugin;
+pub mod file_contents_plugin;
+pub mod file_contents_refresh_plugin;
 pub mod file_metadata_plugin;
+pub mod file_text_plugin;
 pub mod mft_file_brick_plugin;
 pub mod mft_file_overview_window_plugin;
 pub mod mft_file_plugin;
 pub mod pathbuf_holder_plugin;
 pub mod persistence_plugin;
-pub mod predicate;
 pub mod primary_window_plugin;
 pub mod run;
 #[cfg(debug_assertions)]

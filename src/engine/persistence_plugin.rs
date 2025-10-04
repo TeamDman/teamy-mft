@@ -1,9 +1,7 @@
-use crate::engine::bytes_plugin::BytesHolder;
-use crate::engine::bytes_plugin::BytesReceived;
-use crate::engine::bytes_plugin::BytesReceiver;
-use crate::engine::bytes_plugin::CleanupOnBytesReceive;
-use crate::engine::bytes_plugin::CleanupOnBytesSent;
-use crate::engine::bytes_plugin::WriteBytesToSinkRequested;
+use crate::engine::file_contents_plugin::FileContents;
+use crate::engine::file_contents_plugin::FileContentsInProgress;
+use crate::engine::file_contents_plugin::RequestReadFileBytes;
+use crate::engine::file_contents_plugin::RequestWriteFileBytes;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use bevy::asset::ron;
 use bevy::asset::ron::ser::PrettyConfig;
@@ -48,7 +46,8 @@ impl<T: Persistable> Plugin for PersistencePlugin<T> {
         app.add_systems(Update, autosave_initiator::<T>);
         app.add_systems(Update, mark_autosave::<T>);
         app.add_systems(Update, autoload_initiator::<T>);
-        app.add_observer(autoload_completer::<T>);
+        app.add_systems(Update, cleanup_persistence_file_requests::<T>);
+        app.add_systems(Update, autoload_completer::<T>);
     }
 }
 
@@ -152,8 +151,8 @@ pub struct PersistenceLoaded<T: Persistable> {
     pub property: PersistenceProperty<T>,
 }
 
-/// Component that tracks which entity is waiting for the bytes being loaded.
-/// This is placed on the BytesReceiver entity to link it back to the waiting entity.
+/// Component that tracks which entity is waiting for the file contents being loaded.
+/// This is placed on the loader entity to link it back to the waiting entity.
 #[derive(Debug, Component, Reflect)]
 pub struct PersistenceLoadWaiter<T: Persistable> {
     pub waiter_entity: Entity,
@@ -165,6 +164,22 @@ impl<T: Persistable> PersistenceLoadWaiter<T> {
     pub fn new(waiter_entity: Entity) -> Self {
         Self {
             waiter_entity,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+#[derive(Debug, Component)]
+pub struct PersistenceSaveRequest<T: Persistable> {
+    pub owner: Entity,
+    #[allow(dead_code)]
+    pub _marker: std::marker::PhantomData<T>,
+}
+
+impl<T: Persistable> PersistenceSaveRequest<T> {
+    pub fn new(owner: Entity) -> Self {
+        Self {
+            owner,
             _marker: std::marker::PhantomData,
         }
     }
@@ -267,20 +282,20 @@ pub fn autosave_initiator<T: Persistable>(
 
             let mut bytes = Vec::new();
             prop.value.serialize(&mut bytes, &registry.read())?;
-            let bytes = Bytes::from(bytes);
 
-            let sink = commands
-                .spawn((
-                    Name::new(format!("Autosave sink - {}", output_file_path.display())),
-                    PathBufHolder::new(output_file_path.clone()),
-                    CleanupOnBytesReceive, // Mark for cleanup when bytes are received
-                ))
-                .id();
+            debug!(
+                ?entity,
+                ?key,
+                ?output_file_path,
+                "Spawning persistence write request"
+            );
+
             commands.spawn((
-                Name::new(format!("Autosave source - {}", output_file_path.display())),
-                BytesHolder { bytes },
-                WriteBytesToSinkRequested(sink),
-                CleanupOnBytesSent, // Mark for cleanup when bytes are sent
+                Name::new(format!("Autosave - {}", output_file_path.display())),
+                PathBufHolder::new(output_file_path.clone()),
+                FileContents::new(Bytes::from(bytes)),
+                RequestWriteFileBytes,
+                PersistenceSaveRequest::<T>::new(entity),
             ));
 
             commands
@@ -341,25 +356,11 @@ pub fn autoload_initiator<T: Persistable>(
                 "Starting autoload property"
             );
 
-            // Create a BytesReceiver entity that will hold the file contents
-            let bytes_receiver = commands
-                .spawn((
-                    Name::new(format!(
-                        "Autoload bytes receiver - {}",
-                        input_file_path.display()
-                    )),
-                    BytesReceiver,
-                    PersistenceLoadWaiter::<T>::new(entity), // Track which entity is waiting
-                    CleanupOnBytesReceive, // Mark for cleanup when bytes are received
-                ))
-                .id();
-
-            // Create a PathBufHolder entity as the source
             commands.spawn((
-                Name::new(format!("Autoload source - {}", input_file_path.display())),
-                PathBufHolder::new(input_file_path),
-                WriteBytesToSinkRequested(bytes_receiver),
-                CleanupOnBytesSent, // Mark for cleanup when bytes are sent
+                Name::new(format!("Autoload - {}", input_file_path.display())),
+                PathBufHolder::new(input_file_path.clone()),
+                RequestReadFileBytes,
+                PersistenceLoadWaiter::<T>::new(entity),
             ));
 
             commands
@@ -371,62 +372,73 @@ pub fn autoload_initiator<T: Persistable>(
 }
 
 pub fn autoload_completer<T: Persistable>(
-    trigger: On<BytesReceived>,
-    sinks: Query<(&BytesHolder, &PersistenceLoadWaiter<T>)>,
-    waiter: Query<&PersistenceKey<T>, With<PersistenceLoad<T>>>,
     mut commands: Commands,
+    loaders: Query<(Entity, &FileContents, &PersistenceLoadWaiter<T>), Added<FileContents>>,
+    waiter: Query<&PersistenceKey<T>, With<PersistenceLoad<T>>>,
     registry: Res<AppTypeRegistry>,
 ) {
-    let sink = trigger.event().entity;
-    let Ok((sink_bytes, load_waiter)) = sinks.get(sink) else {
-        return;
-    };
-
-    debug!(
-        ?sink,
-        len = sink_bytes.bytes.len(),
-        "BytesReceived for autoload"
-    );
-
-    // Get the entity that's waiting for this specific data
-    let waiter_entity = load_waiter.waiter_entity;
-    let Ok(waiter_key) = waiter.get(waiter_entity) else {
-        warn!(
-            ?waiter_entity,
-            ?sink,
-            "Waiter entity no longer exists or doesn't have PersistenceLoad component"
-        );
-        return;
-    };
-
-    debug!(?waiter_entity, ?waiter_key, "Deserializing loaded bytes");
-
-    let mut cursor = std::io::Cursor::new(sink_bytes.bytes.as_ref());
-    match T::deserialize(&mut cursor, &registry.read()) {
-        Ok(value) => {
-            let property = PersistenceProperty::new(value);
-
-            // Trigger the loaded event
-            commands.trigger(PersistenceLoaded {
-                entity: waiter_entity,
-                property: property.clone(),
-            });
-
-            // Remove the load marker
-            let mut waiter = commands.entity(waiter_entity);
-            waiter.remove::<PersistenceLoad<T>>();
-            waiter.remove::<PersistenceLoadInProgress<T>>();
-            waiter.insert(property); // not sure why autosave is happening after launch still :(
-
-            info!(?waiter_entity, ?waiter_key, "Autoload complete");
-        }
-        Err(error) => {
+    for (loader_entity, contents, load_waiter) in loaders.iter() {
+        let waiter_entity = load_waiter.waiter_entity;
+        let Ok(waiter_key) = waiter.get(waiter_entity) else {
             warn!(
                 ?waiter_entity,
-                ?waiter_key,
-                ?error,
-                "Failed to deserialize for key"
+                ?loader_entity,
+                "Waiter entity missing PersistenceLoad component during autoload"
             );
+            commands.entity(loader_entity).despawn();
+            continue;
+        };
+
+        debug!(
+            ?waiter_entity,
+            ?waiter_key,
+            "Deserializing loaded file contents"
+        );
+
+        let mut cursor = std::io::Cursor::new(contents.bytes().as_ref());
+        match T::deserialize(&mut cursor, &registry.read()) {
+            Ok(value) => {
+                let property = PersistenceProperty::new(value);
+
+                commands.trigger(PersistenceLoaded {
+                    entity: waiter_entity,
+                    property: property.clone(),
+                });
+
+                let mut waiter_commands = commands.entity(waiter_entity);
+                waiter_commands.remove::<PersistenceLoad<T>>();
+                waiter_commands.remove::<PersistenceLoadInProgress<T>>();
+                waiter_commands.insert(property);
+
+                info!(?waiter_entity, ?waiter_key, "Autoload complete");
+            }
+            Err(error) => {
+                warn!(
+                    ?waiter_entity,
+                    ?waiter_key,
+                    ?error,
+                    "Failed to deserialize persisted file contents"
+                );
+            }
         }
+
+        commands.entity(loader_entity).despawn();
+    }
+}
+
+pub fn cleanup_persistence_file_requests<T: Persistable>(
+    mut commands: Commands,
+    requests: Query<
+        (Entity, &PersistenceSaveRequest<T>),
+        (
+            Without<FileContentsInProgress>,
+            Without<RequestWriteFileBytes>,
+            Without<RequestReadFileBytes>,
+        ),
+    >,
+) {
+    for (entity, request) in &requests {
+        debug!(?entity, owner = ?request.owner, "Cleaning up persistence file request entity");
+        commands.entity(entity).despawn();
     }
 }
