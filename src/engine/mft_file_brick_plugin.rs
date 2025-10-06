@@ -48,6 +48,10 @@ pub fn on_mft_brick_click(
     mfts: Query<(), With<MftFile>>,
     names: Query<&Name>,
 ) {
+    if trigger.button != PointerButton::Primary {
+        return;
+    }
+
     if mfts.get(trigger.event_target()).is_ok() {
         if let Ok(name) = names.get(trigger.event_target()) {
             info!("{}", name.as_str());

@@ -44,6 +44,10 @@ pub fn on_sync_dir_click(
     sync_dirs: Query<(), With<SyncDirectory>>,
     mut goal: ResMut<LoadCachedMftFilesGoal>,
 ) {
+    if trigger.button != PointerButton::Primary {
+        return;
+    }
+
     if sync_dirs.get(trigger.event_target()).is_ok() && !goal.enabled {
         goal.enabled = true;
         info!("Enabled LoadCachedMftFilesGoal by clicking sync directory brick");
