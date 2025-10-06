@@ -6,9 +6,10 @@
 //! Unlike other examples, which demonstrate an application, this demonstrates a plugin library.
 
 use bevy::{
+    camera::RenderTarget,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
     prelude::*,
-    window::{CursorGrabMode, CursorOptions},
+    window::{CursorGrabMode, CursorOptions, WindowRef},
 };
 use std::{f32::consts::*, fmt};
 
@@ -126,18 +127,19 @@ Freecam Controls:
 
 fn run_camera_controller(
     time: Res<Time<Real>>,
-    mut windows: Query<(&Window, &mut CursorOptions)>,
+    windows: Query<(Entity, &Window)>,
+    mut cursor_options_query: Query<&mut CursorOptions>,
     accumulated_mouse_motion: Res<AccumulatedMouseMotion>,
     accumulated_mouse_scroll: Res<AccumulatedMouseScroll>,
     mouse_button_input: Res<ButtonInput<MouseButton>>,
     key_input: Res<ButtonInput<KeyCode>>,
     mut toggle_cursor_grab: Local<bool>,
     mut mouse_cursor_grab: Local<bool>,
-    mut query: Query<(&mut Transform, &mut CameraController), With<Camera>>,
+    mut query: Query<(Entity, &mut Transform, &mut CameraController, &Camera)>,
 ) {
     let dt = time.delta_secs();
 
-    let Ok((mut transform, mut controller)) = query.single_mut() else {
+    let Ok((entity, mut transform, mut controller, camera)) = query.single_mut() else {
         return;
     };
 
@@ -146,9 +148,94 @@ fn run_camera_controller(
         controller.yaw = yaw;
         controller.pitch = pitch;
         controller.initialized = true;
-        info!("{}", *controller);
+        info!(entity = ?entity, "{}", *controller);
     }
     if !controller.enabled {
+        return;
+    }
+
+    let target_window_entity = match &camera.target {
+        RenderTarget::Window(window_ref) => match window_ref {
+            WindowRef::Entity(window_entity) => Some(*window_entity),
+            WindowRef::Primary => windows.iter().next().map(|(entity, _)| entity),
+        },
+        _ => None,
+    };
+
+    let mut window_focused = true;
+    if let Some(window_entity) = target_window_entity {
+        if let Some((_, window)) = windows.iter().find(|(entity_id, _)| *entity_id == window_entity)
+        {
+            window_focused = window.focused;
+        } else {
+            debug!(controller = ?entity, window = ?window_entity, "Camera target window not found in query");
+        }
+    }
+
+    let mut cursor_grab_change = false;
+
+    if key_input.just_pressed(controller.keyboard_key_toggle_cursor_grab) {
+        *toggle_cursor_grab = !*toggle_cursor_grab;
+        cursor_grab_change = true;
+        debug!(controller = ?entity, toggle = *toggle_cursor_grab, "Toggled cursor grab via keyboard");
+    }
+
+    let pressed_now = mouse_button_input.pressed(controller.mouse_key_cursor_grab);
+    if pressed_now != *mouse_cursor_grab {
+        *mouse_cursor_grab = pressed_now;
+        cursor_grab_change = true;
+        debug!(
+            controller = ?entity,
+            button = ?controller.mouse_key_cursor_grab,
+            pressed = pressed_now,
+            "Mouse grab button state changed"
+        );
+    }
+
+    if !window_focused {
+        if *toggle_cursor_grab || *mouse_cursor_grab {
+            debug!(controller = ?entity, "Target window lost focus; resetting grab state");
+        }
+        if *toggle_cursor_grab {
+            *toggle_cursor_grab = false;
+            cursor_grab_change = true;
+        }
+        if *mouse_cursor_grab {
+            *mouse_cursor_grab = false;
+            cursor_grab_change = true;
+        }
+    }
+
+    let cursor_grab = *toggle_cursor_grab || *mouse_cursor_grab;
+
+    if cursor_grab_change {
+        if let Some(window_entity) = target_window_entity {
+            match cursor_options_query.get_mut(window_entity) {
+                Ok(mut options) => {
+                    if cursor_grab && window_focused {
+                        options.grab_mode = CursorGrabMode::Locked;
+                        options.visible = false;
+                        debug!(controller = ?entity, window = ?window_entity, "Locked cursor to window");
+                    } else {
+                        options.grab_mode = CursorGrabMode::None;
+                        options.visible = true;
+                        debug!(controller = ?entity, window = ?window_entity, "Released cursor lock");
+                    }
+                }
+                Err(_) => {
+                    debug!(
+                        controller = ?entity,
+                        window = ?window_entity,
+                        "Failed to access CursorOptions for target window"
+                    );
+                }
+            }
+        } else {
+            debug!(controller = ?entity, "Camera target is not a window; skipping cursor updates");
+        }
+    }
+
+    if !window_focused {
         return;
     }
 
@@ -182,23 +269,8 @@ fn run_camera_controller(
         axis_input.y -= 1.0;
     }
 
-    let mut cursor_grab_change = false;
-    if key_input.just_pressed(controller.keyboard_key_toggle_cursor_grab) {
-        *toggle_cursor_grab = !*toggle_cursor_grab;
-        cursor_grab_change = true;
-    }
-    if mouse_button_input.just_pressed(controller.mouse_key_cursor_grab) {
-        *mouse_cursor_grab = true;
-        cursor_grab_change = true;
-    }
-    if mouse_button_input.just_released(controller.mouse_key_cursor_grab) {
-        *mouse_cursor_grab = false;
-        cursor_grab_change = true;
-    }
-    let cursor_grab = *mouse_cursor_grab || *toggle_cursor_grab;
-
-    // Update velocity
     if axis_input != Vec3::ZERO {
+        debug!(controller = ?entity, axis = ?axis_input, "Applying movement input");
         let max_speed = if key_input.pressed(controller.key_run) {
             controller.run_speed
         } else {
@@ -220,25 +292,6 @@ fn run_camera_controller(
         transform.translation += controller.velocity.x * dt * right
             + controller.velocity.y * dt * Vec3::Y
             + controller.velocity.z * dt * forward;
-    }
-
-    // Handle cursor grab
-    if cursor_grab_change {
-        if cursor_grab {
-            for (window, mut cursor_options) in &mut windows {
-                if !window.focused {
-                    continue;
-                }
-
-                cursor_options.grab_mode = CursorGrabMode::Locked;
-                cursor_options.visible = false;
-            }
-        } else {
-            for (_, mut cursor_options) in &mut windows {
-                cursor_options.grab_mode = CursorGrabMode::None;
-                cursor_options.visible = true;
-            }
-        }
     }
 
     // Handle mouse input

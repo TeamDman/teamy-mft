@@ -9,7 +9,7 @@ impl Plugin for MyEguiPlugin {
         app.add_plugins(EguiPlugin::default());
         app.add_systems(Startup, |mut config: ResMut<EguiGlobalSettings>| {
             config.auto_create_primary_context = false;
-            config.enable_absorb_bevy_input_system = true
+            // config.enable_absorb_bevy_input_system = true
         });
     }
 }
