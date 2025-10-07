@@ -6,6 +6,7 @@ use crate::engine::persistence_plugin::PersistenceLoad;
 use crate::engine::persistence_plugin::PersistenceLoaded;
 use crate::engine::persistence_plugin::PersistencePlugin;
 use crate::engine::persistence_plugin::PersistenceProperty;
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::window::WindowIcon;
@@ -82,6 +83,8 @@ fn spawn_overview_window_if_missing(
             },
             Camera3d::default(),
             CameraController::default(),
+            // Ensure this camera renders the default world layer (0) and the label layer (1)
+            RenderLayers::layer(0).with(1),
             Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
         ));
 
