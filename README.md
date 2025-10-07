@@ -82,3 +82,5 @@ https://github.com/bahamas10/ysap/blob/main/code/2025-09-26-what-is-an-inode/mak
 [Pavel Yosifovich - NTFS Alternate Streams](https://www.youtube.com/watch?v=61rGOwV-Fk8)
 
 https://flatcap.github.io/linux-ntfs/ntfs/index.html
+
+[Wookash Podcast - File Pilot: Design Meets Performance | Vjekoslav Krajačić](https://www.youtube.com/watch?v=pS2oLNR1PO8)
