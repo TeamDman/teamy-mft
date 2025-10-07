@@ -5,13 +5,16 @@
 //!
 //! Unlike other examples, which demonstrate an application, this demonstrates a plugin library.
 
-use bevy::{
-    camera::RenderTarget,
-    input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit},
-    prelude::*,
-    window::{CursorGrabMode, CursorOptions, WindowRef},
-};
-use std::{f32::consts::*, fmt};
+use bevy::camera::RenderTarget;
+use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::AccumulatedMouseScroll;
+use bevy::input::mouse::MouseScrollUnit;
+use bevy::prelude::*;
+use bevy::window::CursorGrabMode;
+use bevy::window::CursorOptions;
+use bevy::window::WindowRef;
+use std::f32::consts::*;
+use std::fmt;
 
 /// A freecam-style camera controller plugin.
 pub struct CameraControllerPlugin;
@@ -164,7 +167,9 @@ fn run_camera_controller(
 
     let mut window_focused = true;
     if let Some(window_entity) = target_window_entity {
-        if let Some((_, window)) = windows.iter().find(|(entity_id, _)| *entity_id == window_entity)
+        if let Some((_, window)) = windows
+            .iter()
+            .find(|(entity_id, _)| *entity_id == window_entity)
         {
             window_focused = window.focused;
         } else {

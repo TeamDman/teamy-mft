@@ -1,18 +1,24 @@
-use bevy::{
-    app::{App, Plugin, Update},
-    asset::{load_internal_asset, uuid_handle, Asset, Assets, Handle},
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    ecs::system::{Res, ResMut},
-    reflect::TypePath,
-    render::{
-        render_resource::{AsBindGroup, ShaderType},
-        storage::ShaderStorageBuffer,
-    },
-    shader::{Shader, ShaderRef},
-};
-use bevy_ui_render::prelude::{UiMaterial, UiMaterialPlugin};
-
 use super::FpsWindowConfig;
+use bevy::app::App;
+use bevy::app::Plugin;
+use bevy::app::Update;
+use bevy::asset::Asset;
+use bevy::asset::Assets;
+use bevy::asset::Handle;
+use bevy::asset::load_internal_asset;
+use bevy::asset::uuid_handle;
+use bevy::diagnostic::DiagnosticsStore;
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
+use bevy::ecs::system::Res;
+use bevy::ecs::system::ResMut;
+use bevy::reflect::TypePath;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::ShaderType;
+use bevy::render::storage::ShaderStorageBuffer;
+use bevy::shader::Shader;
+use bevy::shader::ShaderRef;
+use bevy_ui_render::prelude::UiMaterial;
+use bevy_ui_render::prelude::UiMaterialPlugin;
 
 const FRAME_TIME_GRAPH_SHADER_HANDLE: Handle<Shader> =
     uuid_handle!("d85866b5-5f01-4c68-9a47-854d3141d689");

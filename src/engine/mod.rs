@@ -20,7 +20,7 @@ pub mod quit_button_window_plugin;
 pub mod run;
 #[cfg(debug_assertions)]
 pub mod scenarios;
-pub mod sync_dir_plugin;
 pub mod sync_dir_brick_plugin;
+pub mod sync_dir_plugin;
 pub mod timeout_plugin;
 pub mod world_inspector_plugin;

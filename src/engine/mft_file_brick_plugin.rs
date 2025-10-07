@@ -1,6 +1,6 @@
+use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::mft::mft_file::MftFile;
 use bevy::prelude::*;
-use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 
 #[derive(Component)]
 pub struct BaseMaterial(Handle<StandardMaterial>);

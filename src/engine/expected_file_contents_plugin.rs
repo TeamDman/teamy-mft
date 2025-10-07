@@ -62,10 +62,7 @@ fn evaluate_expected_on_file_contents_changes(
 }
 
 fn evaluate_expected_on_expected_changes(
-    entities: Query<
-        Entity,
-        Or<(Changed<ExpectedFileContents>, Added<ExpectedFileContents>)>,
-    >,
+    entities: Query<Entity, Or<(Changed<ExpectedFileContents>, Added<ExpectedFileContents>)>>,
     expected_query: Query<&ExpectedFileContents>,
     file_contents: Query<&FileContents>,
     mut commands: Commands,

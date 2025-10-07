@@ -1,6 +1,6 @@
+use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::prelude::*;
-use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 
 #[derive(Component)]
 pub struct BaseMaterial(Handle<StandardMaterial>);

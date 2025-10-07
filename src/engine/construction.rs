@@ -7,10 +7,13 @@ use crate::engine::file_contents_plugin::FileContentsPlugin;
 use crate::engine::file_contents_refresh_plugin::FileContentsRefreshPlugin;
 use crate::engine::file_metadata_plugin::FileMetadataPlugin;
 use crate::engine::file_text_plugin::FileTextPlugin;
+use crate::engine::fps_window_plugin::FpsWindowConfig;
+use crate::engine::fps_window_plugin::FpsWindowIconConfig;
+use crate::engine::fps_window_plugin::FpsWindowPlugin;
+use crate::engine::fps_window_plugin::FrameTimeGraphConfig;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
-use crate::engine::fps_window_plugin::{FpsWindowConfig, FpsWindowPlugin, FrameTimeGraphConfig};
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
@@ -21,7 +24,8 @@ use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
-use bevy::window::{ExitCondition, WindowResolution};
+use bevy::window::ExitCondition;
+use bevy::window::WindowResolution;
 use eyre::Result;
 use tracing::debug;
 
@@ -116,6 +120,7 @@ impl AppConstructionExt for App {
                     },
                     window_title: "FPS Overlay".to_owned(),
                     window_resolution: WindowResolution::new(640, 360),
+                    icon_config: FpsWindowIconConfig::default(),
                 },
             });
             app.add_systems(Startup, |mut commands: Commands| {

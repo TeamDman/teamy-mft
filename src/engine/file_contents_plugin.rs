@@ -115,9 +115,7 @@ fn spawn_file_read_tasks(
         let path: PathBuf = holder.to_path_buf();
         let pool = IoTaskPool::get();
         let read_path = path.clone();
-        let task = pool.spawn(async move {
-            std::fs::read(&read_path).map(Bytes::from)
-        });
+        let task = pool.spawn(async move { std::fs::read(&read_path).map(Bytes::from) });
         debug!(?entity, ?path, "Spawning file read task");
         commands
             .entity(entity)
