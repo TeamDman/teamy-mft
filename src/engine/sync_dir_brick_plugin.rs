@@ -8,6 +8,12 @@ pub struct BaseMaterial(Handle<StandardMaterial>);
 #[derive(Component)]
 pub struct HoverMaterial(Handle<StandardMaterial>);
 
+#[derive(Component)]
+pub struct MftBrickContainer;
+
+#[derive(Component)]
+pub struct MftBrickContainerRef(pub Entity);
+
 pub struct SyncDirBrickPlugin;
 
 impl Plugin for SyncDirBrickPlugin {
@@ -24,11 +30,32 @@ pub fn spawn_brick_for_new_sync_dirs(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    names: Query<&Name>,
 ) {
     let base_matl = materials.add(Color::srgb(1.0, 1.0, 0.0)); // Yellow
     let hover_matl = materials.add(Color::srgb(0.0, 1.0, 1.0)); // Cyan
+
+    let container_name = names
+        .get(sync_dir.entity)
+        .cloned()
+        .unwrap_or_else(|_| Name::new("MFT Brick Container"));
+
+    let container = commands
+        .spawn((
+            container_name,
+            MftBrickContainer,
+            Transform::default(),
+            GlobalTransform::default(),
+            Visibility::default(),
+            InheritedVisibility::default(),
+        ))
+        .id();
+
+    commands
+        .entity(sync_dir.entity)
+        .insert(MftBrickContainerRef(container));
+
     commands.entity(sync_dir.entity).insert((
-        Name::new("Sync Directory Brick"),
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(base_matl.clone()),
         BaseMaterial(base_matl),

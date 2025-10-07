@@ -1,5 +1,8 @@
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
+use crate::engine::sync_dir_brick_plugin::MftBrickContainerRef;
 use crate::mft::mft_file::MftFile;
+use bevy::ecs::relationship::Relationship;
+use bevy::prelude::ChildOf;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -25,20 +28,49 @@ pub fn spawn_brick_for_new_mft_files(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     holders: Query<&PathBufHolder>,
-    existing: Query<Entity, With<MftFile>>,
+    existing: Query<&ChildOf, With<MftFile>>,
+    parents: Query<&ChildOf>,
+    containers: Query<&MftBrickContainerRef>,
 ) {
     let holder = holders.get(mft_file.entity).unwrap();
     let name = format!("MFT File: {}", holder.as_path().display());
     let base_matl = materials.add(Color::srgba(255., 181. / 255., 0., 102. / 255.));
     let hover_matl = materials.add(Color::srgba(255., 200. / 255., 0., 150. / 255.)); // Brighter and more opaque
-    let x = existing.iter().count() as f32;
+
+    let parent = match parents.get(mft_file.entity) {
+        Ok(parent) => parent,
+        Err(_) => {
+            warn!(entity=?mft_file.entity, "MFT file entity missing Parent when spawning brick");
+            return;
+        }
+    };
+
+    let container = match containers.get(parent.get()) {
+        Ok(container) => container.0,
+        Err(_) => {
+            warn!(
+                entity=?mft_file.entity,
+                parent=?parent.get(),
+                "Sync directory missing MftBrickContainerRef; skipping brick spawn"
+            );
+            return;
+        }
+    };
+
+    let x = existing
+        .iter()
+        .filter(|parent| parent.get() == container)
+        .count() as f32;
+
+    commands.entity(container).add_child(mft_file.entity);
+
     commands.entity(mft_file.entity).insert((
         Name::new(name),
         Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
         MeshMaterial3d(base_matl.clone()),
         BaseMaterial(base_matl),
         HoverMaterial(hover_matl),
-        Transform::from_xyz(x, 0.5, 0.0),
+        Transform::from_xyz(x, 1.5, 0.0),
         Pickable::default(),
     ));
 }
