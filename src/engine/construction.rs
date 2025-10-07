@@ -10,6 +10,7 @@ use crate::engine::file_text_plugin::FileTextPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
+use crate::engine::fps_window_plugin::{FpsWindowConfig, FpsWindowPlugin, FrameTimeGraphConfig};
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
@@ -17,13 +18,10 @@ use crate::engine::sync_dir_brick_plugin::SyncDirBrickPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use bevy::dev_tools::fps_overlay::FpsOverlayConfig;
-use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
-use bevy::dev_tools::fps_overlay::FrameTimeGraphConfig;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
-use bevy::window::ExitCondition;
+use bevy::window::{ExitCondition, WindowResolution};
 use eyre::Result;
 use tracing::debug;
 
@@ -100,29 +98,24 @@ impl AppConstructionExt for App {
             app.add_plugins(MyWorldInspectorPlugin);
             app.add_plugins(MftFileBrickPlugin);
             app.add_plugins(SyncDirBrickPlugin);
-            app.add_plugins(FpsOverlayPlugin {
-                config: FpsOverlayConfig {
+            app.add_plugins(FpsWindowPlugin {
+                config: FpsWindowConfig {
                     text_config: TextFont {
-                        // Here we define size of our overlay
                         font_size: 42.0,
-                        // If we want, we can use a custom font
                         font: default(),
-                        // We could also disable font smoothing,
                         font_smoothing: FontSmoothing::default(),
                         ..default()
                     },
-                    // We can also change color of the overlay
                     text_color: Color::srgb(0.0, 1.0, 0.0),
-                    // We can also set the refresh interval for the FPS counter
                     refresh_interval: core::time::Duration::from_millis(100),
                     enabled: true,
                     frame_time_graph_config: FrameTimeGraphConfig {
                         enabled: true,
-                        // The minimum acceptable fps
                         min_fps: 30.0,
-                        // The target fps
                         target_fps: 144.0,
                     },
+                    window_title: "FPS Overlay".to_owned(),
+                    window_resolution: WindowResolution::new(640, 360),
                 },
             });
             app.add_systems(Startup, |mut commands: Commands| {
