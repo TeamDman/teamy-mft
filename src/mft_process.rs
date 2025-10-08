@@ -73,8 +73,8 @@ pub fn process_mft_file(
         "MFT {}: size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
         mft_file_path.display(),
         mft_file.size().get_human(),
-        mft_file.entry_count().separate_with_commas(),
-        mft_file.entry_size().get_human(),
+        mft_file.record_count().separate_with_commas(),
+        mft_file.record_size().get_human(),
         file_names.x30_count().separate_with_commas(),
         resolved_entries.separate_with_commas(),
         scan_elapsed.get_human(),
@@ -85,12 +85,12 @@ pub fn process_mft_file(
     // aggregate performance statistics
     let total_size = uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64);
     let total_data_rate = InformationRate::from(total_size / elapsed); // overall throughput
-    let entries_rate = Ratio::new::<ratio>(mft_file.entry_count() as f64) / elapsed;
+    let entries_rate = Ratio::new::<ratio>(mft_file.record_count() as f64) / elapsed;
     debug!(
         drive_letter = &drive_letter,
         "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file_path.display(),
-        mft_file.entry_count().separate_with_commas(),
+        mft_file.record_count().separate_with_commas(),
         elapsed.get_human(),
         mft_file.size().get_human(),
         total_data_rate.get_human(),

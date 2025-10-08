@@ -26,8 +26,8 @@ impl Debug for MftFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MftFile")
             .field("size", &self.size().get_human())
-            .field("entry_size", &self.entry_size().get_human())
-            .field("entry_count", &self.entry_count().separate_with_commas())
+            .field("entry_size", &self.record_size().get_human())
+            .field("entry_count", &self.record_count().separate_with_commas())
             .finish()
     }
 }
@@ -41,7 +41,7 @@ impl MftFile {
     pub fn size(&self) -> Information {
         Information::new::<byte>(self.bytes.len())
     }
-    pub fn entry_size(&self) -> Information {
+    pub fn record_size(&self) -> Information {
         if self.len() < 0x20 {
             return Information::new::<byte>(1024);
         }
@@ -53,8 +53,8 @@ impl MftFile {
             Information::new::<byte>(size)
         }
     }
-    pub fn entry_count(&self) -> usize {
-        let entry_size_bytes = self.entry_size().get::<byte>() as usize;
+    pub fn record_count(&self) -> usize {
+        let entry_size_bytes = self.record_size().get::<byte>() as usize;
         if entry_size_bytes == 0 {
             0
         } else {
@@ -102,8 +102,8 @@ impl MftFile {
             "Read {} in {:.2?}, found entry size {} bytes and {} entries",
             mft_file_size.get_human(),
             read_start.elapsed(),
-            rtn.entry_size().get::<byte>().separate_with_commas(),
-            rtn.entry_count().separate_with_commas()
+            rtn.record_size().get::<byte>().separate_with_commas(),
+            rtn.record_count().separate_with_commas()
         );
 
         Ok(rtn)
@@ -151,6 +151,6 @@ impl MftFile {
     /// (handled by `MftFile::from_bytes`/`from_path`).
     #[inline]
     pub fn iter_records(&self) -> MftRecordIter {
-        MftRecordIter::new(self.bytes.clone(), self.entry_size())
+        MftRecordIter::new(self.bytes.clone(), self.record_size())
     }
 }

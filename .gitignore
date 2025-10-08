@@ -2,3 +2,4 @@ target
 *.mft
 *.bin
 .jj
+*.tracy

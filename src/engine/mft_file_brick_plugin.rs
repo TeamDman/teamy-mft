@@ -77,17 +77,24 @@ pub fn spawn_brick_for_new_mft_files(
 
 pub fn on_mft_brick_click(
     trigger: On<Pointer<Press>>,
-    mfts: Query<(), With<MftFile>>,
-    names: Query<&Name>,
+    mfts: Query<(&MftFile, &Name)>,
+    mut commands: Commands,
 ) {
     if trigger.button != PointerButton::Primary {
         return;
     }
 
-    if mfts.get(trigger.event_target()).is_ok() {
-        if let Ok(name) = names.get(trigger.event_target()) {
-            info!("{}", name.as_str());
-        }
+    if let Ok((mft, name)) = mfts.get(trigger.event_target()) {
+        let record_count = mft.record_count();
+        info!(?name, record_count, "Clicked");
+        commands.spawn_batch(mft.iter_records().map(|record| {
+            (
+            //     Name::new(format!(
+            //     "MFT Record {}",
+            //     record.get_record_number()
+            // )),
+        )
+        }));
     }
 }
 

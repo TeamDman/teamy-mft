@@ -211,8 +211,8 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// ```
 pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
     let full: &'a [u8] = &*mft; // borrow the entire bytes buffer
-    let entry_size = mft.entry_size().get::<uom::si::information::byte>();
-    let entry_count = mft.entry_count();
+    let entry_size = mft.record_size().get::<uom::si::information::byte>();
+    let entry_count = mft.record_count();
 
     let per_thread: Vec<(Vec<FileNameRef<'a>>, Vec<(u32, usize)>)> = (0..entry_count)
         .into_par_iter()
