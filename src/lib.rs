@@ -66,7 +66,6 @@ pub fn main() -> eyre::Result<()> {
     if let Some(pid) = cli.global_args.console_pid {
         console_attach(pid)?;
     }
-    init_tracing(cli.global_args.log_level());
 
     cli.invoke()?;
     Ok(())

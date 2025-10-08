@@ -59,7 +59,10 @@ impl Plugin for MyWorldInspectorPlugin {
     fn build(&self, app: &mut App) {
         check_plugins(app, "WorldInspectorPlugin");
         app.add_plugins(DefaultInspectorConfigPlugin);
-        app.add_systems(WorldInspectorWindowEguiContextPass, ui);
+        app.add_systems(
+            WorldInspectorWindowEguiContextPass,
+            ui.run_if(|entities: Query<()>| entities.count() < 10_000),
+        );
         app.add_observer(handle_spawn_window_event);
         app.add_observer(handle_despawn_window_event);
         app.add_observer(handle_toggle_window_event);

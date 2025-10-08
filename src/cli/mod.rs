@@ -20,7 +20,7 @@ pub struct Cli {
 
 impl Cli {
     pub fn invoke(self) -> eyre::Result<()> {
-        self.command.invoke()
+        self.command.invoke(self.global_args)
     }
     pub fn display_invocation(&self) -> String {
         let mut args = self.to_args();

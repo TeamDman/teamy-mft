@@ -21,7 +21,6 @@ use crate::engine::sync_dir_brick_plugin::SyncDirBrickPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
 use bevy::window::ExitCondition;
@@ -88,7 +87,7 @@ impl AppConstructionExt for App {
                         exit_condition: ExitCondition::OnAllClosed,
                         ..default()
                     })
-                    .disable::<LogPlugin>(), // we initialized tracing already
+                    // .disable::<LogPlugin>(),
             );
             app.add_plugins(MeshPickingPlugin);
 

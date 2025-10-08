@@ -18,7 +18,9 @@ use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
 #[cfg(debug_assertions)]
 use crate::cli::command::test::TestArgs;
+use crate::cli::global_args::GlobalArgs;
 use crate::cli::to_args::ToArgs;
+use crate::init_tracing;
 use arbitrary::Arbitrary;
 use clap::Subcommand;
 use std::ffi::OsString;
@@ -54,7 +56,13 @@ impl Default for Command {
 }
 
 impl Command {
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
+        match self {
+            Command::Engine(_) => {}
+            _ => {
+                init_tracing(global_args.log_level());
+            }
+        }
         match self {
             Command::Sync(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
