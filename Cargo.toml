@@ -40,7 +40,7 @@ strum = { version = "0.27.2", features = ["derive"] }
 itertools = "0.14.0"
 humansize = "2.1.3"
 crossbeam-channel = "0.5"
-mft = { version = "0.6.1", git = "https://github.com/TeamDman/mft", branch = "teamy-mft" }
+mft = { version = "0.6.1", git = "https://github.com/TeamDman/mft", branch = "mine" }
 rustc-hash = "2.1.1"
 winstructs = "0.3.2"
 uom = { version = "0.37.0", features = [
