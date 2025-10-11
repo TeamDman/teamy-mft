@@ -87,7 +87,7 @@ pub fn on_mft_brick_click(
     if let Ok((mft, name)) = mfts.get(trigger.event_target()) {
         let record_count = mft.record_count();
         info!(?name, record_count, "Clicked");
-        commands.spawn_batch(mft.iter_records().map(|record| {
+        commands.spawn_batch(mft.iter_records().map(|_record| {
             (
             //     Name::new(format!(
             //     "MFT Record {}",
