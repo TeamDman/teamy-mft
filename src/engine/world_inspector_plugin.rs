@@ -61,12 +61,13 @@ impl Plugin for MyWorldInspectorPlugin {
         app.add_plugins(DefaultInspectorConfigPlugin);
         app.add_systems(
             WorldInspectorWindowEguiContextPass,
-            ui.run_if(|entities: Query<()>| entities.count() < 10_000),
+            ui, // .run_if(|entities: Query<()>| entities.count() < 10_000),
         );
         app.add_observer(handle_spawn_window_event);
         app.add_observer(handle_despawn_window_event);
         app.add_observer(handle_toggle_window_event);
         app.add_observer(handle_persistence_loaded);
+        app.add_observer(handle_camera_cleanup);
         app.add_systems(Startup, |mut commands: Commands| {
             // Open the window
             commands.trigger(WorldInspectorWindowEvent::SpawnWindow);
@@ -115,6 +116,21 @@ fn handle_spawn_window_event(
             debug!("World Inspector window spawned");
         } else {
             debug!("World Inspector window already exists, not spawning again");
+        }
+    }
+}
+
+/// Remove cameras for windows which no longer exist
+fn handle_camera_cleanup(
+    removed_windows: On<Remove, WorldInspectorWindow>,
+    mut commands: Commands,
+    cameras: Query<(Entity, &Camera), With<WorldInspectorWindowCamera>>,
+) {
+    for (entity, camera) in cameras.iter() {
+        if matches!(camera.target, RenderTarget::Window(WindowRef::Entity(e)) if e == removed_windows.entity)
+        {
+            commands.entity(entity).despawn();
+            info!("World Inspector window camera despawned due to window being closed");
         }
     }
 }
@@ -214,6 +230,7 @@ fn ui(world: &mut World) {
         .map(|ctx| ctx.clone())
         .collect_vec()
     {
+        let _context_span = info_span!("egui_context_ui").entered();
         let ctx = egui_context.get_mut();
         // ctx.set_zoom_factor(2.0);
         // ctx.set_pixels_per_point(2.0);
