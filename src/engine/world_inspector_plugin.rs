@@ -241,10 +241,7 @@ fn ui(world: &mut World) {
                 zoom_menu_buttons(ui);
             });
 
-            egui::ScrollArea::both().show(ui, |ui| {
-                bevy_inspector::ui_for_world(world, ui);
-                ui.allocate_space(ui.available_size());
-            });
+            bevy_inspector::ui_for_world(world, ui);
         });
     }
 }
