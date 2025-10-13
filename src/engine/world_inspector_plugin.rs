@@ -1,10 +1,5 @@
 use crate::engine::assets::textures::MyTexture;
-use crate::engine::persistence_plugin::Persistable;
-use crate::engine::persistence_plugin::PersistenceKey;
-use crate::engine::persistence_plugin::PersistenceLoad;
-use crate::engine::persistence_plugin::PersistenceLoaded;
-use crate::engine::persistence_plugin::PersistencePlugin;
-use crate::engine::persistence_plugin::PersistenceProperty;
+use crate::engine::window_persistence_plugin::PersistWindowProperties;
 use bevy::app::MainSchedulePlugin;
 use bevy::camera::RenderTarget;
 use bevy::ecs::schedule::ScheduleLabel;
@@ -40,21 +35,6 @@ pub struct WorldInspectorWindowCamera;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldInspectorWindowEguiContextPass;
 
-#[derive(Debug, Reflect, PartialEq, Clone)]
-pub struct WorldInspectorWindowPersistenceProperty {
-    pub position: WindowPosition,
-    pub resolution: WindowResolution,
-}
-impl Persistable for WorldInspectorWindowPersistenceProperty {}
-impl From<&Window> for WorldInspectorWindowPersistenceProperty {
-    fn from(window: &Window) -> Self {
-        Self {
-            position: window.position,
-            resolution: window.resolution.clone(),
-        }
-    }
-}
-
 impl Plugin for MyWorldInspectorPlugin {
     fn build(&self, app: &mut App) {
         check_plugins(app, "WorldInspectorPlugin");
@@ -66,14 +46,11 @@ impl Plugin for MyWorldInspectorPlugin {
         app.add_observer(handle_spawn_window_event);
         app.add_observer(handle_despawn_window_event);
         app.add_observer(handle_toggle_window_event);
-        app.add_observer(handle_persistence_loaded);
         app.add_observer(handle_camera_cleanup);
         app.add_systems(Startup, |mut commands: Commands| {
             // Open the window
             commands.trigger(WorldInspectorWindowEvent::SpawnWindow);
         });
-        app.add_systems(Update, handle_window_change);
-        app.add_plugins(PersistencePlugin::<WorldInspectorWindowPersistenceProperty>::default());
     }
 }
 
@@ -97,10 +74,7 @@ fn handle_spawn_window_event(
                         handle: asset_server.load(MyTexture::WorldInspectorIcon),
                     },
                     WorldInspectorWindow,
-                    PersistenceKey::<WorldInspectorWindowPersistenceProperty>::new(
-                        "preferences/world_inspector_window.ron",
-                    ),
-                    PersistenceLoad::<WorldInspectorWindowPersistenceProperty>::default(),
+                    PersistWindowProperties::new("preferences/world_inspector_window.ron"),
                 ))
                 .id();
             commands.spawn((
@@ -135,30 +109,6 @@ fn handle_camera_cleanup(
     }
 }
 
-fn handle_window_change(
-    changed: Query<
-        (
-            Entity,
-            &Window,
-            Option<&PersistenceProperty<WorldInspectorWindowPersistenceProperty>>,
-        ),
-        (Changed<Window>, With<WorldInspectorWindow>),
-    >,
-    mut commands: Commands,
-) {
-    for (entity, window, persistence) in changed.iter() {
-        let new = WorldInspectorWindowPersistenceProperty::from(window).into_persistence_property();
-        // Avoid change detection if nothing actually changed
-        if let Some(old) = persistence
-            && *old == new
-        {
-            continue;
-        }
-
-        commands.entity(entity).insert(new);
-    }
-}
-
 fn handle_despawn_window_event(
     event: On<WorldInspectorWindowEvent>,
     mut commands: Commands,
@@ -186,7 +136,6 @@ fn handle_toggle_window_event(
     }
 }
 
-/// Copied from bevy-inspector-egui/src/quick.rs
 fn check_plugins(app: &App, name: &str) {
     if !app.is_plugin_added::<MainSchedulePlugin>() {
         panic!(
@@ -205,21 +154,6 @@ fn check_plugins(app: &App, name: &str) {
         .add_plugins({name}::default())
             "#,
         );
-    }
-}
-
-fn handle_persistence_loaded(
-    event: On<PersistenceLoaded<WorldInspectorWindowPersistenceProperty>>,
-    mut windows: Query<&mut Window, With<WorldInspectorWindow>>,
-    mut commands: Commands,
-) {
-    if let Ok(mut window) = windows.get_mut(event.entity) {
-        info!(?event, "Applying loaded persistence data to window");
-        window.position = event.property.position;
-        window.resolution = event.property.resolution.clone();
-
-        // Insert the property so it can be tracked for changes
-        commands.entity(event.entity).insert(event.property.clone());
     }
 }
 

@@ -1,10 +1,5 @@
 use crate::engine::assets::textures::MyTexture;
-use crate::engine::persistence_plugin::Persistable;
-use crate::engine::persistence_plugin::PersistenceKey;
-use crate::engine::persistence_plugin::PersistenceLoad;
-use crate::engine::persistence_plugin::PersistenceLoaded;
-use crate::engine::persistence_plugin::PersistencePlugin;
-use crate::engine::persistence_plugin::PersistenceProperty;
+use crate::engine::window_persistence_plugin::PersistWindowProperties;
 use bevy::app::AppExit;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
@@ -38,23 +33,6 @@ pub struct QuitButtonWindowCamera;
 #[reflect(Component)]
 pub struct QuitButton;
 
-#[derive(Debug, Reflect, PartialEq, Clone)]
-pub struct QuitButtonWindowPersistenceProperty {
-    pub position: WindowPosition,
-    pub resolution: WindowResolution,
-}
-
-impl Persistable for QuitButtonWindowPersistenceProperty {}
-
-impl From<&Window> for QuitButtonWindowPersistenceProperty {
-    fn from(window: &Window) -> Self {
-        Self {
-            position: window.position,
-            resolution: window.resolution.clone(),
-        }
-    }
-}
-
 pub struct QuitButtonWindowPlugin;
 
 impl Plugin for QuitButtonWindowPlugin {
@@ -63,11 +41,8 @@ impl Plugin for QuitButtonWindowPlugin {
         app.register_type::<QuitButtonWindowCamera>();
         app.register_type::<QuitButton>();
         app.add_systems(Startup, spawn_window_if_missing);
-        app.add_systems(Update, handle_window_change);
         app.add_systems(Update, update_quit_button_visuals);
         app.add_systems(Update, handle_quit_button);
-        app.add_observer(handle_persistence_loaded);
-        app.add_plugins(PersistencePlugin::<QuitButtonWindowPersistenceProperty>::default());
     }
 }
 
@@ -101,10 +76,7 @@ fn spawn_window_if_missing(
             WindowIcon {
                 handle: asset_server.load(MyTexture::Icon),
             },
-            PersistenceKey::<QuitButtonWindowPersistenceProperty>::new(
-                "preferences/quit_button_window.ron",
-            ),
-            PersistenceLoad::<QuitButtonWindowPersistenceProperty>::default(),
+            PersistWindowProperties::new("preferences/quit_button_window.ron"),
         ))
         .id();
     debug!("Spawned Quit Button window");
@@ -163,48 +135,6 @@ fn spawn_window_if_missing(
             )]
         )],
     ));
-}
-
-fn handle_window_change(
-    changed: Query<
-        (
-            Entity,
-            &Window,
-            Option<&PersistenceProperty<QuitButtonWindowPersistenceProperty>>,
-        ),
-        (Changed<Window>, With<QuitButtonWindow>),
-    >,
-    mut commands: Commands,
-) {
-    for (entity, window, persistence) in changed.iter() {
-        let new = QuitButtonWindowPersistenceProperty::from(window).into_persistence_property();
-        // Avoid change detection if nothing actually changed
-        if let Some(old) = persistence
-            && *old == new
-        {
-            continue;
-        }
-
-        commands.entity(entity).insert(new);
-    }
-}
-
-fn handle_persistence_loaded(
-    event: On<PersistenceLoaded<QuitButtonWindowPersistenceProperty>>,
-    mut windows: Query<&mut Window, With<QuitButtonWindow>>,
-    mut commands: Commands,
-) {
-    if let Ok(mut window) = windows.get_mut(event.entity) {
-        info!(
-            ?event,
-            "Applying loaded persistence data to Quit Button window"
-        );
-        window.position = event.property.position;
-        window.resolution = event.property.resolution.clone();
-
-        // Insert the property so it can be tracked for changes
-        commands.entity(event.entity).insert(event.property.clone());
-    }
 }
 
 fn handle_quit_button(

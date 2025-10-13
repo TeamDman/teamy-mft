@@ -23,4 +23,5 @@ pub mod scenarios;
 pub mod sync_dir_brick_plugin;
 pub mod sync_dir_plugin;
 pub mod timeout_plugin;
+pub mod window_persistence_plugin;
 pub mod world_inspector_plugin;

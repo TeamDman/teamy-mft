@@ -20,6 +20,7 @@ use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
 use crate::engine::sync_dir_brick_plugin::SyncDirBrickPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
+use crate::engine::window_persistence_plugin::WindowPersistencePlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
@@ -73,6 +74,7 @@ impl AppConstructionExt for App {
         self.add_plugins(CleanupPlugin);
         self.add_plugins(DirectoryChildrenPlugin);
         self.add_plugins(TimeoutPlugin);
+        self.add_plugins(WindowPersistencePlugin);
         self
     }
 
