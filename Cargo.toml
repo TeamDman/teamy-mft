@@ -70,11 +70,12 @@ embed-resource = "3.0.3"
 [dev-dependencies]
 tempfile = "3.20"
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "z"
-strip = true
+# Enable for super duper release, slow as shit otherwise.
+# [profile.release]
+# codegen-units = 1
+# lto = true
+# opt-level = "z"
+# strip = true
 
 [patch."https://github.com/TeamDman/bevy"]
 # we are also patching bevy_* crates used by bevy_egui that aren't explicitly used here
