@@ -38,6 +38,7 @@ pub fn spawn_brick_for_new_sync_dirs(
     let container_name = names
         .get(sync_dir.entity)
         .cloned()
+        .map(|n| Name::new(format!("MFT Brick Container for {}", n)))
         .unwrap_or_else(|_| Name::new("MFT Brick Container"));
 
     let container = commands
