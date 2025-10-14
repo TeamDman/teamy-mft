@@ -5,12 +5,27 @@ use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
+use itertools::Itertools;
 
 #[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct BaseMaterial(Handle<StandardMaterial>);
 
 #[derive(Component, Reflect)]
+#[reflect(Component)]
 pub struct HoverMaterial(Handle<StandardMaterial>);
+
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct ComputerTowerMaterial;
+
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct ComputerTowerGeometry;
+
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct ComputerTowerNode;
 
 /// We intentionally spawn the bricks outside of the sync directory entity itself.
 /// This is because hover observers traverse the children hierarchy, so it's hard
@@ -127,5 +142,11 @@ pub fn on_sync_dir_hover_out(
 }
 
 pub fn on_scene_instance_ready(trigger: On<SceneInstanceReady>, spawner: Res<SceneSpawner>) {
-    info!(?trigger, "Scene instance ready");
+    info!(
+        ?trigger,
+        "Scene instance ready, associated with {:?}",
+        spawner
+            .iter_instance_entities(trigger.instance_id)
+            .collect_vec()
+    );
 }
