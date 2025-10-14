@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
+use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -8,6 +11,10 @@ pub struct BaseMaterial(Handle<StandardMaterial>);
 #[derive(Component)]
 pub struct HoverMaterial(Handle<StandardMaterial>);
 
+/// We intentionally spawn the bricks outside of the sync directory entity itself.
+/// This is because hover observers traverse the children hierarchy, so it's hard
+/// to tell when the sync dir brick is clicked and hovered vs the children.
+/// We keep them as children of a container to clean up the inspector hierarchy.
 #[derive(Component)]
 pub struct MftBrickContainer;
 
@@ -28,7 +35,7 @@ impl Plugin for SyncDirBrickPlugin {
 pub fn spawn_brick_for_new_sync_dirs(
     sync_dir: On<Add, SyncDirectory>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
+    asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     names: Query<&Name>,
 ) {
@@ -57,11 +64,16 @@ pub fn spawn_brick_for_new_sync_dirs(
         .insert(MftBrickContainerRef(container));
 
     commands.entity(sync_dir.entity).insert((
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        SceneRoot(
+            asset_server.load(
+                GltfAssetLabel::Scene(0)
+                    .from_asset(PathBuf::from("objects/computer-tower/computer-tower-2.glb")),
+            ),
+        ),
         MeshMaterial3d(base_matl.clone()),
         BaseMaterial(base_matl),
         HoverMaterial(hover_matl),
-        Transform::from_xyz(0.0, 0.0, 0.0),
+        Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(1.0)),
         Pickable::default(),
         Visibility::default(),
     ));

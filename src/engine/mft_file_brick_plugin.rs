@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_brick_plugin::MftBrickContainerRef;
 use crate::mft::mft_file::MftFile;
 use bevy::ecs::relationship::Relationship;
+use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::ChildOf;
 use bevy::prelude::*;
 
@@ -25,7 +28,7 @@ impl Plugin for MftFileBrickPlugin {
 pub fn spawn_brick_for_new_mft_files(
     mft_file: On<Add, MftFile>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
+    asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     holders: Query<&PathBufHolder>,
     existing: Query<&ChildOf, With<MftFile>>,
@@ -66,11 +69,13 @@ pub fn spawn_brick_for_new_mft_files(
 
     commands.entity(mft_file.entity).insert((
         Name::new(name),
-        Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+        SceneRoot(asset_server.load(
+            GltfAssetLabel::Scene(0).from_asset(PathBuf::from("objects/hard-drive/hard-drive.glb")),
+        )),
         MeshMaterial3d(base_matl.clone()),
         BaseMaterial(base_matl),
         HoverMaterial(hover_matl),
-        Transform::from_xyz(x, 1.5, 0.0),
+        Transform::from_xyz(x, 1.5, 0.0).with_scale(Vec3::splat(1.0)),
         Pickable::default(),
     ));
 }
@@ -87,13 +92,20 @@ pub fn on_mft_brick_click(
     if let Ok((mft, name)) = mfts.get(trigger.event_target()) {
         let record_count = mft.record_count();
         info!(?name, record_count, "Clicked");
-        commands.spawn_batch(mft.iter_records().map(|_record| {
+        let parent = commands
+            .spawn((
+                Name::new("MFT Records Brick Container"),
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+            ))
+            .id();
+        commands.spawn_batch(mft.iter_records().map(move |_record| {
             (
-            //     Name::new(format!(
-            //     "MFT Record {}",
-            //     record.get_record_number()
-            // )),
-        )
+                Name::new(format!("MFT Record {}", _record.get_record_number())),
+                ChildOf(parent),
+            )
         }));
     }
 }
