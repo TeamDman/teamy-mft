@@ -126,11 +126,6 @@ pub fn on_sync_dir_hover_out(
     }
 }
 
-pub fn on_scene_instance_ready(
-    trigger: On<SceneInstanceReady>,
-    names: Query<&Name>,
-) {
-    for name in names.get(trigger.entity).iter() {
-        info!(?trigger, "Scene instance ready for {}", name);
-    }
+pub fn on_scene_instance_ready(trigger: On<SceneInstanceReady>, spawner: Res<SceneSpawner>) {
+    info!(?trigger, "Scene instance ready");
 }
