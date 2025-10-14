@@ -63,6 +63,7 @@ bevy = { version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", b
 bevy_ui_render = { version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", branch = "teamy-mft" }
 bevy-inspector-egui = { git = "https://github.com/TeamDman/bevy-inspector-egui.git", branch = "teamy-mft" }
 tempfile = "3.20"
+bevy_skein = { git = "https://github.com/TeamDman/skein.git", branch = "teamy-mft" }
 
 [build-dependencies]
 embed-resource = "3.0.3"
@@ -76,6 +77,9 @@ tempfile = "3.20"
 # lto = true
 # opt-level = "z"
 # strip = true
+
+[patch."https://github.com/TeamDman/skein"]
+bevy_skein = { path = "G:/Programming/Repos/skein" }
 
 [patch."https://github.com/TeamDman/bevy"]
 # we are also patching bevy_* crates used by bevy_egui that aren't explicitly used here

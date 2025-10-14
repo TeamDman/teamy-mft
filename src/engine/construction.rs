@@ -26,6 +26,7 @@ use bevy::prelude::*;
 use bevy::text::FontSmoothing;
 use bevy::window::ExitCondition;
 use bevy::window::WindowResolution;
+use bevy_skein::SkeinPlugin;
 use eyre::Result;
 use tracing::debug;
 
@@ -75,6 +76,7 @@ impl AppConstructionExt for App {
         self.add_plugins(DirectoryChildrenPlugin);
         self.add_plugins(TimeoutPlugin);
         self.add_plugins(WindowPersistencePlugin);
+        self.add_plugins(SkeinPlugin::default());
         self
     }
 
@@ -83,13 +85,11 @@ impl AppConstructionExt for App {
             debug!("Building headed Bevy engine");
             let mut app = App::new();
             app.add_plugins(
-                DefaultPlugins
-                    .set(WindowPlugin {
-                        // primary_window: None,
-                        exit_condition: ExitCondition::OnAllClosed,
-                        ..default()
-                    })
-                    // .disable::<LogPlugin>(),
+                DefaultPlugins.set(WindowPlugin {
+                    // primary_window: None,
+                    exit_condition: ExitCondition::OnAllClosed,
+                    ..default()
+                }), // .disable::<LogPlugin>(),
             );
             app.add_plugins(MeshPickingPlugin);
 
