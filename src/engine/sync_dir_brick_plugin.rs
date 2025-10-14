@@ -84,7 +84,7 @@ pub fn spawn_brick_for_new_sync_dirs(
         SceneRoot(
             asset_server.load(
                 GltfAssetLabel::Scene(0)
-                    .from_asset(PathBuf::from("objects/computer-tower/computer-tower-2.glb")),
+                    .from_asset(PathBuf::from("objects/computer-tower/computer-tower-3.glb")),
             ),
         ),
         MeshMaterial3d(base_matl.clone()),

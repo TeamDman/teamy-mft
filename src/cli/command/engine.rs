@@ -1,3 +1,4 @@
+use crate::cli::global_args::GlobalArgs;
 use crate::cli::to_args::ToArgs;
 use crate::engine::run::run_engine;
 use arbitrary::Arbitrary;
@@ -7,8 +8,8 @@ use clap::Args;
 pub struct EngineArgs {}
 
 impl EngineArgs {
-    pub fn invoke(self) -> eyre::Result<()> {
-        run_engine()?;
+    pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
+        run_engine(global_args)?;
         Ok(())
     }
 }

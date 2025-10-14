@@ -71,9 +71,9 @@ impl Command {
             Command::Check(args) => args.invoke(),
             Command::Query(args) => args.invoke(),
             Command::RobocopyLogsTui(args) => args.invoke(),
-            Command::Engine(args) => args.invoke(),
+            Command::Engine(args) => args.invoke(global_args),
             #[cfg(debug_assertions)]
-            Command::Test(args) => args.invoke(),
+            Command::Test(args) => args.invoke(global_args),
         }
     }
 }

@@ -12,7 +12,6 @@ pub mod robocopy;
 pub mod sync_dir;
 
 use crate::cli::Cli;
-use bevy::log::DEFAULT_FILTER;
 use clap::CommandFactory;
 use clap::FromArgMatches;
 use teamy_windows::console::console_attach;
@@ -21,6 +20,12 @@ use tracing::debug;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// Manually includes [`::bevy::log::DEFAULT_FILTER`] to create an [`EnvFilter`]
+/// 
+/// https://github.com/tokio-rs/tracing/issues/1181
+/// https://github.com/tokio-rs/tracing/issues/2809
+pub const DEFAULT_EXTRA_FILTERS: &str = r#"bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info,cosmic_text=info,naga=warn,wgpu=error,wgpu_hal=warn,bevy_skein=trace,bevy_winit::system=info"#;
+
 /// Initialize tracing subscriber with the given log level.
 /// In debug builds, include file and line number without timestamp.
 /// In release builds, include timestamp and log level.
@@ -28,11 +33,10 @@ pub fn init_tracing(level: Level) {
     let builder = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::builder().parse_lossy(format!(
-                "{default_log_level},{bevy_defaults}{extras}",
+                "{default_log_level},{extras}",
                 default_log_level = level,
-                bevy_defaults = DEFAULT_FILTER,
                 extras = match level {
-                    Level::DEBUG | Level::TRACE => ",bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info,cosmic_text=info",
+                    Level::DEBUG | Level::TRACE => DEFAULT_EXTRA_FILTERS,
                     _ => "",
                 }
             ))

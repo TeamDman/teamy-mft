@@ -1,3 +1,4 @@
+use crate::cli::global_args::GlobalArgs;
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
 use crate::engine::camera_controller::CameraControllerPlugin;
 use crate::engine::cleanup_plugin::CleanupPlugin;
@@ -22,6 +23,8 @@ use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::window_persistence_plugin::WindowPersistencePlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
+use crate::DEFAULT_EXTRA_FILTERS;
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
 use bevy::window::ExitCondition;
@@ -48,7 +51,7 @@ where
     /// Add the common plugins used by both headed and headless engines.
     fn add_common_plugins(&mut self) -> &mut Self;
     /// Construct the engine with all the systems that make sense when rendering is needed.
-    fn new_headed() -> Result<Self>;
+    fn new_headed(global_args: GlobalArgs) -> Result<Self>;
 }
 impl AppConstructionExt for App {
     fn new_headless() -> Result<Self> {
@@ -80,7 +83,7 @@ impl AppConstructionExt for App {
         self
     }
 
-    fn new_headed() -> Result<Self> {
+    fn new_headed(global_args: GlobalArgs) -> Result<Self> {
         {
             debug!("Building headed Bevy engine");
             let mut app = App::new();
@@ -89,7 +92,11 @@ impl AppConstructionExt for App {
                     // primary_window: None,
                     exit_condition: ExitCondition::OnAllClosed,
                     ..default()
-                }), // .disable::<LogPlugin>(),
+                }).set(LogPlugin {
+                    level: global_args.log_level().into(),
+                    filter: DEFAULT_EXTRA_FILTERS.to_string(),
+                    ..default()
+                }),
             );
             app.add_plugins(MeshPickingPlugin);
 

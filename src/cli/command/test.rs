@@ -1,5 +1,6 @@
 #![cfg(debug_assertions)]
 
+use crate::cli::global_args::GlobalArgs;
 use crate::cli::to_args::ToArgs;
 use crate::engine::construction::AppConstructionExt;
 use crate::engine::construction::Testing;
@@ -33,11 +34,11 @@ pub enum TestCommand {
 }
 
 impl TestArgs {
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
         let mut app = if self.headless {
             App::new_headless()?
         } else {
-            App::new_headed()?
+            App::new_headed(global_args)?
         };
         app.insert_resource(Testing);
 
