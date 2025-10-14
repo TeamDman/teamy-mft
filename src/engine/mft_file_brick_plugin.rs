@@ -8,10 +8,10 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::ChildOf;
 use bevy::prelude::*;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct BaseMaterial(Handle<StandardMaterial>);
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct HoverMaterial(Handle<StandardMaterial>);
 
 pub struct MftFileBrickPlugin;

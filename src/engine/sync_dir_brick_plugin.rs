@@ -4,11 +4,12 @@ use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
+use bevy::scene::SceneInstanceReady;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct BaseMaterial(Handle<StandardMaterial>);
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct HoverMaterial(Handle<StandardMaterial>);
 
 /// We intentionally spawn the bricks outside of the sync directory entity itself.
@@ -18,7 +19,7 @@ pub struct HoverMaterial(Handle<StandardMaterial>);
 #[derive(Component)]
 pub struct MftBrickContainer;
 
-#[derive(Component)]
+#[derive(Component, Reflect)]
 pub struct MftBrickContainerRef(pub Entity);
 
 pub struct SyncDirBrickPlugin;
@@ -29,6 +30,7 @@ impl Plugin for SyncDirBrickPlugin {
         app.add_observer(on_sync_dir_click);
         app.add_observer(on_sync_dir_hover);
         app.add_observer(on_sync_dir_hover_out);
+        app.add_observer(on_scene_instance_ready);
     }
 }
 
@@ -121,5 +123,14 @@ pub fn on_sync_dir_hover_out(
                 mat.0 = base.0.clone();
             }
         }
+    }
+}
+
+pub fn on_scene_instance_ready(
+    trigger: On<SceneInstanceReady>,
+    names: Query<&Name>,
+) {
+    for name in names.get(trigger.entity).iter() {
+        info!(?trigger, "Scene instance ready for {}", name);
     }
 }
