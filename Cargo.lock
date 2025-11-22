@@ -5484,6 +5484,8 @@ dependencies = [
 name = "teamy-windows"
 version = "0.2.0"
 dependencies = [
+ "clap",
+ "color-eyre",
  "crossbeam-channel",
  "eyre",
  "tracing",
