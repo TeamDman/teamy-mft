@@ -21,7 +21,7 @@ pub fn process_mft_file(
     drive_letter: &str,
     mft_file_path: &Path,
 ) -> Result<MftEntryPathCollection> {
-    info!(
+    debug!(
         drive_letter = &drive_letter,
         "Processing MFT file: {}",
         mft_file_path.display()

@@ -5,12 +5,14 @@ use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
 use eyre::Context;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
+use eyre::OptionExt;
+use nucleo::Nucleo;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use thousands::Separable;
+use tokio::task::JoinSet;
 use tracing::debug;
 use tracing::info;
 
@@ -28,7 +30,7 @@ pub struct QueryArgs {
 
 impl QueryArgs {
     pub fn invoke(self) -> eyre::Result<()> {
-        info!("Running query with args: {:?}", self);
+        debug!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
             eyre::bail!("query string required")
         }
@@ -55,47 +57,93 @@ impl QueryArgs {
             nucleo::pattern::Normalization::Smart,
             false,
         );
-        let injector = nucleo.injector();
 
-        mft_files
-            .par_iter()
-            .map(|(drive_letter, mft_path)| {
-                let drive_letter = drive_letter.to_string();
-                let files = process_mft_file(&drive_letter, mft_path).wrap_err(format!(
-                    "Failed to process MFT file for drive {drive_letter}"
-                ))?;
-                info!(
-                    drive_letter = &drive_letter,
-                    "Found {} paths to be queried against",
-                    files.total_paths().separate_with_commas()
-                );
-                // Build a drive prefix (e.g., "C:\\") and prepend it to each path
-                let drive_prefix: PathBuf = PathBuf::from(format!("{drive_letter}:\\"));
-                files.0.into_iter().flatten().for_each(|file_path| {
-                    let full_path = drive_prefix.join(&file_path);
-                    injector.push(full_path, |x, cols| {
-                        cols[0] = x.to_string_lossy().into();
+        let nucleo = {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let rtn = runtime
+                .block_on(async {
+                    let mut join_set: JoinSet<eyre::Result<Option<Nucleo<PathBuf>>>> =
+                        JoinSet::new();
+
+                    info!(
+                        "Processing MFT files for drives: {}",
+                        mft_files
+                            .iter()
+                            .map(|(d, _)| d.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    );
+                    for (drive_letter, mft_path) in mft_files.into_iter() {
+                        let drive_letter = drive_letter.to_string();
+                        let injector = nucleo.injector();
+                        join_set.spawn_blocking(move || {
+                            let files = process_mft_file(&drive_letter, &mft_path).wrap_err(
+                                format!("Failed to process MFT file for drive {drive_letter}"),
+                            )?;
+                            let count_of_paths_from_drive = files.total_paths();
+
+                            // Build a drive prefix (e.g., "C:\\") and prepend it to each path, adding to the injector
+                            let drive_prefix: PathBuf = PathBuf::from(format!("{drive_letter}:\\"));
+                            for file_path in files.0.into_iter().flatten() {
+                                let full_path = drive_prefix.join(&file_path);
+                                injector.push(full_path, |x, cols| {
+                                    cols[0] = x.to_string_lossy().into();
+                                });
+                            }
+
+                            let count_of_paths_total = injector.injected_items();
+
+                            debug!(
+                                drive_letter = &drive_letter,
+                                "Added {} paths to be queried against, up to {}",
+                                count_of_paths_from_drive.separate_with_commas(),
+                                count_of_paths_total.separate_with_commas(),
+                            );
+                            eyre::Ok(None)
+                        });
+                    }
+
+                    // Only stop ticking nucleo when all MFT processing tasks are done
+                    let remaining = Arc::new(AtomicUsize::new(join_set.len()));
+                    let remaining_clone = remaining.clone();
+
+                    join_set.spawn_blocking(move || {
+                        debug!("Ticking Nucleo...");
+                        loop {
+                            let status = nucleo.tick(100);
+                            if !status.running
+                                && remaining_clone.load(std::sync::atomic::Ordering::Relaxed) == 0
+                            {
+                                break;
+                            }
+                            debug!("Tick status: {:?}", status);
+                        }
+                        eyre::Ok(Some(nucleo))
                     });
-                });
-                eyre::Ok(())
-            })
-            .for_each(|resp| {
-                if let Err(e) = resp {
-                    eprintln!("Error processing MFT file: {e:?}");
-                }
-            });
 
-        debug!("Ticking Nucleo...");
-        loop {
-            let status = nucleo.tick(100);
-            if !status.running {
-                break;
-            }
-            debug!("Tick status: {:?}", status);
-        }
+                    let mut nucleo: Option<Nucleo<PathBuf>> = None;
+                    while let Some(res) = join_set.join_next().await {
+                        nucleo = nucleo.or(res??);
+                        remaining.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    eyre::Ok(nucleo)
+                })?
+                .ok_or_eyre("Failed to get back Nucleo after handing off for parallel ticking")?;
+
+            // Leak the runtime to skip running drop handlers, we will exit very soon.
+            Box::leak(Box::new(runtime));
+            rtn
+        };
 
         let snapshot = nucleo.snapshot();
-        info!("Found {} matching items", snapshot.matched_item_count());
+        info!(
+            "Found {} matching items out of {} total items, showing up to {}",
+            snapshot.matched_item_count().separate_with_commas(),
+            snapshot.item_count().separate_with_commas(),
+            self.limit.separate_with_commas()
+        );
         for (i, item) in snapshot.matched_items(..).enumerate() {
             if i >= self.limit {
                 break;
@@ -103,7 +151,8 @@ impl QueryArgs {
             println!("{}", item.data.display());
         }
 
-        std::process::exit(0); // exit intentionally to accelerate cleanup of background threads
+        // Skip drop handlers for faster exit
+        std::process::exit(0);
     }
 }
 
