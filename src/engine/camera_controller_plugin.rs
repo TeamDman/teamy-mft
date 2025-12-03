@@ -417,18 +417,25 @@ fn run_camera_controller(
 fn focus_on_hovered_entity(
     keys: Res<ButtonInput<KeyCode>>,
     hovered: Res<HoveredEntity>,
-    mut camera_query: Query<(&mut CameraFocusController, &Transform)>,
+    mut camera_query: Query<(
+        &mut CameraFocusController,
+        &Transform,
+        Option<&mut CameraController>,
+    )>,
     targets: Query<&GlobalTransform, With<FocusTarget>>,
 ) {
     if !keys.just_pressed(KeyCode::KeyF) {
         return;
     }
 
-    let Ok((mut rig, camera_transform)) = camera_query.single_mut() else {
+    let Ok((mut rig, camera_transform, camera_controller)) = camera_query.single_mut() else {
         return;
     };
 
     if rig.has_focus() {
+        if let Some(mut controller) = camera_controller {
+            controller.sync_from_transform(camera_transform);
+        }
         rig.release_focus(camera_transform);
         return;
     }
