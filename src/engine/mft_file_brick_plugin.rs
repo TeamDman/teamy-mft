@@ -1,3 +1,6 @@
+use crate::engine::camera_controller_plugin::FocusTarget;
+use crate::engine::camera_controller_plugin::clear_hover_on_exit;
+use crate::engine::camera_controller_plugin::store_hover_on_enter;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_brick_plugin::MftBrickContainerRef;
 use crate::mft::mft_file::MftFile;
@@ -66,17 +69,25 @@ pub fn spawn_brick_for_new_mft_files(
 
     commands.entity(container).add_child(mft_file.entity);
 
-    commands.entity(mft_file.entity).insert((
-        Name::new(name),
-        SceneRoot(asset_server.load(
-            GltfAssetLabel::Scene(0).from_asset(PathBuf::from("objects/hard-drive/hard-drive.glb")),
-        )),
-        MeshMaterial3d(base_matl.clone()),
-        BaseMaterial(base_matl),
-        HoverMaterial(hover_matl),
-        Transform::from_xyz(x, 1.5, 0.0).with_scale(Vec3::splat(1.0)),
-        Pickable::default(),
-    ));
+    commands
+        .entity(mft_file.entity)
+        .insert((
+            Name::new(name),
+            SceneRoot(
+                asset_server.load(
+                    GltfAssetLabel::Scene(0)
+                        .from_asset(PathBuf::from("objects/hard-drive/hard-drive.glb")),
+                ),
+            ),
+            MeshMaterial3d(base_matl.clone()),
+            BaseMaterial(base_matl),
+            HoverMaterial(hover_matl),
+            Transform::from_xyz(x, 1.5, 0.0).with_scale(Vec3::splat(1.0)),
+            Pickable::default(),
+            FocusTarget,
+        ))
+        .observe(store_hover_on_enter)
+        .observe(clear_hover_on_exit);
 }
 
 pub fn on_mft_brick_click(
