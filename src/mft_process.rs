@@ -7,7 +7,6 @@ use std::path::Path;
 use std::time::Instant;
 use thousands::Separable;
 use tracing::debug;
-use tracing::info;
 use uom::si::f64::InformationRate;
 use uom::si::f64::Ratio;
 use uom::si::f64::Time;

@@ -3,7 +3,6 @@ pub mod cli;
 pub mod drive_letter_pattern;
 pub mod engine;
 pub mod mft;
-pub mod mft_check;
 pub mod mft_process;
 pub mod ntfs;
 pub mod paths;
