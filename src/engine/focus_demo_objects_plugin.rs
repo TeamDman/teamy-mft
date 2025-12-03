@@ -92,7 +92,7 @@ fn spawn_focus_demo_content(
         &mut glow_materials,
         Mesh::from(Cuboid::new(1.8, 1.2, 1.0)),
         Color::srgb(0.95, 0.35, 0.45),
-        Transform::from_xyz(-3.5, 0.6, -1.5),
+        Transform::from_xyz(-7.5, 0.6, -1.5),
         "Glow Cube",
     );
 
@@ -102,7 +102,7 @@ fn spawn_focus_demo_content(
         &mut glow_materials,
         Mesh::from(Sphere::new(0.9)),
         Color::srgb(0.2, 0.75, 0.9),
-        Transform::from_xyz(0.0, 1.1, 0.0),
+        Transform::from_xyz(-5.0, 1.1, 0.0),
         "Glow Sphere",
     );
 
@@ -112,7 +112,7 @@ fn spawn_focus_demo_content(
         &mut glow_materials,
         Mesh::from(Capsule3d::new(0.35, 0.75)),
         Color::srgb(0.9, 0.8, 0.2),
-        Transform::from_xyz(3.25, 0.9, 1.75).with_rotation(Quat::from_rotation_z(0.4)),
+        Transform::from_xyz(-2.25, 0.9, 1.75).with_rotation(Quat::from_rotation_z(0.4)),
         "Glow Capsule",
     );
 }
