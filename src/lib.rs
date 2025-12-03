@@ -20,7 +20,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// Manually includes [`::bevy::log::DEFAULT_FILTER`] to create an [`EnvFilter`]
-/// 
+///
 /// https://github.com/tokio-rs/tracing/issues/1181
 /// https://github.com/tokio-rs/tracing/issues/2809
 pub const DEFAULT_EXTRA_FILTERS: &str = r#"bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info,cosmic_text=info,naga=warn,wgpu=error,wgpu_hal=warn,bevy_skein=trace,bevy_winit::system=info"#;

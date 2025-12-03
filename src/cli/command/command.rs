@@ -1,13 +1,11 @@
 use crate::cli::command::check::CheckArgs;
-use crate::cli::command::engine::EngineArgs;
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::robocopy_logs_tui::RobocopyLogsTuiArgs;
+use crate::cli::command::run::RunArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
-#[cfg(debug_assertions)]
-use crate::cli::command::test::TestArgs;
 use crate::cli::global_args::GlobalArgs;
 use crate::cli::to_args::ToArgs;
 use crate::init_tracing;
@@ -32,11 +30,8 @@ pub enum Command {
     Query(QueryArgs),
     /// Explore robocopy logs in a TUI (validate file exists for now)
     RobocopyLogsTui(RobocopyLogsTuiArgs),
-    /// Run the Bevy game engine to visualize MFT data processing
-    Engine(EngineArgs),
-    /// Test commands (only available in debug builds)
-    #[cfg(debug_assertions)]
-    Test(TestArgs),
+    /// Run the UI or diagnostics scenarios
+    Run(RunArgs),
 }
 
 impl Default for Command {
@@ -47,11 +42,12 @@ impl Default for Command {
 
 impl Command {
     pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
-        match self {
-            Command::Engine(_) => {}
-            _ => {
-                init_tracing(global_args.log_level());
-            }
+        let should_init_tracing = match &self {
+            Command::Run(run_args) => run_args.should_init_tracing(),
+            _ => true,
+        };
+        if should_init_tracing {
+            init_tracing(global_args.log_level());
         }
         match self {
             Command::Sync(args) => args.invoke(),
@@ -61,9 +57,7 @@ impl Command {
             Command::Check(args) => args.invoke(),
             Command::Query(args) => args.invoke(),
             Command::RobocopyLogsTui(args) => args.invoke(),
-            Command::Engine(args) => args.invoke(global_args),
-            #[cfg(debug_assertions)]
-            Command::Test(args) => args.invoke(global_args),
+            Command::Run(args) => args.invoke(global_args),
         }
     }
 }
@@ -100,14 +94,9 @@ impl ToArgs for Command {
                 args.push("robocopy-logs-tui".into());
                 args.extend(logs_args.to_args());
             }
-            Command::Engine(engine_args) => {
-                args.push("engine".into());
-                args.extend(engine_args.to_args());
-            }
-            #[cfg(debug_assertions)]
-            Command::Test(test_args) => {
-                args.push("test".into());
-                args.extend(test_args.to_args());
+            Command::Run(run_args) => {
+                args.push("run".into());
+                args.extend(run_args.to_args());
             }
         }
         args

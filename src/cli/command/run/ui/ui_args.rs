@@ -5,16 +5,16 @@ use arbitrary::Arbitrary;
 use clap::Args;
 
 #[derive(Args, Arbitrary, PartialEq, Debug)]
-pub struct EngineArgs {}
+pub struct UiArgs {}
 
-impl EngineArgs {
+impl UiArgs {
     pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
         run_engine(global_args)?;
         Ok(())
     }
 }
 
-impl ToArgs for EngineArgs {
+impl ToArgs for UiArgs {
     fn to_args(&self) -> Vec<std::ffi::OsString> {
         vec![]
     }

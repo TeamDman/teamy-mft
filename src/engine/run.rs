@@ -1,4 +1,5 @@
-use crate::{cli::global_args::GlobalArgs, engine::construction::AppConstructionExt};
+use crate::cli::global_args::GlobalArgs;
+use crate::engine::construction::AppConstructionExt;
 use bevy::prelude::*;
 use tracing::debug;
 

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_brick_plugin::MftBrickContainerRef;
 use crate::mft::mft_file::MftFile;
@@ -7,6 +5,7 @@ use bevy::ecs::relationship::Relationship;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::ChildOf;
 use bevy::prelude::*;
+use std::path::PathBuf;
 
 #[derive(Component, Reflect)]
 pub struct BaseMaterial(Handle<StandardMaterial>);

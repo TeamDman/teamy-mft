@@ -1,3 +1,4 @@
+use crate::DEFAULT_EXTRA_FILTERS;
 use crate::cli::global_args::GlobalArgs;
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
 use crate::engine::camera_controller::CameraControllerPlugin;
@@ -23,7 +24,6 @@ use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
 use crate::engine::window_persistence_plugin::WindowPersistencePlugin;
 use crate::engine::world_inspector_plugin::MyWorldInspectorPlugin;
-use crate::DEFAULT_EXTRA_FILTERS;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::text::FontSmoothing;
@@ -88,15 +88,17 @@ impl AppConstructionExt for App {
             debug!("Building headed Bevy engine");
             let mut app = App::new();
             app.add_plugins(
-                DefaultPlugins.set(WindowPlugin {
-                    // primary_window: None,
-                    exit_condition: ExitCondition::OnAllClosed,
-                    ..default()
-                }).set(LogPlugin {
-                    level: global_args.log_level().into(),
-                    filter: DEFAULT_EXTRA_FILTERS.to_string(),
-                    ..default()
-                }),
+                DefaultPlugins
+                    .set(WindowPlugin {
+                        // primary_window: None,
+                        exit_condition: ExitCondition::OnAllClosed,
+                        ..default()
+                    })
+                    .set(LogPlugin {
+                        level: global_args.log_level().into(),
+                        filter: DEFAULT_EXTRA_FILTERS.to_string(),
+                        ..default()
+                    }),
             );
             app.add_plugins(MeshPickingPlugin);
 

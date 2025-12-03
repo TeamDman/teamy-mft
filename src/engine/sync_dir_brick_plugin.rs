@@ -1,11 +1,10 @@
-use std::path::PathBuf;
-
 use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use itertools::Itertools;
+use std::path::PathBuf;
 
 #[derive(Component, Reflect)]
 #[reflect(Component)]

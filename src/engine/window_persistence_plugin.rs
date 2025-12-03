@@ -1,11 +1,15 @@
-use crate::engine::persistence_plugin::{
-    Persistable, PersistenceKey, PersistenceLoad, PersistenceLoaded, PersistencePlugin,
-    PersistenceProperty,
-};
+use crate::engine::persistence_plugin::Persistable;
+use crate::engine::persistence_plugin::PersistenceKey;
+use crate::engine::persistence_plugin::PersistenceLoad;
+use crate::engine::persistence_plugin::PersistenceLoaded;
+use crate::engine::persistence_plugin::PersistencePlugin;
+use crate::engine::persistence_plugin::PersistenceProperty;
 use bevy::math::IVec2;
 use bevy::prelude::*;
-use bevy::window::{WindowPosition, WindowResolution};
-use std::path::{Path, PathBuf};
+use bevy::window::WindowPosition;
+use bevy::window::WindowResolution;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Component that marks a window entity for persistence.
 /// When added to an entity with a Window component, it will automatically set up persistence.
