@@ -1,14 +1,20 @@
-//! A freecam-style camera controller plugin.
+//! A freecam-style camera controller plugin with optional focus targeting.
 //! To use in your own application:
 //! - Copy the code for the [`CameraControllerPlugin`] and add the plugin to your App.
-//! - Attach the [`CameraController`] component to an entity with a [`Camera3d`].
+//! - Attach the [`CameraController`] component (and optionally [`CameraFocusController`]) to an
+//!   entity with a [`Camera3d`].
 //!
 //! Unlike other examples, which demonstrate an application, this demonstrates a plugin library.
 
+use crate::engine::focus_demo_objects_plugin::GlowMaterial;
 use bevy::camera::RenderTarget;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::input::mouse::MouseScrollUnit;
+use bevy::input::mouse::MouseWheel;
+use bevy::math::Vec3Swizzles;
+use bevy::pbr::MeshMaterial3d;
+use bevy::picking::prelude::*;
 use bevy::prelude::*;
 use bevy::window::CursorGrabMode;
 use bevy::window::CursorOptions;
@@ -16,12 +22,107 @@ use bevy::window::WindowRef;
 use std::f32::consts::*;
 use std::fmt;
 
-/// A freecam-style camera controller plugin.
+/// A freecam-style camera controller plugin that also supports focusing hovered entities.
 pub struct CameraControllerPlugin;
 
 impl Plugin for CameraControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, run_camera_controller);
+        app.init_resource::<HoveredEntity>()
+            .add_systems(Update, run_camera_controller)
+            .add_systems(
+                Update,
+                (
+                    focus_on_hovered_entity,
+                    apply_scroll_zoom,
+                    update_focus_camera,
+                    drive_outline_materials,
+                ),
+            );
+    }
+}
+
+/// Tracks the currently hovered entity reported by picking events.
+#[derive(Resource, Default)]
+pub struct HoveredEntity(pub Option<Entity>);
+
+/// Marker component applied to meshes that can be focused.
+#[derive(Component, Default, Reflect)]
+#[reflect(Component)]
+pub struct FocusTarget;
+
+/// Camera focus controller component that stores orbit configuration/state.
+#[derive(Component)]
+pub struct CameraFocusController {
+    focus: Option<Entity>,
+    yaw: f32,
+    pitch: f32,
+    distance: f32,
+    min_distance: f32,
+    max_distance: f32,
+    orbit_sensitivity: Vec2,
+    zoom_sensitivity: f32,
+    pitch_limit: f32,
+}
+
+impl Default for CameraFocusController {
+    fn default() -> Self {
+        Self {
+            focus: None,
+            yaw: 0.0,
+            pitch: -0.2,
+            distance: 10.0,
+            min_distance: 1.0,
+            max_distance: 30.0,
+            orbit_sensitivity: Vec2::new(0.01, 0.008),
+            zoom_sensitivity: 1.0,
+            pitch_limit: std::f32::consts::FRAC_PI_2 - 0.05,
+        }
+    }
+}
+
+impl CameraFocusController {
+    pub fn focus(&self) -> Option<Entity> {
+        self.focus
+    }
+
+    pub fn has_focus(&self) -> bool {
+        self.focus.is_some()
+    }
+
+    pub fn focus_on(
+        &mut self,
+        target: Entity,
+        camera_transform: &Transform,
+        target_position: Vec3,
+    ) {
+        self.focus = Some(target);
+        let offset = camera_transform.translation - target_position;
+        let horizontal = offset.xz().length().max(f32::EPSILON);
+        self.distance = offset.length().clamp(self.min_distance, self.max_distance);
+        self.yaw = offset.x.atan2(offset.z);
+        self.pitch = offset
+            .y
+            .atan2(horizontal)
+            .clamp(-self.pitch_limit, self.pitch_limit);
+    }
+
+    pub fn release_focus(&mut self, transform: &Transform) {
+        self.sync_from_transform(transform);
+        self.focus = None;
+    }
+
+    fn offset_vector(&self) -> Vec3 {
+        let horizontal = self.distance * self.pitch.cos();
+        let x = horizontal * self.yaw.sin();
+        let z = horizontal * self.yaw.cos();
+        let y = self.distance * self.pitch.sin();
+        Vec3::new(x, y, z)
+    }
+
+    fn sync_from_transform(&mut self, transform: &Transform) {
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        self.yaw = yaw;
+        self.pitch = pitch.clamp(-self.pitch_limit, self.pitch_limit);
     }
 }
 
@@ -105,16 +206,7 @@ impl fmt::Display for CameraController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "
-Freecam Controls:
-    Mouse\t- Move camera orientation
-    Scroll\t- Adjust movement speed
-    {:?}\t- Hold to grab cursor
-    {:?}\t- Toggle cursor grab
-    {:?} & {:?}\t- Fly forward & backwards
-    {:?} & {:?}\t- Fly sideways left & right
-    {:?} & {:?}\t- Fly up & down
-    {:?}\t- Fly faster while held",
+            "\nFreecam Controls:\n    Mouse\t- Move camera orientation\n    Scroll\t- Adjust movement speed\n    {:?}\t- Hold to grab cursor\n    {:?}\t- Toggle cursor grab\n    {:?} & {:?}\t- Fly forward & backwards\n    {:?} & {:?}\t- Fly sideways left & right\n    {:?} & {:?}\t- Fly up & down\n    {:?}\t- Fly faster while held",
             self.mouse_key_cursor_grab,
             self.keyboard_key_toggle_cursor_grab,
             self.key_forward,
@@ -138,11 +230,17 @@ fn run_camera_controller(
     key_input: Res<ButtonInput<KeyCode>>,
     mut toggle_cursor_grab: Local<bool>,
     mut mouse_cursor_grab: Local<bool>,
-    mut query: Query<(Entity, &mut Transform, &mut CameraController, &Camera)>,
+    mut query: Query<(
+        Entity,
+        &mut Transform,
+        &mut CameraController,
+        &Camera,
+        Option<&CameraFocusController>,
+    )>,
 ) {
     let dt = time.delta_secs();
 
-    let Ok((entity, mut transform, mut controller, camera)) = query.single_mut() else {
+    let Ok((entity, mut transform, mut controller, camera, focus)) = query.single_mut() else {
         return;
     };
 
@@ -244,6 +342,11 @@ fn run_camera_controller(
         return;
     }
 
+    let focus_active = focus.map(|focus| focus.has_focus()).unwrap_or(false);
+    if focus_active {
+        return;
+    }
+
     let mut scroll = 0.0;
     let amount = match accumulated_mouse_scroll.unit {
         MouseScrollUnit::Line => accumulated_mouse_scroll.delta.y,
@@ -308,5 +411,151 @@ fn run_camera_controller(
         controller.yaw -=
             accumulated_mouse_motion.delta.x * RADIANS_PER_DOT * controller.sensitivity;
         transform.rotation = Quat::from_euler(EulerRot::ZYX, 0.0, controller.yaw, controller.pitch);
+    }
+}
+
+fn focus_on_hovered_entity(
+    keys: Res<ButtonInput<KeyCode>>,
+    hovered: Res<HoveredEntity>,
+    mut camera_query: Query<(&mut CameraFocusController, &Transform)>,
+    targets: Query<&GlobalTransform, With<FocusTarget>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyF) {
+        return;
+    }
+
+    let Some(target_entity) = hovered.0 else {
+        return;
+    };
+
+    let Ok(target_transform) = targets.get(target_entity) else {
+        return;
+    };
+
+    if let Ok((mut rig, camera_transform)) = camera_query.single_mut() {
+        rig.focus_on(
+            target_entity,
+            camera_transform,
+            target_transform.translation(),
+        );
+    }
+}
+
+fn apply_scroll_zoom(
+    mut camera_query: Query<&mut CameraFocusController>,
+    mut mouse_wheel_reader: MessageReader<MouseWheel>,
+) {
+    let Ok(mut rig) = camera_query.single_mut() else {
+        return;
+    };
+
+    if rig.focus.is_none() {
+        return;
+    }
+
+    let mut scroll_delta = 0.0;
+    for wheel in mouse_wheel_reader.read() {
+        let unit = match wheel.unit {
+            MouseScrollUnit::Line => 1.0,
+            MouseScrollUnit::Pixel => 0.05,
+        };
+        scroll_delta += wheel.y * unit;
+    }
+
+    if scroll_delta.abs() > f32::EPSILON {
+        rig.distance = (rig.distance - scroll_delta * rig.zoom_sensitivity)
+            .clamp(rig.min_distance, rig.max_distance);
+    }
+}
+
+fn update_focus_camera(
+    mut query: Query<(
+        &mut Transform,
+        &mut CameraFocusController,
+        Option<&mut CameraController>,
+    )>,
+    targets: Query<&GlobalTransform, With<FocusTarget>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let Ok((mut transform, mut rig, camera_controller)) = query.single_mut() else {
+        return;
+    };
+
+    if keys.just_pressed(KeyCode::Escape) && rig.focus.is_some() {
+        if let Some(mut controller) = camera_controller {
+            controller.sync_from_transform(&transform);
+        }
+        rig.release_focus(&transform);
+        return;
+    }
+
+    let Some(target_entity) = rig.focus else {
+        return;
+    };
+
+    let Ok(target_transform) = targets.get(target_entity) else {
+        if let Some(mut controller) = camera_controller {
+            controller.sync_from_transform(&transform);
+        }
+        rig.release_focus(&transform);
+        return;
+    };
+
+    if mouse_buttons.pressed(MouseButton::Right) {
+        let delta = mouse_motion.delta;
+        rig.yaw -= delta.x * rig.orbit_sensitivity.x;
+        rig.pitch = (rig.pitch + delta.y * rig.orbit_sensitivity.y)
+            .clamp(-rig.pitch_limit, rig.pitch_limit);
+    }
+
+    let target_position = target_transform.translation();
+    transform.translation = target_position + rig.offset_vector();
+    transform.look_at(target_position, Vec3::Y);
+}
+
+fn drive_outline_materials(
+    time: Res<Time>,
+    camera: Query<&CameraFocusController>,
+    mut materials: ResMut<Assets<GlowMaterial>>,
+    targets: Query<(Entity, &MeshMaterial3d<GlowMaterial>), With<FocusTarget>>,
+) {
+    let Ok(rig) = camera.single() else {
+        return;
+    };
+
+    let phase = time.elapsed_secs();
+    for (entity, material_handle) in &targets {
+        if let Some(material) = materials.get_mut(&material_handle.0) {
+            material.extension.set_phase(phase);
+            let glow_strength = if Some(entity) == rig.focus { 1.0 } else { 0.0 };
+            material.extension.set_glow_strength(glow_strength);
+            material.extension.set_outline_width(0.45);
+        }
+    }
+}
+
+/// Stores the currently hovered entity when the pointer enters a [`FocusTarget`].
+pub fn store_hover_on_enter(over: On<Pointer<Over>>, mut hovered: ResMut<HoveredEntity>) {
+    hovered.0 = Some(over.entity);
+}
+
+/// Clears the hovered entity when the pointer exits the currently tracked [`FocusTarget`].
+pub fn clear_hover_on_exit(out: On<Pointer<Out>>, mut hovered: ResMut<HoveredEntity>) {
+    if hovered.0 == Some(out.entity) {
+        hovered.0 = None;
+    }
+}
+
+trait CameraControllerSyncExt {
+    fn sync_from_transform(&mut self, transform: &Transform);
+}
+
+impl CameraControllerSyncExt for CameraController {
+    fn sync_from_transform(&mut self, transform: &Transform) {
+        let (yaw, pitch, _roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        self.yaw = yaw;
+        self.pitch = pitch;
     }
 }

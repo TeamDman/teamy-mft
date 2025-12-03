@@ -1,7 +1,7 @@
 use crate::DEFAULT_EXTRA_FILTERS;
 use crate::cli::global_args::GlobalArgs;
 use crate::engine::assets::asset_message_log_plugin::AssetMessageLogPlugin;
-use crate::engine::camera_controller::CameraControllerPlugin;
+use crate::engine::camera_controller_plugin::CameraControllerPlugin;
 use crate::engine::cleanup_plugin::CleanupPlugin;
 use crate::engine::directory_children_plugin::DirectoryChildrenPlugin;
 use crate::engine::egui_plugin::MyEguiPlugin;
@@ -9,6 +9,7 @@ use crate::engine::file_contents_plugin::FileContentsPlugin;
 use crate::engine::file_contents_refresh_plugin::FileContentsRefreshPlugin;
 use crate::engine::file_metadata_plugin::FileMetadataPlugin;
 use crate::engine::file_text_plugin::FileTextPlugin;
+use crate::engine::focus_demo_objects_plugin::FocusDemoObjectsPlugin;
 use crate::engine::fps_window_plugin::FpsWindowConfig;
 use crate::engine::fps_window_plugin::FpsWindowIconConfig;
 use crate::engine::fps_window_plugin::FpsWindowPlugin;
@@ -109,6 +110,7 @@ impl AppConstructionExt for App {
             app.add_plugins(PrimaryWindowPlugin);
             app.add_plugins(MftFileOverviewWindowPlugin);
             app.add_plugins(CameraControllerPlugin);
+            app.add_plugins(FocusDemoObjectsPlugin);
             app.add_plugins(MyEguiPlugin);
             app.add_plugins(SearchWindowPlugin);
             app.add_plugins(QuitButtonWindowPlugin);

@@ -1,5 +1,6 @@
 use crate::engine::assets::textures::MyTexture;
-use crate::engine::camera_controller::CameraController;
+use crate::engine::camera_controller_plugin::CameraController;
+use crate::engine::camera_controller_plugin::CameraFocusController;
 use crate::engine::window_persistence_plugin::PersistWindowProperties;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
@@ -54,6 +55,7 @@ fn spawn_overview_window_if_missing(
             },
             Camera3d::default(),
             CameraController::default(),
+            CameraFocusController::default(),
             // Ensure this camera renders the default world layer (0) and the label layer (1)
             RenderLayers::layer(0).with(1),
             Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),

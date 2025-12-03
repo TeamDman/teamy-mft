@@ -1,4 +1,3 @@
-use arbitrary::Arbitrary;
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
