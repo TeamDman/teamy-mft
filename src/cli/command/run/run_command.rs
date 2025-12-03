@@ -11,11 +11,11 @@ use std::ffi::OsString;
 pub enum RunCommand {
     /// Launch the Bevy-powered UI
     Ui(UiArgs),
-    /// Run the file-contents roundtrip scenario
+    /// Run the file-contents roundtrip situation
     FileContentsRoundtrip(FileContentsRoundtripArgs),
-    /// Load cached MFT files scenario
+    /// Load cached MFT files situation
     LoadCachedMftFiles(LoadCachedMftFilesArgs),
-    /// Trigger the timeout scenario
+    /// Trigger the timeout situation
     Timeout(TimeoutArgs),
 }
 

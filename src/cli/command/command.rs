@@ -30,7 +30,7 @@ pub enum Command {
     Query(QueryArgs),
     /// Explore robocopy logs in a TUI (validate file exists for now)
     RobocopyLogsTui(RobocopyLogsTuiArgs),
-    /// Run the UI or diagnostics scenarios
+    /// Run the UI or diagnostics situations
     Run(RunArgs),
 }
 

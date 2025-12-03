@@ -1,8 +1,10 @@
+mod load_cached_mft_files_situation;
+
 use crate::cli::to_args::ToArgs;
-use crate::engine::scenarios::test_load_cached_mft_files::test_load_cached_mft_files;
 use arbitrary::Arbitrary;
 use bevy::app::App;
 use clap::Args;
+use load_cached_mft_files_situation::load_cached_mft_files_situation;
 use std::ffi::OsString;
 use std::time::Duration;
 
@@ -11,7 +13,7 @@ pub struct LoadCachedMftFilesArgs;
 
 impl LoadCachedMftFilesArgs {
     pub fn invoke(self, app: App, timeout: Option<Duration>) -> eyre::Result<()> {
-        test_load_cached_mft_files(app, timeout)
+        load_cached_mft_files_situation(app, timeout)
     }
 }
 

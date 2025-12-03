@@ -17,7 +17,10 @@ use std::fs;
 use std::time::Duration;
 use tracing::info;
 
-pub fn test_file_contents_roundtrip(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
+pub fn file_contents_roundtrip_situation(
+    mut app: App,
+    timeout: Option<Duration>,
+) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(2)),
     ));
@@ -147,7 +150,7 @@ fn exit_when_expectations_met(
         return;
     }
 
-    info!("Test succeeded");
+    info!("Situation succeeded");
     if just_log.is_none() {
         exit.write(AppExit::Success);
     }
@@ -155,15 +158,15 @@ fn exit_when_expectations_met(
 
 #[cfg(test)]
 mod test {
-    use super::test_file_contents_roundtrip;
+    use super::file_contents_roundtrip_situation;
     use crate::engine::construction::AppConstructionExt;
     use crate::init_tracing;
     use bevy::prelude::*;
     use tracing::Level;
 
     #[test]
-    fn test_file_contents_roundtrip_headless() -> eyre::Result<()> {
+    fn file_contents_roundtrip_situation_headless() -> eyre::Result<()> {
         init_tracing(Level::INFO);
-        test_file_contents_roundtrip(App::new_headless()?, None)
+        file_contents_roundtrip_situation(App::new_headless()?, None)
     }
 }

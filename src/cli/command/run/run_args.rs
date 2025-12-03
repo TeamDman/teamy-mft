@@ -37,21 +37,21 @@ impl RunArgs {
 
         match command {
             RunCommand::Ui(args) => args.invoke(global_args),
-            RunCommand::FileContentsRoundtrip(args) => Self::invoke_scenario_command(
+            RunCommand::FileContentsRoundtrip(args) => Self::invoke_situation_command(
                 global_args,
                 headless,
                 keep_open,
                 timeout,
                 |app, timeout| args.invoke(app, timeout),
             ),
-            RunCommand::LoadCachedMftFiles(args) => Self::invoke_scenario_command(
+            RunCommand::LoadCachedMftFiles(args) => Self::invoke_situation_command(
                 global_args,
                 headless,
                 keep_open,
                 timeout,
                 |app, timeout| args.invoke(app, timeout),
             ),
-            RunCommand::Timeout(args) => Self::invoke_scenario_command(
+            RunCommand::Timeout(args) => Self::invoke_situation_command(
                 global_args,
                 headless,
                 keep_open,
@@ -61,7 +61,7 @@ impl RunArgs {
         }
     }
 
-    fn invoke_scenario_command<F>(
+    fn invoke_situation_command<F>(
         global_args: GlobalArgs,
         headless: bool,
         keep_open: bool,

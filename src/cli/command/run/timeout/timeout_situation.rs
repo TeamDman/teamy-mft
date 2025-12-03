@@ -2,7 +2,7 @@ use crate::engine::timeout_plugin::ExitTimer;
 use bevy::prelude::*;
 use std::time::Duration;
 
-pub fn test_timeout(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
+pub fn timeout_situation(mut app: App, timeout: Option<Duration>) -> eyre::Result<()> {
     app.insert_resource(ExitTimer::from(
         timeout.unwrap_or_else(|| Duration::from_secs(1)),
     ));
@@ -15,15 +15,15 @@ pub fn test_timeout(mut app: App, timeout: Option<Duration>) -> eyre::Result<()>
 
 #[cfg(test)]
 mod test {
-    use super::test_timeout;
+    use super::timeout_situation;
     use crate::engine::construction::AppConstructionExt;
     use crate::init_tracing;
     use bevy::prelude::*;
     use tracing::Level;
 
     #[test]
-    fn test_write_bytes_to_file_headless() -> eyre::Result<()> {
+    fn timeout_situation_headless() -> eyre::Result<()> {
         init_tracing(Level::INFO);
-        test_timeout(App::new_headless()?, None)
+        timeout_situation(App::new_headless()?, None)
     }
 }
