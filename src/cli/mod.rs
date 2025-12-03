@@ -1,5 +1,6 @@
 pub mod command;
 pub mod global_args;
+pub mod json_log_behaviour;
 pub mod to_args;
 use crate::cli::command::Command;
 use crate::cli::global_args::GlobalArgs;

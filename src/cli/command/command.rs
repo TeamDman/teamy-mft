@@ -47,7 +47,7 @@ impl Command {
             _ => true,
         };
         if should_init_tracing {
-            init_tracing(global_args.log_level());
+            init_tracing(global_args.log_level(), global_args.json_log_behaviour())?;
         }
         match self {
             Command::Sync(args) => args.invoke(),

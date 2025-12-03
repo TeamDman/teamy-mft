@@ -1,10 +1,10 @@
+use crate::engine::assets::objects::MyObject;
 use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use itertools::Itertools;
-use std::path::PathBuf;
 
 #[derive(Component, Reflect)]
 #[reflect(Component)]
@@ -80,12 +80,7 @@ pub fn spawn_brick_for_new_sync_dirs(
         .insert(MftBrickContainerRef(container));
 
     commands.entity(sync_dir.entity).insert((
-        SceneRoot(
-            asset_server.load(
-                GltfAssetLabel::Scene(0)
-                    .from_asset(PathBuf::from("objects/computer-tower/computer-tower-3.glb")),
-            ),
-        ),
+        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(MyObject::ComputerTower3))),
         MeshMaterial3d(base_matl.clone()),
         BaseMaterial(base_matl),
         HoverMaterial(hover_matl),

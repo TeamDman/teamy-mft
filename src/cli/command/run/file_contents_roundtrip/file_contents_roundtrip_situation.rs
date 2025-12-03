@@ -159,6 +159,7 @@ fn exit_when_expectations_met(
 #[cfg(test)]
 mod test {
     use super::file_contents_roundtrip_situation;
+    use crate::cli::json_log_behaviour::JsonLogBehaviour;
     use crate::engine::construction::AppConstructionExt;
     use crate::init_tracing;
     use bevy::prelude::*;
@@ -166,7 +167,7 @@ mod test {
 
     #[test]
     fn file_contents_roundtrip_situation_headless() -> eyre::Result<()> {
-        init_tracing(Level::INFO);
+        init_tracing(Level::INFO, JsonLogBehaviour::None)?;
         file_contents_roundtrip_situation(App::new_headless()?, None)
     }
 }

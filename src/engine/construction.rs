@@ -13,12 +13,14 @@ use crate::engine::fps_window_plugin::FpsWindowConfig;
 use crate::engine::fps_window_plugin::FpsWindowIconConfig;
 use crate::engine::fps_window_plugin::FpsWindowPlugin;
 use crate::engine::fps_window_plugin::FrameTimeGraphConfig;
+use crate::engine::magnifying_glass_plugin::MagnifyingGlassPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
 use crate::engine::mft_file_plugin::MftFilePlugin;
 use crate::engine::pathbuf_holder_plugin::PathBufHolderPlugin;
 use crate::engine::primary_window_plugin::PrimaryWindowPlugin;
 use crate::engine::quit_button_window_plugin::QuitButtonWindowPlugin;
+use crate::engine::search_window_plugin::SearchWindowPlugin;
 use crate::engine::sync_dir_brick_plugin::SyncDirBrickPlugin;
 use crate::engine::sync_dir_plugin::SyncDirectoryPlugin;
 use crate::engine::timeout_plugin::TimeoutPlugin;
@@ -108,9 +110,11 @@ impl AppConstructionExt for App {
             app.add_plugins(MftFileOverviewWindowPlugin);
             app.add_plugins(CameraControllerPlugin);
             app.add_plugins(MyEguiPlugin);
+            app.add_plugins(SearchWindowPlugin);
             app.add_plugins(QuitButtonWindowPlugin);
             app.add_plugins(MyWorldInspectorPlugin);
             app.add_plugins(MftFileBrickPlugin);
+            app.add_plugins(MagnifyingGlassPlugin);
             app.add_plugins(SyncDirBrickPlugin);
             app.add_plugins(FpsWindowPlugin {
                 config: FpsWindowConfig {

@@ -16,6 +16,7 @@ pub fn timeout_situation(mut app: App, timeout: Option<Duration>) -> eyre::Resul
 #[cfg(test)]
 mod test {
     use super::timeout_situation;
+    use crate::cli::json_log_behaviour::JsonLogBehaviour;
     use crate::engine::construction::AppConstructionExt;
     use crate::init_tracing;
     use bevy::prelude::*;
@@ -23,7 +24,7 @@ mod test {
 
     #[test]
     fn timeout_situation_headless() -> eyre::Result<()> {
-        init_tracing(Level::INFO);
+        init_tracing(Level::INFO, JsonLogBehaviour::None)?;
         timeout_situation(App::new_headless()?, None)
     }
 }
