@@ -424,6 +424,15 @@ fn focus_on_hovered_entity(
         return;
     }
 
+    let Ok((mut rig, camera_transform)) = camera_query.single_mut() else {
+        return;
+    };
+
+    if rig.has_focus() {
+        rig.release_focus(camera_transform);
+        return;
+    }
+
     let Some(target_entity) = hovered.0 else {
         return;
     };
@@ -432,13 +441,11 @@ fn focus_on_hovered_entity(
         return;
     };
 
-    if let Ok((mut rig, camera_transform)) = camera_query.single_mut() {
-        rig.focus_on(
-            target_entity,
-            camera_transform,
-            target_transform.translation(),
-        );
-    }
+    rig.focus_on(
+        target_entity,
+        camera_transform,
+        target_transform.translation(),
+    );
 }
 
 fn apply_scroll_zoom(
