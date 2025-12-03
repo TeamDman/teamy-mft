@@ -17,7 +17,6 @@ pub mod pathbuf_holder_plugin;
 pub mod persistence_plugin;
 pub mod primary_window_plugin;
 pub mod quit_button_window_plugin;
-pub mod run;
 pub mod sync_dir_brick_plugin;
 pub mod sync_dir_plugin;
 pub mod timeout_plugin;
