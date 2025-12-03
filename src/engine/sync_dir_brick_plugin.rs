@@ -1,4 +1,7 @@
 use crate::engine::assets::objects::MyObject;
+use crate::engine::camera_controller_plugin::FocusTarget;
+use crate::engine::camera_controller_plugin::clear_hover_on_exit;
+use crate::engine::camera_controller_plugin::store_hover_on_enter;
 use crate::engine::mft_file_plugin::LoadCachedMftFilesGoal;
 use crate::engine::sync_dir_plugin::SyncDirectory;
 use bevy::gltf::GltfAssetLabel;
@@ -79,15 +82,22 @@ pub fn spawn_brick_for_new_sync_dirs(
         .entity(sync_dir.entity)
         .insert(MftBrickContainerRef(container));
 
-    commands.entity(sync_dir.entity).insert((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(MyObject::ComputerTower3))),
-        MeshMaterial3d(base_matl.clone()),
-        BaseMaterial(base_matl),
-        HoverMaterial(hover_matl),
-        Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(1.0)),
-        Pickable::default(),
-        Visibility::default(),
-    ));
+    commands
+        .entity(sync_dir.entity)
+        .insert((
+            SceneRoot(
+                asset_server.load(GltfAssetLabel::Scene(0).from_asset(MyObject::ComputerTower3)),
+            ),
+            MeshMaterial3d(base_matl.clone()),
+            BaseMaterial(base_matl),
+            HoverMaterial(hover_matl),
+            Transform::from_xyz(0.0, 0.6, 0.0).with_scale(Vec3::splat(1.0)),
+            Pickable::default(),
+            Visibility::default(),
+            FocusTarget,
+        ))
+        .observe(store_hover_on_enter)
+        .observe(clear_hover_on_exit);
 }
 
 pub fn on_sync_dir_click(
