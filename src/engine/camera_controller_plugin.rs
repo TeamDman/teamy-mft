@@ -42,7 +42,8 @@ impl Plugin for CameraControllerPlugin {
 }
 
 /// Tracks the currently hovered entity reported by picking events.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Reflect)]
+#[reflect(Resource)]
 pub struct HoveredEntity(pub Option<Entity>);
 
 /// Marker component applied to meshes that can be focused.
