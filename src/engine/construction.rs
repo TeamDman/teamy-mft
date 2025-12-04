@@ -14,6 +14,7 @@ use crate::engine::fps_window_plugin::FpsWindowConfig;
 use crate::engine::fps_window_plugin::FpsWindowIconConfig;
 use crate::engine::fps_window_plugin::FpsWindowPlugin;
 use crate::engine::fps_window_plugin::FrameTimeGraphConfig;
+use crate::engine::hover_materials_plugin::HoverMaterialsPlugin;
 use crate::engine::magnifying_glass_plugin::MagnifyingGlassPlugin;
 use crate::engine::mft_file_brick_plugin::MftFileBrickPlugin;
 use crate::engine::mft_file_overview_window_plugin::MftFileOverviewWindowPlugin;
@@ -111,6 +112,7 @@ impl AppConstructionExt for App {
             app.add_plugins(MftFileOverviewWindowPlugin);
             app.add_plugins(CameraControllerPlugin);
             app.add_plugins(FocusDemoObjectsPlugin);
+            app.add_plugins(HoverMaterialsPlugin);
             app.add_plugins(MyEguiPlugin);
             app.add_plugins(SearchWindowPlugin);
             app.add_plugins(QuitButtonWindowPlugin);

@@ -1,5 +1,8 @@
 pub mod assets;
 pub mod camera_controller_plugin;
+pub mod camera_orbit_controller_plugin;
+pub mod camera_right_click_controller_plugin;
+pub mod camera_wasd_controller_plugin;
 pub mod cleanup_plugin;
 pub mod construction;
 pub mod directory_children_plugin;
@@ -11,6 +14,7 @@ pub mod file_metadata_plugin;
 pub mod file_text_plugin;
 pub mod focus_demo_objects_plugin;
 pub mod fps_window_plugin;
+pub mod hover_materials_plugin;
 pub mod magnifying_glass_plugin;
 pub mod mft_file_brick_plugin;
 pub mod mft_file_overview_window_plugin;

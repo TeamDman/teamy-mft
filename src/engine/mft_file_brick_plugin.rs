@@ -1,6 +1,5 @@
 use crate::engine::camera_controller_plugin::FocusTarget;
-use crate::engine::camera_controller_plugin::clear_hover_on_exit;
-use crate::engine::camera_controller_plugin::store_hover_on_enter;
+use crate::engine::hover_materials_plugin::HoverMaterials;
 use crate::engine::pathbuf_holder_plugin::PathBufHolder;
 use crate::engine::sync_dir_brick_plugin::MftBrickContainerRef;
 use crate::mft::mft_file::MftFile;
@@ -10,20 +9,12 @@ use bevy::prelude::ChildOf;
 use bevy::prelude::*;
 use std::path::PathBuf;
 
-#[derive(Component, Reflect)]
-pub struct BaseMaterial(Handle<StandardMaterial>);
-
-#[derive(Component, Reflect)]
-pub struct HoverMaterial(Handle<StandardMaterial>);
-
 pub struct MftFileBrickPlugin;
 
 impl Plugin for MftFileBrickPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(spawn_brick_for_new_mft_files);
         app.add_observer(on_mft_brick_click);
-        app.add_observer(on_mft_brick_hover);
-        app.add_observer(on_mft_brick_hover_out);
     }
 }
 
@@ -69,25 +60,17 @@ pub fn spawn_brick_for_new_mft_files(
 
     commands.entity(container).add_child(mft_file.entity);
 
-    commands
-        .entity(mft_file.entity)
-        .insert((
-            Name::new(name),
-            SceneRoot(
-                asset_server.load(
-                    GltfAssetLabel::Scene(0)
-                        .from_asset(PathBuf::from("objects/hard-drive/hard-drive.glb")),
-                ),
-            ),
-            MeshMaterial3d(base_matl.clone()),
-            BaseMaterial(base_matl),
-            HoverMaterial(hover_matl),
-            Transform::from_xyz(x, 1.5, 0.0).with_scale(Vec3::splat(1.0)),
-            Pickable::default(),
-            FocusTarget,
-        ))
-        .observe(store_hover_on_enter)
-        .observe(clear_hover_on_exit);
+    commands.entity(mft_file.entity).insert((
+        Name::new(name),
+        SceneRoot(asset_server.load(
+            GltfAssetLabel::Scene(0).from_asset(PathBuf::from("objects/hard-drive/hard-drive.glb")),
+        )),
+        MeshMaterial3d(base_matl.clone()),
+        HoverMaterials::new(base_matl.clone(), hover_matl.clone()),
+        Transform::from_xyz(x, 1.5, 0.0).with_scale(Vec3::splat(1.0)),
+        Pickable::default(),
+        FocusTarget,
+    ));
 }
 
 pub fn on_mft_brick_click(
@@ -117,35 +100,5 @@ pub fn on_mft_brick_click(
                 ChildOf(parent),
             )
         }));
-    }
-}
-
-pub fn on_mft_brick_hover(
-    trigger: On<Pointer<Over>>,
-    mfts: Query<(), With<MftFile>>,
-    mut materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    hovers: Query<&HoverMaterial>,
-) {
-    if mfts.get(trigger.event_target()).is_ok() {
-        if let Ok(mut mat) = materials.get_mut(trigger.event_target()) {
-            if let Ok(hover) = hovers.get(trigger.event_target()) {
-                mat.0 = hover.0.clone();
-            }
-        }
-    }
-}
-
-pub fn on_mft_brick_hover_out(
-    trigger: On<Pointer<Out>>,
-    mfts: Query<(), With<MftFile>>,
-    mut materials: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    bases: Query<&BaseMaterial>,
-) {
-    if mfts.get(trigger.event_target()).is_ok() {
-        if let Ok(mut mat) = materials.get_mut(trigger.event_target()) {
-            if let Ok(base) = bases.get(trigger.event_target()) {
-                mat.0 = base.0.clone();
-            }
-        }
     }
 }

@@ -1,6 +1,4 @@
 use crate::engine::camera_controller_plugin::FocusTarget;
-use crate::engine::camera_controller_plugin::clear_hover_on_exit;
-use crate::engine::camera_controller_plugin::store_hover_on_enter;
 use bevy::math::Vec4;
 use bevy::pbr::ExtendedMaterial;
 use bevy::pbr::MaterialExtension;
@@ -126,16 +124,13 @@ fn spawn_focus_target(
     transform: Transform,
     name: &'static str,
 ) {
-    commands
-        .spawn((
-            Name::new(name),
-            FocusTarget,
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(glow_materials.add(glow_material(color))),
-            transform,
-        ))
-        .observe(store_hover_on_enter)
-        .observe(clear_hover_on_exit);
+    commands.spawn((
+        Name::new(name),
+        FocusTarget,
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(glow_materials.add(glow_material(color))),
+        transform,
+    ));
 }
 
 fn glow_material(color: Color) -> GlowMaterial {
