@@ -4,9 +4,12 @@ use crate::engine::camera_controller_plugin::CameraFocusController;
 use crate::engine::window_persistence_plugin::PersistWindowProperties;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::prelude::*;
+use bevy::render::view::Msaa;
 use bevy::window::WindowIcon;
 use bevy::window::WindowRef;
+use bevy_mesh_outline::OutlineCamera;
 
 /// Marker component for the overview window entity
 #[derive(Component, Reflect, Debug, Default)]
@@ -56,6 +59,9 @@ fn spawn_overview_window_if_missing(
             Camera3d::default(),
             CameraController::default(),
             CameraFocusController::default(),
+            OutlineCamera,
+            DepthPrepass,
+            Msaa::Off,
             // Ensure this camera renders the default world layer (0) and the label layer (1)
             RenderLayers::layer(0).with(1),
             Transform::from_xyz(-2.0, 2.5, 5.0).looking_at(Vec3::ZERO, Vec3::Y),

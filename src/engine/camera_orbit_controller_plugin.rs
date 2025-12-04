@@ -1,6 +1,6 @@
 use crate::engine::camera_wasd_controller_plugin::CameraController;
 use crate::engine::camera_wasd_controller_plugin::CameraControllerSyncExt;
-use crate::engine::focus_demo_objects_plugin::GlowMaterial;
+use crate::engine::shimmer_material_plugin::ShimmerMaterial;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::input::mouse::MouseWheel;
@@ -9,6 +9,7 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::picking::hover::HoverMap;
 use bevy::picking::pointer::PointerId;
 use bevy::prelude::*;
+use bevy_mesh_outline::MeshOutline;
 use std::f32::consts::FRAC_PI_2;
 
 /// Handles orbit-style camera focus and highlighting.
@@ -22,7 +23,8 @@ impl Plugin for CameraOrbitControllerPlugin {
                 focus_on_hovered_entity,
                 apply_scroll_zoom,
                 update_focus_camera,
-                drive_outline_materials,
+                drive_shimmer_materials,
+                drive_hover_outlines,
             ),
         );
     }
@@ -228,11 +230,11 @@ fn update_focus_camera(
     transform.look_at(target_position, Vec3::Y);
 }
 
-fn drive_outline_materials(
+fn drive_shimmer_materials(
     time: Res<Time>,
     camera: Query<&CameraFocusController>,
-    mut materials: ResMut<Assets<GlowMaterial>>,
-    targets: Query<(Entity, &MeshMaterial3d<GlowMaterial>), With<FocusTarget>>,
+    mut materials: ResMut<Assets<ShimmerMaterial>>,
+    targets: Query<(Entity, &MeshMaterial3d<ShimmerMaterial>), With<FocusTarget>>,
 ) {
     let Ok(rig) = camera.single() else {
         return;
@@ -242,11 +244,46 @@ fn drive_outline_materials(
     for (entity, material_handle) in &targets {
         if let Some(material) = materials.get_mut(&material_handle.0) {
             material.extension.set_phase(phase);
-            let glow_strength = if Some(entity) == rig.focus { 1.0 } else { 0.0 };
-            material.extension.set_glow_strength(glow_strength);
+            let shimmer_strength = if Some(entity) == rig.focus { 1.0 } else { 0.0 };
+            material.extension.set_shimmer_strength(shimmer_strength);
             material.extension.set_outline_width(0.45);
         }
     }
+}
+
+fn drive_hover_outlines(
+    mut commands: Commands,
+    hover_map: Option<Res<HoverMap>>,
+    targets: Query<&GlobalTransform, With<FocusTarget>>,
+    mut outlined: Local<Option<Entity>>,
+) {
+    let hovered = hover_map
+        .as_ref()
+        .and_then(|map| hovered_focus_target(map, &targets));
+
+    if hovered == *outlined {
+        return;
+    }
+
+    if let Some(previous) = outlined.take() {
+        if targets.get(previous).is_ok() {
+            commands.entity(previous).remove::<MeshOutline>();
+        }
+    }
+
+    if let Some(entity) = hovered {
+        if targets.get(entity).is_ok() {
+            commands.entity(entity).insert(default_hover_outline());
+            *outlined = Some(entity);
+        }
+    }
+}
+
+fn default_hover_outline() -> MeshOutline {
+    MeshOutline::new(8.0)
+        .with_color(Color::srgb(0.9, 0.95, 1.0))
+        .with_intensity(1.2)
+        .with_priority(0.5)
 }
 
 fn hovered_focus_target(

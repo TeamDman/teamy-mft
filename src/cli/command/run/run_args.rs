@@ -13,13 +13,14 @@ pub struct RunArgs {
 
 impl RunArgs {
     pub fn should_init_tracing(&self) -> bool {
-        !matches!(self.command, RunCommand::Ui(_))
+        !matches!(self.command, RunCommand::Ui(_) | RunCommand::OrbitDemo(_))
     }
 
     pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
         let mut global_args = Some(global_args);
         match self.command {
             RunCommand::Ui(args) => args.invoke(global_args.take().unwrap()),
+            RunCommand::OrbitDemo(args) => args.invoke(global_args.take().unwrap()),
             RunCommand::FileContentsRoundtrip(args) => args.invoke(global_args.take().unwrap()),
             RunCommand::LoadCachedMftFiles(args) => args.invoke(global_args.take().unwrap()),
             RunCommand::Timeout(args) => args.invoke(global_args.take().unwrap()),

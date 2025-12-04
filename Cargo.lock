@@ -1138,6 +1138,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_mesh_outline"
+version = "0.2.0"
+dependencies = [
+ "bevy",
+ "bevy_render",
+ "bytemuck",
+ "nonmax",
+ "rand 0.9.2",
+ "tracing",
+ "wgpu-types",
+]
+
+[[package]]
 name = "bevy_mikktspace"
 version = "0.17.0-dev"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5448,6 +5461,7 @@ dependencies = [
  "arbitrary",
  "bevy",
  "bevy-inspector-egui",
+ "bevy_mesh_outline",
  "bevy_skein",
  "bevy_ui_render",
  "bytes",
