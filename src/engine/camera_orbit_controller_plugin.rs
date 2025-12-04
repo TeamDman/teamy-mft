@@ -125,35 +125,41 @@ fn focus_on_hovered_entity(
         return;
     }
 
-    let Some(hover_map) = hover_map else {
-        return;
-    };
-
     let Ok((mut rig, camera_transform, camera_controller)) = camera_query.single_mut() else {
         return;
     };
 
-    if rig.has_focus() {
-        if let Some(mut controller) = camera_controller {
-            controller.sync_from_transform(camera_transform);
+    let hovered_target = hover_map
+        .as_ref()
+        .and_then(|map| hovered_focus_target(map, &targets));
+
+    match (rig.focus(), hovered_target) {
+        (Some(current), Some(new_target)) if current != new_target => {
+            if let Ok(target_transform) = targets.get(new_target) {
+                rig.focus_on(
+                    new_target,
+                    camera_transform,
+                    target_transform.translation(),
+                );
+            }
         }
-        rig.release_focus(camera_transform);
-        return;
+        (Some(_), _) => {
+            if let Some(mut controller) = camera_controller {
+                controller.sync_from_transform(camera_transform);
+            }
+            rig.release_focus(camera_transform);
+        }
+        (None, Some(target_entity)) => {
+            if let Ok(target_transform) = targets.get(target_entity) {
+                rig.focus_on(
+                    target_entity,
+                    camera_transform,
+                    target_transform.translation(),
+                );
+            }
+        }
+        (None, None) => {}
     }
-
-    let Some(target_entity) = hovered_focus_target(&hover_map, &targets) else {
-        return;
-    };
-
-    let Ok(target_transform) = targets.get(target_entity) else {
-        return;
-    };
-
-    rig.focus_on(
-        target_entity,
-        camera_transform,
-        target_transform.translation(),
-    );
 }
 
 fn apply_scroll_zoom(
