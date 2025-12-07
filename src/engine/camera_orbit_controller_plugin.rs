@@ -136,11 +136,7 @@ fn focus_on_hovered_entity(
     match (rig.focus(), hovered_target) {
         (Some(current), Some(new_target)) if current != new_target => {
             if let Ok(target_transform) = targets.get(new_target) {
-                rig.focus_on(
-                    new_target,
-                    camera_transform,
-                    target_transform.translation(),
-                );
+                rig.focus_on(new_target, camera_transform, target_transform.translation());
             }
         }
         (Some(_), _) => {
