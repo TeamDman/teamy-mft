@@ -5,6 +5,10 @@ pub mod robocopy_logs_tui;
 pub mod set_sync_dir;
 pub mod sync;
 
+#[allow(
+    clippy::module_inception,
+    reason = "module structure requires submodule with same name"
+)]
 mod command;
 
 pub use command::Command;

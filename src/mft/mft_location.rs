@@ -13,7 +13,9 @@ impl From<&NtfsBootSector> for MftLocationOnDisk {
     fn from(value: &NtfsBootSector) -> Self {
         let ntfs_cluster_size = Information::new::<byte>(value.bytes_per_cluster());
         Self {
-            offset: value.mft_cluster_number() as usize * ntfs_cluster_size,
+            offset: usize::try_from(value.mft_cluster_number())
+                .expect("cluster number fits in usize")
+                * ntfs_cluster_size,
         }
     }
 }
@@ -25,14 +27,23 @@ impl Deref for MftLocationOnDisk {
 }
 impl MftLocationOnDisk {
     /// Compute the on-disk byte location of a given MFT record number.
-    /// bytes_per_record must be provided explicitly (do not assume cluster size).
+    /// `bytes_per_record` must be provided explicitly (do not assume cluster size).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `record_number` cannot be converted to `usize`.
+    #[must_use]
     pub fn record_location(
         &self,
         record_number: MftRecordNumber,
         bytes_per_record: Information,
     ) -> MftRecordLocationOnDisk {
         // offset + (record_number * bytes_per_record)
-        MftRecordLocationOnDisk::new(self.offset + (*record_number as usize * bytes_per_record))
+        MftRecordLocationOnDisk::new(
+            self.offset
+                + (usize::try_from(*record_number).expect("record number fits in usize")
+                    * bytes_per_record),
+        )
     }
 }
 

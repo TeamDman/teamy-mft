@@ -38,6 +38,7 @@ impl Default for RobocopyLogParser {
 }
 
 impl RobocopyLogParser {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             buf: String::new(),
@@ -53,7 +54,11 @@ impl RobocopyLogParser {
         self.buf.push_str(chunk);
     }
 
-    /// Attempt to advance the parser. Returns NeedMoreData if no complete item yet.
+    /// Attempt to advance the parser. Returns `NeedMoreData` if no complete item yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if parsing a header or log entry fails.
     pub fn advance(&mut self) -> eyre::Result<RobocopyParseAdvance> {
         match self.state {
             InternalState::ReadingHeader => self.try_parse_header(),
@@ -90,6 +95,10 @@ impl RobocopyLogParser {
         Ok(RobocopyParseAdvance::NeedMoreData)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "state-machine parsing of streamed robocopy entries",
+    )]
     fn try_parse_entry(&mut self) -> eyre::Result<RobocopyParseAdvance> {
         loop {
             if let Some(pending) = &mut self.pending_new_file {
@@ -120,14 +129,13 @@ impl RobocopyLogParser {
                                 path: finished.path,
                                 percentages: finished.percentages,
                             }));
-                        } else {
-                            // Emit incremental state (clone path)
-                            return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
-                                size: pending.size,
-                                path: pending.path.clone(),
-                                percentages: pending.percentages.clone(),
-                            }));
                         }
+                        // Emit incremental state (clone path)
+                        return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
+                            size: pending.size,
+                            path: pending.path.clone(),
+                            percentages: pending.percentages.clone(),
+                        }));
                     } else if is_new_file_line(trimmed) {
                         // finalize previous without adding new pct and reprocess line
                         let finished = self.pending_new_file.take().unwrap();
@@ -137,90 +145,83 @@ impl RobocopyLogParser {
                             path: finished.path,
                             percentages: finished.percentages,
                         }));
-                    } else {
-                        // ignore noise
-                        continue;
                     }
+                    // ignore noise
                 }
-                // loop to grab more data
+                // more data is required to make progress for pending item
                 continue;
-            } else {
-                // read line/segment for new entry
-                let pos = match (self.buf.find('\n'), self.buf.find('\r')) {
+            }
+
+            // read line/segment for new entry when no pending file
+            let pos = match (self.buf.find('\n'), self.buf.find('\r')) {
+                (Some(nl), Some(cr)) => Some(nl.min(cr)),
+                (Some(nl), None) => Some(nl),
+                (None, Some(cr)) => Some(cr),
+                (None, None) => None,
+            };
+            let Some(end) = pos else {
+                return Ok(RobocopyParseAdvance::NeedMoreData);
+            };
+            let seg_with_term = self.buf[..=end].to_string();
+            self.buf.drain(..=end);
+            let mut pieces: Vec<&str> = seg_with_term
+                .split(['\r', '\n'])
+                .filter(|p| !p.trim().is_empty())
+                .collect();
+            if pieces.is_empty() {
+                continue;
+            }
+            let first = pieces.remove(0);
+            if !pieces.is_empty() {
+                let rest = pieces.join("\n");
+                self.buf.insert_str(0, &format!("{rest}\n"));
+            }
+            let trimmed = first.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(access_err) = parse_access_denied_first_line(trimmed)? {
+                // Peek if we have a following line terminator at all
+                let pos2 = match (self.buf.find('\n'), self.buf.find('\r')) {
                     (Some(nl), Some(cr)) => Some(nl.min(cr)),
                     (Some(nl), None) => Some(nl),
                     (None, Some(cr)) => Some(cr),
                     (None, None) => None,
                 };
-                let Some(end) = pos else {
+                let Some(end2) = pos2 else {
+                    // not enough data, push back and wait
+                    self.buf.insert_str(0, &format!("{trimmed}\n"));
                     return Ok(RobocopyParseAdvance::NeedMoreData);
                 };
-                let seg_with_term = self.buf[..=end].to_string();
-                self.buf.drain(..=end);
-                let mut pieces: Vec<&str> = seg_with_term
-                    .split(['\r', '\n'])
-                    .filter(|p| !p.trim().is_empty())
-                    .collect();
-                if pieces.is_empty() {
-                    continue;
+                let second_line = self.buf[..=end2].to_string();
+                self.buf.drain(..=end2);
+                if second_line.trim().eq_ignore_ascii_case("Access is denied.") {
+                    return Ok(RobocopyParseAdvance::LogEntry(access_err));
+                } else if second_line.trim().is_empty() {
+                    // blank line after; accept the error anyway
+                    return Ok(RobocopyParseAdvance::LogEntry(access_err));
                 }
-                let first = pieces.remove(0);
-                if !pieces.is_empty() {
-                    let rest = pieces.join("\n");
-                    self.buf.insert_str(0, &format!("{rest}\n"));
-                }
-                let trimmed = first.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if let Some(access_err) = parse_access_denied_first_line(trimmed)? {
-                    // Peek if we have a following line terminator at all
-                    let pos2 = match (self.buf.find('\n'), self.buf.find('\r')) {
-                        (Some(nl), Some(cr)) => Some(nl.min(cr)),
-                        (Some(nl), None) => Some(nl),
-                        (None, Some(cr)) => Some(cr),
-                        (None, None) => None,
-                    };
-                    let Some(end2) = pos2 else {
-                        // not enough data, push back and wait
-                        self.buf.insert_str(0, &format!("{trimmed}\n"));
-                        return Ok(RobocopyParseAdvance::NeedMoreData);
-                    };
-                    let second_line = self.buf[..=end2].to_string();
-                    self.buf.drain(..=end2);
-                    if second_line.trim().eq_ignore_ascii_case("Access is denied.") {
-                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
-                    } else if second_line.trim().is_empty() {
-                        // blank line after; accept the error anyway
-                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
-                    } else {
-                        // Unexpected; reinsert consumed second line for future processing and still emit error.
-                        self.buf.insert_str(0, &second_line);
-                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
-                    }
-                }
-                if is_new_file_line(trimmed) {
-                    if let Some((size, path)) = parse_new_file_line(trimmed) {
-                        self.pending_new_file = Some(PendingNewFile {
-                            size,
-                            path: path.clone(),
-                            percentages: Vec::new(),
-                        });
-                        // emit initial new file with empty percentages
-                        return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
-                            size,
-                            path,
-                            percentages: Vec::new(),
-                        }));
-                    } else {
-                        eyre::bail!("Failed to parse New File line: '{}'", trimmed);
-                    }
-                }
-                if parse_percentage_line(trimmed).is_some() {
-                    continue;
-                }
-                continue;
+                // Unexpected; reinsert consumed second line for future processing and still emit error.
+                self.buf.insert_str(0, &second_line);
+                return Ok(RobocopyParseAdvance::LogEntry(access_err));
             }
+            if is_new_file_line(trimmed) {
+                if let Some((size, path)) = parse_new_file_line(trimmed) {
+                    self.pending_new_file = Some(PendingNewFile {
+                        size,
+                        path: path.clone(),
+                        percentages: Vec::new(),
+                    });
+                    // emit initial new file with empty percentages
+                    return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
+                        size,
+                        path,
+                        percentages: Vec::new(),
+                    }));
+                }
+                eyre::bail!("Failed to parse New File line: '{}'", trimmed);
+            }
+            // percentage lines at top-level are ignored; nothing to do here
         }
     }
 }
@@ -239,8 +240,9 @@ fn parse_percentage_line(s: &str) -> Option<u8> {
         if num.chars().all(|c| c.is_ascii_digit())
             && let Ok(v) = num.parse::<u16>()
             && v <= 100
+            && let Ok(pct) = u8::try_from(v)
         {
-            return Some(v as u8);
+            return Some(pct);
         }
     }
     None
@@ -306,7 +308,7 @@ fn parse_new_file_line(line: &str) -> Option<(Information, PathBuf)> {
     // Strategy: split by tabs; filter out empty trimmed segments.
     let segs: Vec<&str> = line
         .split('\t')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
     if segs.is_empty() {
@@ -325,6 +327,11 @@ fn parse_new_file_line(line: &str) -> Option<(Information, PathBuf)> {
     Some((bytes, PathBuf::from(path_str)))
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "robocopy output contains human-readable floats that we round to usize",
+)]
 fn parse_size_to_bytes(s: &str) -> Option<Information> {
     let t = s.trim().to_lowercase();
     if t.is_empty() {
@@ -335,7 +342,7 @@ fn parse_size_to_bytes(s: &str) -> Option<Information> {
     let (num_str, unit) = if unit_char.is_ascii_alphabetic() {
         (&t[..t.len() - 1], Some(unit_char))
     } else {
-        (&t[..], None)
+        ((&*t), None)
     };
     let number: f64 = num_str.trim().parse().ok()?;
     let factor = match unit {

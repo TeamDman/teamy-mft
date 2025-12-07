@@ -17,6 +17,18 @@ use tracing::info;
 use tracing::warn;
 use winstructs::ntfs::mft_reference::MftReference;
 
+const ROOT_ENTRY: u64 = 5;
+
+fn choose_dir<'a>(
+    links: &'a [FileNameAttr],
+    prec_index: &impl Fn(&FileNamespace) -> usize,
+) -> &'a FileNameAttr {
+    links
+        .iter()
+        .min_by_key(|f| (prec_index(&f.namespace), f.name.len()))
+        .expect("links not empty")
+}
+
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct ListPathsArgs {
     /// Drive letter pattern to match drives whose cached MFTs will be traversed (e.g., "*", "C", "CD", "C,D")
@@ -25,6 +37,16 @@ pub struct ListPathsArgs {
 }
 
 impl ListPathsArgs {
+    /// List paths from cached MFT files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sync directory cannot be retrieved, drive letters cannot be resolved,
+    /// or if reading/parsing MFT files fails.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "function processes MFT data in a single pass for performance"
+    )]
     pub fn invoke(self) -> eyre::Result<()> {
         // Determine sync dir
         let sync_dir = try_get_sync_dir()?;
@@ -80,7 +102,7 @@ impl ListPathsArgs {
                 };
                 for x30 in entry
                     .iter_attributes()
-                    .filter_map(|attr| attr.ok())
+                    .filter_map(Result::ok)
                     .filter_map(|attr| match attr.data {
                         MftAttributeContent::AttrX30(data) => Some(data),
                         _ => None,
@@ -113,24 +135,13 @@ impl ListPathsArgs {
             }
             let elapsed = start.elapsed();
             let entry_count = x30_map.len();
-            let link_count: usize = x30_map.values().map(|v| v.len()).sum();
+            let link_count: usize = x30_map.values().map(std::vec::Vec::len).sum();
             info!(
                 "Indexed {} MFT entries ({} canonical FILE_NAME links) in {:.2?}",
                 entry_count, link_count, elapsed
             );
 
-            const ROOT_ENTRY: u64 = 5;
-            fn choose_dir<'a>(
-                links: &'a [FileNameAttr],
-                prec_index: &impl Fn(&FileNamespace) -> usize,
-            ) -> &'a FileNameAttr {
-                links
-                    .iter()
-                    .min_by_key(|f| (prec_index(&f.namespace), f.name.len()))
-                    .expect("links not empty")
-            }
-
-            for (entry_ref, links) in x30_map.iter() {
+            for (entry_ref, links) in &x30_map {
                 if entry_ref.entry == ROOT_ENTRY {
                     continue;
                 }

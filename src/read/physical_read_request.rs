@@ -14,6 +14,7 @@ pub struct PhysicalReadRequest {
     pub length: Information,
 }
 impl PhysicalReadRequest {
+    #[must_use]
     pub fn new(offset: Information, length: Information) -> Self {
         Self { offset, length }
     }
@@ -34,6 +35,7 @@ impl PhysicalReadRequest {
         self.length = aligned_end - aligned_start;
     }
 
+    #[must_use]
     pub fn physical_end(&self) -> Information {
         self.offset + self.length
     }

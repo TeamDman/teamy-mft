@@ -1,5 +1,7 @@
 use chrono::DateTime;
 use chrono::Local;
+use chrono::LocalResult;
+use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use std::fmt::Display;
 use std::ops::Deref;
@@ -21,13 +23,10 @@ impl FromStr for RobocopyStartDateTime {
     type Err = eyre::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use chrono::NaiveDateTime;
         let naive = NaiveDateTime::parse_from_str(s.trim(), ROBOCOPY_START_DATETIME_FMT)?;
         // Handle potential ambiguity (DST transitions) by picking earliest occurrence.
-        use chrono::LocalResult;
         let local_dt = match Local.from_local_datetime(&naive) {
-            LocalResult::Single(dt) => dt,
-            LocalResult::Ambiguous(dt, _) => dt, // choose the earlier
+            LocalResult::Single(dt) | LocalResult::Ambiguous(dt, _) => dt, // choose the earlier
             LocalResult::None => eyre::bail!("Invalid local datetime (non-existent due to DST)"),
         };
         Ok(Self { inner: local_dt })
@@ -35,6 +34,7 @@ impl FromStr for RobocopyStartDateTime {
 }
 
 impl RobocopyStartDateTime {
+    #[must_use]
     pub fn as_datetime(&self) -> &DateTime<Local> {
         &self.inner
     }

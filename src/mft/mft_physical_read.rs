@@ -17,8 +17,12 @@ use uom::si::information::mebibyte;
 use uom::si::usize::Information;
 
 /// Read the complete MFT using IOCP overlapped reads.
-/// drive_letter: 'C', 'D', ...
-/// output_path: file path to write final MFT blob
+/// `drive_letter`: 'C', 'D', ...
+/// `output_path`: file path to write final MFT blob
+///
+/// # Errors
+///
+/// Returns an error if the drive cannot be accessed or MFT cannot be read.
 pub fn read_physical_mft(
     drive_letter: char,
 ) -> eyre::Result<(LogicalReadPlan, PhysicalReadResults)> {
@@ -57,7 +61,7 @@ pub fn read_physical_mft(
         drop(drive_handle);
 
         // Build sparse-aware logical plan
-        let logical_read_plan: LogicalReadPlan = decoded_runs
+        let logical_read_plan = decoded_runs
             .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()));
         if logical_read_plan.segments.is_empty() {
             eyre::bail!("Logical plan empty (no runs)");

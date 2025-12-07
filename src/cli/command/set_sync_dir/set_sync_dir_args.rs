@@ -11,6 +11,11 @@ pub struct SetSyncDirArgs {
 }
 
 impl SetSyncDirArgs {
+    /// Set the sync directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path cannot be canonicalized or set.
     pub fn invoke(self) -> eyre::Result<()> {
         let target = if let Some(p) = self.path {
             dunce::canonicalize(p)?
@@ -18,7 +23,7 @@ impl SetSyncDirArgs {
             dunce::canonicalize(std::env::current_dir()?)?
         };
         info!("Setting sync dir to {}", target.display());
-        crate::sync_dir::set_sync_dir(target.clone())?;
+        crate::sync_dir::set_sync_dir(&target)?;
         println!("Set sync dir to {}", target.display());
         Ok(())
     }

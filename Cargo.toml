@@ -40,7 +40,7 @@ windows = { version = "0.62.0", features = [
 ] }
 tokio = { version = "1.47.1", features = ["full"] }
 strum = { version = "0.27.2", features = ["derive"] }
-itertools = "0.14.0"
+itertools = "0.10.5" # can be updated when we dump the `mft` dependency
 humansize = "2.1.3"
 crossbeam-channel = "0.5"
 rustc-hash = "2.1.1"
@@ -120,7 +120,6 @@ map_err_ignore = "warn"
 redundant_type_annotations = "warn"
 renamed_function_params = "warn"
 semicolon_outside_block = "warn"
-string_to_string = "warn"
 undocumented_unsafe_blocks = "warn"
 unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"

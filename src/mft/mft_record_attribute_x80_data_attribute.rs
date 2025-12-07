@@ -14,6 +14,8 @@ pub struct MftRecordX80DollarDataAttribute<'a> {
 }
 
 impl<'a> MftRecordX80DollarDataAttribute<'a> {
+    /// # Errors
+    /// Returns an error if the attribute type is not DATA (0x80).
     pub fn new(attr: MftRecordAttribute<'a>) -> Result<Self> {
         if attr.get_attr_type() != MftRecordAttribute::TYPE_DOLLAR_DATA {
             bail!(
@@ -24,6 +26,8 @@ impl<'a> MftRecordX80DollarDataAttribute<'a> {
         Ok(Self { inner: attr })
     }
 
+    /// # Errors
+    /// Returns an error if the run list cannot be retrieved or if there is no data run list for resident $DATA attribute.
     pub fn get_data_run_list(&'a self) -> Result<MftRecordAttributeRunList<'a>> {
         let rl = self
             .get_run_list()? // generic accessor

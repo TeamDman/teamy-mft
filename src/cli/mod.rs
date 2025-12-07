@@ -20,9 +20,15 @@ pub struct Cli {
 }
 
 impl Cli {
+    /// Invoke the CLI with the parsed arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command execution fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        self.command.invoke(self.global_args)
+        self.command.invoke(&self.global_args)
     }
+    #[must_use]
     pub fn display_invocation(&self) -> String {
         let mut args = self.to_args();
         // Prepend the executable name

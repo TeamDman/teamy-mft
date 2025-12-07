@@ -14,16 +14,14 @@ pub struct PhysicalReadPlan {
     zero_length_behavior: ZeroLengthPushBehaviour,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
 pub enum ZeroLengthPushBehaviour {
+    #[default]
     Panic,
     NoOp,
 }
-impl Default for ZeroLengthPushBehaviour {
-    fn default() -> Self {
-        ZeroLengthPushBehaviour::Panic
-    }
-}
+
+const MAX_IN_FLIGHT_IO: usize = 32;
 impl IntoIterator for PhysicalReadPlan {
     type Item = PhysicalReadRequest;
     type IntoIter = std::collections::btree_set::IntoIter<PhysicalReadRequest>;
@@ -42,6 +40,7 @@ impl FromIterator<PhysicalReadRequest> for PhysicalReadPlan {
 }
 
 impl PhysicalReadPlan {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -51,6 +50,9 @@ impl PhysicalReadPlan {
         self
     }
 
+    /// # Panics
+    ///
+    /// Panics if the request length is zero and the zero-length behavior is `Panic`.
     pub fn push(&mut self, request: PhysicalReadRequest) -> &mut Self {
         if request.length == Information::ZERO {
             match self.zero_length_behavior {
@@ -90,7 +92,8 @@ impl PhysicalReadPlan {
         self
     }
 
-    /// Split requests into uniform <= chunk_size pieces. Returns a new plan.
+    /// Split requests into uniform <= `chunk_size` pieces. Returns a new plan.
+    #[must_use]
     pub fn chunked(&self, chunk_size: Information) -> Self {
         if chunk_size == Information::ZERO {
             return self.clone();
@@ -131,14 +134,17 @@ impl PhysicalReadPlan {
         self
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.requests.len()
     }
 
+    #[must_use]
     pub fn total_size(&self) -> Information {
         self.requests
             .iter()
@@ -146,11 +152,15 @@ impl PhysicalReadPlan {
             .fold(Information::ZERO, |a, b| a + b)
     }
 
+    /// Read the requested ranges from the given file handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if opening the file, enqueuing IO operations, or reading fails.
     pub fn read(self, filename: impl Param<PCWSTR>) -> eyre::Result<PhysicalReadResults> {
         if self.is_empty() {
             return Ok(PhysicalReadResults::new());
         }
-        const MAX_IN_FLIGHT_IO: usize = 32;
         PhysicalReader::try_new(filename, self.requests, MAX_IN_FLIGHT_IO)?.read_all()
     }
 }

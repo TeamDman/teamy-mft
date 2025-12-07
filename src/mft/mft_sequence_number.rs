@@ -6,9 +6,11 @@ use core::ops::Deref;
 pub struct MftSequenceNumber(pub u16);
 
 impl MftSequenceNumber {
+    #[must_use]
     pub fn new(value: u16) -> Self {
         Self(value)
     }
+    #[must_use]
     pub fn get(self) -> u16 {
         self.0
     }

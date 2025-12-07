@@ -29,6 +29,16 @@ pub struct QueryArgs {
 }
 
 impl QueryArgs {
+    /// Query MFT files for entries matching the given query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// drive letters cannot be resolved, or if reading/parsing MFT files fails.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "function handles complex query logic with multiple threads"
+    )]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
@@ -75,7 +85,7 @@ impl QueryArgs {
                             .collect::<Vec<String>>()
                             .join(", ")
                     );
-                    for (drive_letter, mft_path) in mft_files.into_iter() {
+                    for (drive_letter, mft_path) in mft_files {
                         let drive_letter = drive_letter.to_string();
                         let injector = nucleo.injector();
                         join_set.spawn_blocking(move || {
@@ -107,7 +117,7 @@ impl QueryArgs {
 
                     // Only stop ticking nucleo when all MFT processing tasks are done
                     let remaining = Arc::new(AtomicUsize::new(join_set.len()));
-                    let remaining_clone = remaining.clone();
+                    let remaining_clone = Arc::clone(&remaining);
 
                     join_set.spawn_blocking(move || {
                         debug!("Ticking Nucleo...");

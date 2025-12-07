@@ -15,6 +15,11 @@ pub struct ConfigDirPath {
     path: PathBuf,
 }
 impl ConfigDirPath {
+    /// Create a `ConfigDirPath` from the remembered project directories.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the project directories cannot be determined.
     pub fn new() -> eyre::Result<Self> {
         Ok(Self {
             path: project_dirs()?.config_dir().to_path_buf(),
@@ -36,9 +41,19 @@ impl AsRef<Path> for ConfigDirPath {
 
 // Extension trait to ensure the parent directory of a path exists (useful for file paths)
 pub trait EnsureParentDirExists {
+    /// Ensure the parent directory exists, creating it if necessary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating the parent directory fails.
     fn ensure_parent_dir_exists(&self) -> eyre::Result<()>;
 }
 impl<T: AsRef<Path>> EnsureParentDirExists for T {
+    /// Ensure the parent directory exists, creating it if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating the parent directory fails.
     fn ensure_parent_dir_exists(&self) -> eyre::Result<()> {
         if let Some(parent) = self.as_ref().parent()
             && !parent.exists()

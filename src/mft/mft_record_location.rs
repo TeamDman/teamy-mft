@@ -7,9 +7,11 @@ use uom::si::usize::Information;
 pub struct MftRecordLocationOnDisk(Information);
 
 impl MftRecordLocationOnDisk {
+    #[must_use]
     pub const fn new(offset: Information) -> Self {
         MftRecordLocationOnDisk(offset)
     }
+    #[must_use]
     pub fn from_record_number(
         mft_location: &MftLocationOnDisk,
         record_number: MftRecordNumber,

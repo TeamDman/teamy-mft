@@ -15,12 +15,18 @@ pub struct NtfsDriveHandle {
     pub handle: Owned<HANDLE>,
 }
 impl NtfsDriveHandle {
+    /// Ensure the provided handle points to an NTFS volume.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the device control call indicates the volume is not NTFS.
     pub fn try_new(drive_handle: Owned<HANDLE>) -> eyre::Result<Self> {
         validate_ntfs_filesystem(*drive_handle)?;
         Ok(NtfsDriveHandle {
             handle: drive_handle,
         })
     }
+    #[must_use]
     pub fn new_unchecked(drive_handle: Owned<HANDLE>) -> Self {
         NtfsDriveHandle {
             handle: drive_handle,
@@ -51,16 +57,20 @@ impl AsRef<HANDLE> for NtfsDriveHandle {
 fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
     let mut volume_data = NTFS_VOLUME_DATA_BUFFER::default();
     let mut bytes_returned = 0u32;
+    let buffer_size = u32::try_from(std::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>())
+        .expect("NTFS_VOLUME_DATA_BUFFER fits in u32");
 
+    // SAFETY: DeviceIoControl requires valid pointers and buffer sizes. The provided struct
+    // is stack-allocated, properly aligned, and `buffer_size` matches its size.
     let result = unsafe {
         DeviceIoControl(
             drive_handle,
             FSCTL_GET_NTFS_VOLUME_DATA,
             None,
             0,
-            Some(&mut volume_data as *mut _ as *mut _),
-            std::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
-            Some(&mut bytes_returned),
+            Some((&raw mut volume_data).cast::<std::ffi::c_void>()),
+            buffer_size,
+            Some(&raw mut bytes_returned),
             None,
         )
     };
@@ -70,6 +80,15 @@ fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
 }
 
 /// Get the disk extents for the volume associated with the drive letter
+/// Query the disk extents for the target drive letter.
+///
+/// # Errors
+///
+/// Returns an error if opening the drive handle or performing the `DeviceIoControl` call fails.
+///
+/// # Panics
+///
+/// Panics if `VOLUME_DISK_EXTENTS` does not fit in `u32` (should not happen).
 pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_EXTENTS> {
     use teamy_windows::handle::get_read_only_drive_handle;
 
@@ -79,19 +98,23 @@ pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_E
     let mut extents = VOLUME_DISK_EXTENTS::default();
     let mut bytes_returned = 0u32;
 
+    let volume_buffer_size = u32::try_from(std::mem::size_of::<VOLUME_DISK_EXTENTS>())
+        .expect("VOLUME_DISK_EXTENTS fits in u32");
+
+    // SAFETY: DeviceIoControl writes into the provided `extents` struct whose size matches `volume_buffer_size`.
     unsafe {
         DeviceIoControl(
             *handle,
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
             None,
             0,
-            Some(&mut extents as *mut _ as *mut std::ffi::c_void),
-            std::mem::size_of::<VOLUME_DISK_EXTENTS>() as u32,
-            Some(&mut bytes_returned),
+            Some((&raw mut extents).cast::<std::ffi::c_void>()),
+            volume_buffer_size,
+            Some(&raw mut bytes_returned),
             None,
         )
         .wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
-    }
+    };
 
     if extents.NumberOfDiskExtents != 1 {
         eyre::bail!("Volume spans multiple disks or has complex extents, not supported");
