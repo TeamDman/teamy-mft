@@ -4,12 +4,12 @@ use crate::mft::path_resolve;
 use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
 use humansize::BINARY;
-use teamy_uom_extensions::HumanInformationRateExt;
-use teamy_uom_extensions::HumanTimeExt;
-use teamy_uom_extensions::InformationOverExt;
 use std::path::Path;
 use std::time::Instant;
 use teamy_uom_extensions::HumanInformationExt;
+use teamy_uom_extensions::HumanInformationRateExt;
+use teamy_uom_extensions::HumanTimeExt;
+use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
 use uom::si::f64::InformationRate;
@@ -60,7 +60,7 @@ pub fn process_mft_file(
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
     let resolved_size = uom::si::f64::Information::new::<byte>(resolved_entries as f64 * 256.0);
-    let resolve_rate = InformationRate::from(resolved_size / path_resolve_elapsed);
+    let resolve_rate = resolved_size.over(path_resolve_elapsed);
     debug!(
         drive_letter = &drive_letter,
         "Took {} ({}) entries_resolved={} total_paths={}",
@@ -86,7 +86,7 @@ pub fn process_mft_file(
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
     // aggregate performance statistics
     let total_size = uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64);
-    let total_data_rate = InformationRate::from(total_size / elapsed); // overall throughput
+    let total_data_rate = total_size.over(elapsed); // overall throughput
     let entries_rate = Ratio::new::<ratio>(mft_file.record_count() as f64) / elapsed;
     debug!(
         drive_letter = &drive_letter,

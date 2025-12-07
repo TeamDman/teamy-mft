@@ -81,7 +81,10 @@ impl MftFile {
         }
 
         // Read all bytes
-        debug!("Reading cached bytes: {}", mft_file_size.format_human(BINARY));
+        debug!(
+            "Reading cached bytes: {}",
+            mft_file_size.format_human(BINARY)
+        );
         let read_start = Instant::now();
         let bytes = {
             let mut buf = Vec::with_capacity(mft_file_size.get::<byte>());
