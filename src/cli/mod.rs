@@ -104,7 +104,7 @@ mod tests {
             // Check equality
             assert!(cli == parsed_cli, 
                 "CLI roundtrip failed on iteration {i}:\nOriginal: {cli:?}\nParsed: {parsed_cli:?}\nArgs: {full_args:?}"
-            )
+            );
         }
     }
 
