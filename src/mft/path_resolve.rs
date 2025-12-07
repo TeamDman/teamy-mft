@@ -3,6 +3,7 @@
 
 use crate::mft::fast_entry::FileNameCollection;
 use std::borrow::Cow;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Decode UTF-16 little endian slice to String (lossy ASCII fast-path optional later).
@@ -94,6 +95,7 @@ fn dfs(i: usize, per_entry: &Vec<Vec<BestName>>, depth: &mut [i32], mark: &mut [
 /// Resolve all paths including multiple hardlink parents.
 /// For each distinct parent of an entry, keep only the highest-precedence namespace.
 /// Returns zero/one/many paths per entry (index aligned with entry id).
+/// Paths are rooted at `root_prefix` (e.g., `C:\`) so absolute paths are produced directly.
 ///
 /// # Errors
 ///
@@ -102,6 +104,7 @@ fn dfs(i: usize, per_entry: &Vec<Vec<BestName>>, depth: &mut [i32], mark: &mut [
 #[allow(clippy::too_many_lines, reason = "complex path resolution logic")]
 pub fn resolve_paths_all_parallel(
     file_names: &FileNameCollection<'_>,
+    root_prefix: &Path,
 ) -> eyre::Result<MftEntryPathCollection> {
     use rayon::prelude::*;
     let entry_count = file_names.entry_count();
@@ -159,7 +162,7 @@ pub fn resolve_paths_all_parallel(
     // Results storage
     let mut results: Vec<Vec<PathBuf>> = vec![Vec::new(); entry_count];
     if entry_count > 5 {
-        results[5].push(PathBuf::new());
+        results[5].push(root_prefix.to_path_buf());
     }
 
     // Process each layer: build outputs in parallel (read-only borrow of earlier results) then write.

@@ -5,6 +5,7 @@ use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
 use humansize::BINARY;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 use teamy_uom_extensions::HumanInformationExt;
 use teamy_uom_extensions::HumanInformationRateExt;
@@ -20,6 +21,7 @@ use uom::si::ratio::ratio;
 use uom::si::time::second;
 
 /// Overall high-level processing of an MFT file: mmap -> copy -> fixups -> extract names -> resolve paths.
+/// Resolved paths include the drive prefix (e.g., `C:\`) so callers can inject or display them directly.
 ///
 /// # Errors
 ///
@@ -58,7 +60,8 @@ pub fn process_mft_file(
         file_names.x30_count().separate_with_commas()
     );
     let path_resolve_start = Instant::now();
-    let multi = path_resolve::resolve_paths_all_parallel(&file_names)?;
+    let drive_prefix = PathBuf::from(format!("{drive_letter}:\\"));
+    let multi = path_resolve::resolve_paths_all_parallel(&file_names, &drive_prefix)?;
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();

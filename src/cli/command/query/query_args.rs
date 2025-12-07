@@ -94,11 +94,8 @@ impl QueryArgs {
                             )?;
                             let count_of_paths_from_drive = files.total_paths();
 
-                            // Build a drive prefix (e.g., "C:\\") and prepend it to each path, adding to the injector
-                            let drive_prefix: PathBuf = PathBuf::from(format!("{drive_letter}:\\"));
                             for file_path in files.0.into_iter().flatten() {
-                                let full_path = drive_prefix.join(&file_path);
-                                injector.push(full_path, |x, cols| {
+                                injector.push(file_path, |x, cols| {
                                     cols[0] = x.to_string_lossy().into();
                                 });
                             }
