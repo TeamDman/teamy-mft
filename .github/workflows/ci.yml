@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: CI checks (format, clippy, build, test, examples, docs, unsafe)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install Rust toolchain + components
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          profile: minimal
+          override: true
+
+      - name: Ensure rustfmt is up to date
+        run: cargo fmt --version
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build (all features)
+        run: cargo build --all-features --verbose
+
+      - name: Run tests (all features)
+        run: cargo test --all-features --verbose
+
+      # - name: Run examples (default features)
+      #   run: |
+      #     # These examples are quick demos and are run with default features to verify runtime behaviour.
+      #     cargo run --example information_human --quiet
+      #     cargo run --example information_rate_human --quiet
+      #     cargo run --example time_human --quiet
+      #     cargo run --example combined_human --quiet
+
+      - name: Build docs
+        run: cargo doc --no-deps --all-features
