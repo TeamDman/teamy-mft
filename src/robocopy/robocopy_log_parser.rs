@@ -97,7 +97,7 @@ impl RobocopyLogParser {
 
     #[allow(
         clippy::too_many_lines,
-        reason = "state-machine parsing of streamed robocopy entries",
+        reason = "state-machine parsing of streamed robocopy entries"
     )]
     fn try_parse_entry(&mut self) -> eyre::Result<RobocopyParseAdvance> {
         loop {
@@ -330,7 +330,7 @@ fn parse_new_file_line(line: &str) -> Option<(Information, PathBuf)> {
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "robocopy output contains human-readable floats that we round to usize",
+    reason = "robocopy output contains human-readable floats that we round to usize"
 )]
 fn parse_size_to_bytes(s: &str) -> Option<Information> {
     let t = s.trim().to_lowercase();

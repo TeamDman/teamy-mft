@@ -59,8 +59,8 @@ impl NtfsBootSector {
     pub fn file_record_size(&self) -> Information {
         let val = i8::from_ne_bytes([self.data[0x40]]);
         let bytes = if val < 0 {
-            let shift = usize::try_from(-isize::from(val))
-                .expect("record size exponent fits in usize");
+            let shift =
+                usize::try_from(-isize::from(val)).expect("record size exponent fits in usize");
             (1usize) << shift
         } else {
             let cluster_count = usize::try_from(val).expect("cluster count fits in usize");

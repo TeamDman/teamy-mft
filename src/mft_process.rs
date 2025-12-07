@@ -62,7 +62,10 @@ pub fn process_mft_file(
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
-    #[allow(clippy::cast_precision_loss, reason = "counts may exceed 2^52 but we only use them for rate reporting")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "counts may exceed 2^52 but we only use them for rate reporting"
+    )]
     let resolved_entries_f64 = resolved_entries as f64;
     let resolved_size = uom::si::f64::Information::new::<byte>(resolved_entries_f64 * 256.0);
     let resolve_rate = resolved_size.over(path_resolve_elapsed);
@@ -90,10 +93,16 @@ pub fn process_mft_file(
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
     // aggregate performance statistics
-    #[allow(clippy::cast_precision_loss, reason = "double precision rate math is best-effort for large MFT sizes")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "double precision rate math is best-effort for large MFT sizes"
+    )]
     let total_size = uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64);
     let total_data_rate = total_size.over(elapsed); // overall throughput
-    #[allow(clippy::cast_precision_loss, reason = "double precision entry rate math is best-effort for high entry counts")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "double precision entry rate math is best-effort for high entry counts"
+    )]
     let entries_rate = Ratio::new::<ratio>(mft_file.record_count() as f64) / elapsed;
     debug!(
         drive_letter = &drive_letter,
