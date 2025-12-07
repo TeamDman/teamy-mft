@@ -100,6 +100,5 @@ mod test {
             Information::new::<byte>(1_048_576).get::<byte>(),
             Information::new::<mebibyte>(1).get::<byte>()
         );
-
     }
 }

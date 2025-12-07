@@ -77,7 +77,9 @@ mod tests {
 
         for i in 0..100 {
             // Generate an arbitrary CLI instance
-            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
+            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) {
+                cli
+            } else {
                 // If we run out of data, refresh with new seed
                 data = vec![u8::try_from(i).unwrap(); 1024];
                 rng = arbitrary::Unstructured::new(&data);
@@ -102,7 +104,8 @@ mod tests {
             };
 
             // Check equality
-            assert!(cli == parsed_cli, 
+            assert!(
+                cli == parsed_cli,
                 "CLI roundtrip failed on iteration {i}:\nOriginal: {cli:?}\nParsed: {parsed_cli:?}\nArgs: {full_args:?}"
             );
         }
@@ -115,7 +118,9 @@ mod tests {
         let mut rng = arbitrary::Unstructured::new(&data);
 
         for i in 0..50 {
-            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
+            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) {
+                cli
+            } else {
                 data = vec![u8::try_from(i * 2).unwrap(); 1024];
                 rng = arbitrary::Unstructured::new(&data);
                 Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")

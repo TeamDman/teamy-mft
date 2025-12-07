@@ -360,7 +360,7 @@ fn parse_size_to_bytes(s: &str) -> Option<Information> {
 mod tests {
     use super::*;
     use uom::si::information::mebibyte;
-    
+
     fn push_new_file(
         expected: &mut Vec<RobocopyLogEntry>,
         size: Information,

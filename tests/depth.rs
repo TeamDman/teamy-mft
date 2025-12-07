@@ -64,5 +64,4 @@ fn create_deep_folders() {
 
     println!("Maximum depth reached: {depth}");
     println!("Final path length: {}", path.to_string_lossy().len());
-
 }
