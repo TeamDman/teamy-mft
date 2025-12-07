@@ -359,7 +359,6 @@ fn parse_size_to_bytes(s: &str) -> Option<Information> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::robocopy::robocopy_log_entry::RobocopyLogEntry;
     use uom::si::information::mebibyte;
 
     #[test]
@@ -426,7 +425,7 @@ mod tests {
         );
         push_new_file(
             &mut expected,
-            Information::new::<byte>(204576),
+            Information::new::<byte>(204_576),
             r"J:\nas-ds418j_1.hbk\Pool\0\17\0.index",
             &[100],
         );
@@ -444,7 +443,7 @@ mod tests {
         );
         push_new_file(
             &mut expected,
-            Information::new::<byte>(204224),
+            Information::new::<byte>(204_224),
             r"J:\nas-ds418j_1.hbk\Pool\0\17\1.index",
             &[100],
         );
