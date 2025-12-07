@@ -3,8 +3,6 @@
 
 use crate::mft::fast_entry::FileNameCollection;
 use std::borrow::Cow;
-use std::ops::Deref;
-use std::ops::DerefMut;
 use std::path::PathBuf;
 
 /// Decode UTF-16 little endian slice to String (lossy ASCII fast-path optional later).
@@ -25,55 +23,6 @@ fn decode_name(units: &[u16]) -> Cow<'_, str> {
         s.push(r.unwrap_or('\u{FFFD}'));
     }
     Cow::Owned(s)
-}
-
-/// Per-entry resolved paths (sparse). Index = entry id. None = unresolved.
-#[derive(Debug, Default, Clone)]
-pub struct ResolvedPaths(pub Vec<Option<PathBuf>>);
-
-impl ResolvedPaths {
-    #[must_use]
-    pub fn unresolved_count(&self) -> usize {
-        self.0.iter().filter(|p| p.is_none()).count()
-    }
-    #[must_use]
-    pub fn resolved_count(&self) -> usize {
-        self.0.len() - self.unresolved_count()
-    }
-    /// Iterate borrowing resolved entries (`entry_id`, &`PathBuf`)
-    pub fn resolved(&self) -> impl Iterator<Item = (u32, &PathBuf)> {
-        #[allow(clippy::cast_possible_truncation, reason = "entry_id fits in u32")]
-        self.0
-            .iter()
-            .enumerate()
-            .filter_map(|(i, o)| o.as_ref().map(|p| (i as u32, p)))
-    }
-}
-
-impl Deref for ResolvedPaths {
-    type Target = [Option<PathBuf>];
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl DerefMut for ResolvedPaths {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl IntoIterator for ResolvedPaths {
-    type Item = (u32, PathBuf);
-    type IntoIter = std::vec::IntoIter<(u32, PathBuf)>;
-    fn into_iter(self) -> Self::IntoIter {
-        #[allow(clippy::cast_possible_truncation, reason = "entry_id fits in u32")]
-        self.0
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, o)| o.map(|p| (i as u32, p)))
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
 }
 
 /// A mapping from MFT entry ID to zero/one/many resolved paths.
