@@ -17,7 +17,7 @@ fn create_deep_folders() -> eyre::Result<()> {
     loop {
         // Check if we've reached maximum depth
         if depth >= max_depth {
-            println!("Reached maximum depth limit: {}", max_depth);
+            println!("Reached maximum depth limit: {max_depth}");
             break;
         }
 
@@ -33,14 +33,14 @@ fn create_deep_folders() -> eyre::Result<()> {
 
         // Check if we've reached maximum path length
         if path.to_string_lossy().len() >= max_length {
-            println!("Reached maximum path length limit: {}", max_length);
+            println!("Reached maximum path length limit: {max_length}");
             path.pop(); // Remove the last component since we didn't create it
             break;
         }
 
         println!("Attempting to create: {}", path.to_string_lossy());
         match std::fs::create_dir_all(&path) {
-            Ok(_) => {
+            Ok(()) => {
                 depth += 1;
                 println!(
                     "Created depth {}: {} (path length: {})",
@@ -56,13 +56,13 @@ fn create_deep_folders() -> eyre::Result<()> {
                     dir_name,
                     path.to_string_lossy().len()
                 );
-                println!("Error: {}", e);
+                println!("Error: {e}");
                 break;
             }
         }
     }
 
-    println!("Maximum depth reached: {}", depth);
+    println!("Maximum depth reached: {depth}");
     println!("Final path length: {}", path.to_string_lossy().len());
 
     Ok(())

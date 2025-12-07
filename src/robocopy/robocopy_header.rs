@@ -151,7 +151,7 @@ mod tests {
         fn normalize(s: &str) -> String {
             s.trim_start_matches('\n')
                 .lines()
-                .map(|l| l.trim_end())
+                .map(str::trim_end)
                 .collect::<Vec<_>>()
                 .join("\n")
         }

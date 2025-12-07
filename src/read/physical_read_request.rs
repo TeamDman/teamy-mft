@@ -68,7 +68,7 @@ mod test {
         assert_eq!(request.physical_end(), Information::new::<byte>(150));
 
         let aligned = {
-            let mut r = request.clone();
+            let mut r = request;
             r.align_to_sector_size(Information::new::<byte>(64));
             r
         };

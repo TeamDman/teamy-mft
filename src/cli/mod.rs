@@ -77,14 +77,11 @@ mod tests {
 
         for i in 0..100 {
             // Generate an arbitrary CLI instance
-            let cli = match Cli::arbitrary(&mut rng) {
-                Ok(cli) => cli,
-                Err(_) => {
-                    // If we run out of data, refresh with new seed
-                    data = vec![i as u8; 1024];
-                    rng = arbitrary::Unstructured::new(&data);
-                    Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
-                }
+            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
+                // If we run out of data, refresh with new seed
+                data = vec![i as u8; 1024];
+                rng = arbitrary::Unstructured::new(&data);
+                Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
             };
 
             // Convert CLI to args
@@ -99,19 +96,15 @@ mod tests {
                 Ok(parsed) => parsed,
                 Err(e) => {
                     panic!(
-                        "Failed to parse CLI args on iteration {}: {}\nOriginal CLI: {:?}\nArgs: {:?}",
-                        i, e, cli, full_args
+                        "Failed to parse CLI args on iteration {i}: {e}\nOriginal CLI: {cli:?}\nArgs: {full_args:?}"
                     );
                 }
             };
 
             // Check equality
-            if cli != parsed_cli {
-                panic!(
-                    "CLI roundtrip failed on iteration {}:\nOriginal: {:?}\nParsed: {:?}\nArgs: {:?}",
-                    i, cli, parsed_cli, full_args
-                );
-            }
+            assert!(cli == parsed_cli, 
+                "CLI roundtrip failed on iteration {i}:\nOriginal: {cli:?}\nParsed: {parsed_cli:?}\nArgs: {full_args:?}"
+            )
         }
     }
 
@@ -122,13 +115,10 @@ mod tests {
         let mut rng = arbitrary::Unstructured::new(&data);
 
         for i in 0..50 {
-            let cli = match Cli::arbitrary(&mut rng) {
-                Ok(cli) => cli,
-                Err(_) => {
-                    data = vec![(i * 2) as u8; 1024];
-                    rng = arbitrary::Unstructured::new(&data);
-                    Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
-                }
+            let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
+                data = vec![(i * 2) as u8; 1024];
+                rng = arbitrary::Unstructured::new(&data);
+                Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
             };
 
             let args1 = cli.to_args();
@@ -136,8 +126,7 @@ mod tests {
 
             assert_eq!(
                 args1, args2,
-                "CLI.to_args() should be deterministic for iteration {}",
-                i
+                "CLI.to_args() should be deterministic for iteration {i}"
             );
         }
     }
