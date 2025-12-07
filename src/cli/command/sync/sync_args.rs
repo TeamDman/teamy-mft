@@ -51,6 +51,16 @@ struct DriveInfo {
 }
 
 impl SyncArgs {
+    /// Sync MFT data from drives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sync directory cannot be retrieved, elevation fails,
+    /// or if reading/writing MFT data fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if spawning worker threads fails.
     pub fn invoke(self) -> eyre::Result<()> {
         // Ensure we have a sync directory before elevating
         let sync_dir = try_get_sync_dir()?;

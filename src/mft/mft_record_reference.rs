@@ -15,12 +15,12 @@ impl MftRecordReference {
     pub const RECORD_NUMBER_MASK: u64 = (1u64 << 48) - 1;
 
     /// Creates a reference from raw u64 (no validation beyond masking).
-    #[must_use] 
+    #[must_use]
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
     /// Compose from parts, validating record number fits 48 bits (debug only).
-    #[must_use] 
+    #[must_use]
     pub fn from_parts(record: MftRecordNumber, sequence: MftSequenceNumber) -> Self {
         debug_assert!(
             *record <= Self::RECORD_NUMBER_MASK,
@@ -29,15 +29,15 @@ impl MftRecordReference {
         let raw = (*record & Self::RECORD_NUMBER_MASK) | (u64::from(sequence.get()) << 48);
         Self(raw)
     }
-    #[must_use] 
+    #[must_use]
     pub fn to_raw(self) -> u64 {
         self.0
     }
-    #[must_use] 
+    #[must_use]
     pub fn get_record_number(self) -> MftRecordNumber {
         MftRecordNumber::new(self.0 & Self::RECORD_NUMBER_MASK)
     }
-    #[must_use] 
+    #[must_use]
     pub fn get_sequence_number(self) -> MftSequenceNumber {
         MftSequenceNumber::new((self.0 >> 48) as u16)
     }

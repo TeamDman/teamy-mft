@@ -39,11 +39,17 @@ pub enum PhysicalReaderEnqueueResult {
 }
 
 impl PhysicalReader {
+    /// Create a reader that queues overlapping reads against the specified file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or the completion port cannot be created.
     pub fn try_new(
         filename: impl Param<PCWSTR>,
         requests: impl IntoIterator<Item = PhysicalReadRequest>,
         max_in_flight: usize,
     ) -> eyre::Result<Self> {
+        // SAFETY: `CreateFileW` is called with valid path parameters and flags for overlapped IO.
         let file_handle = unsafe {
             Owned::new(CreateFileW(
                 filename,
@@ -58,6 +64,7 @@ impl PhysicalReader {
 
         let remaining: Vec<PhysicalReadRequest> = requests.into_iter().collect();
         let results = (0..remaining.len()).map(|_| None).collect();
+        // SAFETY: `CreateIoCompletionPort` is provided a valid handle and acceptable parameters.
         let completion_port =
             unsafe { Owned::new(CreateIoCompletionPort(*file_handle, None, 0, 0)?) };
         Ok(Self {
@@ -70,6 +77,11 @@ impl PhysicalReader {
         })
     }
 
+    /// Enqueue work until the IOCP queue has reached `max_in_flight` or there is no work left.
+    ///
+    /// # Errors
+    ///
+    /// Propagates errors returned by [`PhysicalReader::try_enqueue`].
     pub fn enqueue_until_saturation(&mut self) -> eyre::Result<()> {
         debug!(
             in_flight = self.in_flight,
@@ -77,16 +89,15 @@ impl PhysicalReader {
             max_in_flight = self.max_in_flight,
             "Enqueuing IOCP reads",
         );
-        loop {
-            match self.try_enqueue()? {
-                PhysicalReaderEnqueueResult::Enqueued => {}
-                PhysicalReaderEnqueueResult::Full => break,
-                PhysicalReaderEnqueueResult::Done => break,
-            }
-        }
+        while let PhysicalReaderEnqueueResult::Enqueued = self.try_enqueue()? {}
         Ok(())
     }
 
+    /// Drain the queue and return the aggregated read results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if queueing or completion handling fails.
     pub fn read_all(mut self) -> eyre::Result<PhysicalReadResults> {
         debug!(request_count = self.remaining.len(), "Queueing IOCP reads",);
 
@@ -108,6 +119,11 @@ impl PhysicalReader {
         Ok(PhysicalReadResults { entries })
     }
 
+    /// Await a single IO completion result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if waiting for the completion port fails.
     pub fn receive_result(&mut self) -> eyre::Result<()> {
         match ActivePhysicalReadRequest::receive(*self.iocp_handle) {
             Ok((entry, response_index)) => {
@@ -119,6 +135,11 @@ impl PhysicalReader {
         }
     }
 
+    /// Attempt to enqueue the next read request if the queue is not saturated.
+    ///
+    /// # Errors
+    ///
+    /// Fails if sending the read request to the file handle fails.
     pub fn try_enqueue(&mut self) -> eyre::Result<PhysicalReaderEnqueueResult> {
         if self.in_flight >= self.max_in_flight {
             return Ok(PhysicalReaderEnqueueResult::Full);

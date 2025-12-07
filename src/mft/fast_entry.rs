@@ -70,13 +70,13 @@ impl<'a> FileNameCollection<'a> {
     }
 
     /// Get the total number of filename references collected.
-    #[must_use] 
+    #[must_use]
     pub fn x30_count(&self) -> usize {
         self.all_filenames.len()
     }
 
     /// Get the number of entries that have filename attributes.
-    #[must_use] 
+    #[must_use]
     pub fn entry_count(&self) -> usize {
         self.per_entry_indices.len()
     }
@@ -103,7 +103,7 @@ fn read_u64(bytes: &[u8], off: usize) -> Option<u64> {
 
 /// Parse the total entry size from the first entry slice (delegates to `fast_fixup` helper)
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
     detect_entry_size(first_entry)
 }
@@ -131,9 +131,8 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     let mut count = 0;
     while offset + 16 <= entry_bytes.len() {
         // minimal attribute header length guard
-        let attr_type = match read_u32(entry_bytes, offset) {
-            Some(v) => v,
-            None => break,
+        let Some(attr_type) = read_u32(entry_bytes, offset) else {
+            break;
         };
         if attr_type == ATTRIBUTE_TYPE_END {
             break;
@@ -169,10 +168,16 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
                     let name_utf16_off = value_abs + 0x42;
                     let name_bytes_end = name_utf16_off + name_len * 2;
                     if name_bytes_end <= entry_bytes.len() {
-                        // SAFETY: constructing &[u16] from properly aligned bytes – alignment of u16 may be 2; slice.as_ptr() is aligned to 1. Use from_raw_parts_unaligned (stable?) -> fallback to copy if misaligned risk. Here we accept potential unaligned read; on x86 it's fine.
+                        #[allow(
+                            clippy::cast_ptr_alignment,
+                            reason = "NTFS data is expected to be properly aligned for u16"
+                        )]
+                        // SAFETY: `entry_bytes` contains validated NTFS FILE_NAME data with a proper size, and the bytes are expected to align for u16 reads.
                         let raw: &[u16] = unsafe {
                             std::slice::from_raw_parts(
-                                entry_bytes[name_utf16_off..name_bytes_end].as_ptr().cast::<u16>(),
+                                entry_bytes[name_utf16_off..name_bytes_end]
+                                    .as_ptr()
+                                    .cast::<u16>(),
                                 name_len,
                             )
                         };
@@ -212,12 +217,16 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// # Ok(()) }
 /// # let _ = demo();
 /// ```
+/// # Panics
+/// Panics if the MFT entry count exceeds `u32::MAX`.
 pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
+    type PerThreadData<'a> = Vec<(Vec<FileNameRef<'a>>, Vec<(u32, usize)>)>;
+
     let full: &'a [u8] = mft; // borrow the entire bytes buffer
     let entry_size = mft.record_size().get::<uom::si::information::byte>();
     let entry_count = mft.record_count();
 
-    let per_thread: Vec<(Vec<FileNameRef<'a>>, Vec<(u32, usize)>)> = (0..entry_count)
+    let per_thread: PerThreadData = (0..entry_count)
         .into_par_iter()
         .map(|idx| {
             let mut list = Vec::new();
@@ -225,11 +234,15 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
             let start = idx * entry_size;
             let end = start + entry_size;
             let record_bytes: &'a [u8] = &full[start..end];
-            for_each_filename(record_bytes, idx as u32, |fref| {
-                let global_index = list.len();
-                list.push(fref);
-                pairs.push((fref.entry_id, global_index));
-            });
+            for_each_filename(
+                record_bytes,
+                u32::try_from(idx).expect("idx should fit in u32"),
+                |fref| {
+                    let global_index = list.len();
+                    list.push(fref);
+                    pairs.push((fref.entry_id, global_index));
+                },
+            );
             (list, pairs)
         })
         .collect();

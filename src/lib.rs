@@ -35,7 +35,15 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub const DEFAULT_EXTRA_FILTERS: &str = r"bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info,cosmic_text=info,naga=warn,wgpu=error,wgpu_hal=warn,bevy_skein=trace,bevy_winit::system=info";
 
 /// Initialize tracing subscriber with the given log level and optional JSON output.
-pub fn init_tracing(level: Level, json_behaviour: JsonLogBehaviour) -> eyre::Result<()> {
+///
+/// # Errors
+///
+/// Returns an error if directory creation or file access for the JSON log fails.
+///
+/// # Panics
+///
+/// Panics if locking or cloning the JSON log file handle fails.
+pub fn init_tracing(level: Level, json_behaviour: &JsonLogBehaviour) -> eyre::Result<()> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::builder().parse_lossy(format!(
             "{default_log_level},{extras}",
@@ -108,13 +116,17 @@ pub fn init_tracing(level: Level, json_behaviour: JsonLogBehaviour) -> eyre::Res
     Ok(())
 }
 
-#[must_use] 
+#[must_use]
 pub fn default_json_log_path() -> PathBuf {
     let timestamp = Local::now().format("%Y-%m-%d_%Hh%Mm%Ss");
     PathBuf::from(format!("teamy_mft_log_{timestamp}.jsonl"))
 }
 
-// Entrypoint for the program to reduce coupling to the name of this crate.
+/// Entrypoint for the program to reduce coupling to the name of this crate.
+///
+/// # Errors
+///
+/// Returns an error if CLI parsing or command execution fails.
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let cli = Cli::command();

@@ -4,6 +4,7 @@ use crate::read::logical_read_plan::LogicalFileSegmentKind;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use eyre::Result;
 use eyre::eyre;
+use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use tracing::warn;
@@ -26,15 +27,15 @@ pub struct MftRecordAttributeRunList<'a> {
 }
 
 impl<'a> MftRecordAttributeRunList<'a> {
-    #[must_use] 
+    #[must_use]
     pub fn new(raw: &'a [u8]) -> Self {
         Self { raw }
     }
-    #[must_use] 
+    #[must_use]
     pub fn as_slice(&self) -> &'a [u8] {
         self.raw
     }
-    #[must_use] 
+    #[must_use]
     pub fn iter(&self) -> MftRecordAttributeRunListIter<'a> {
         MftRecordAttributeRunListIter {
             raw: self.raw,
@@ -42,8 +43,19 @@ impl<'a> MftRecordAttributeRunList<'a> {
             last_lcn: 0,
         }
     }
+    /// # Errors
+    ///
+    /// Returns an error if the runlist data is invalid.
     pub fn decode_all(&self) -> Result<Vec<MftRecordAttributeRunListEntry>> {
         self.iter().collect()
+    }
+}
+
+impl<'a> IntoIterator for &MftRecordAttributeRunList<'a> {
+    type Item = Result<MftRecordAttributeRunListEntry>;
+    type IntoIter = MftRecordAttributeRunListIter<'a>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -95,6 +107,10 @@ impl Iterator for MftRecordAttributeRunListIter<'_> {
             }
             self.pos += offset_size as usize;
             self.last_lcn = self.last_lcn.wrapping_add(delta);
+            #[allow(
+                clippy::cast_sign_loss,
+                reason = "LCN can be negative in NTFS but is cast to u64 for API compatibility"
+            )]
             Some(self.last_lcn as u64)
         };
         Some(Ok(MftRecordAttributeRunListEntry {
@@ -116,7 +132,7 @@ impl MftRecordAttributeRunListOwned {
             if let Some(x80) = attr.as_x80() {
                 // todo: ensure that the attribute has no name
                 if let Ok(runlist) = x80.get_data_run_list() {
-                    for run_res in runlist.iter() {
+                    for run_res in &runlist {
                         match run_res {
                             Ok(run) => rtn.push(run),
                             Err(e) => warn!("Failed decoding data run entry: {e:?}"),
@@ -136,9 +152,9 @@ impl MftRecordAttributeRunListOwned {
     ///
     /// Future opportunity: produce a sparse output file
     /// by marking destination with `FSCTL_SET_SPARSE` and eliding zero allocation explicitly.
-    #[must_use] 
+    #[must_use]
     pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
-        let mut segments = Default::default();
+        let mut segments = BTreeSet::default();
         let mut logical_offset = Information::ZERO;
         if cluster_size == Information::ZERO {
             return LogicalReadPlan { segments };
@@ -148,9 +164,11 @@ impl MftRecordAttributeRunListOwned {
             if length_clusters == 0 {
                 continue;
             }
+            #[allow(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
             let length = length_clusters as usize * cluster_size;
             let kind = match run.local_cluster_network_start_entry_index {
                 Some(lcn) => LogicalFileSegmentKind::Physical {
+                    #[allow(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
                     physical_offset: lcn as usize * cluster_size,
                 },
                 None => LogicalFileSegmentKind::Sparse,

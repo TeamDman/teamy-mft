@@ -69,15 +69,23 @@ impl MftRecord {
     /// Validates the "FILE" signature.
     ///
     /// Useful for reading the $MFT record itself (record 0) or other known record numbers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record cannot be read or parsed.
     pub fn try_from_handle(
-        drive_handle: impl HandleReadExt,
+        drive_handle: &impl HandleReadExt,
         mft_record_location: MftRecordLocationOnDisk,
     ) -> eyre::Result<Self> {
         let mut data = [0u8; MFT_RECORD_SIZE as usize];
-        drive_handle.try_read_exact(
-            mft_record_location.get::<byte>() as i64,
-            data.as_mut_slice(),
-        )?;
+        // Convert the location to a signed offset for the read call. Use a checked conversion
+        // so we fail with a clear error instead of silently wrapping on platforms where
+        // `usize` may be larger than `i64`.
+        let offset_usize = mft_record_location.get::<byte>();
+        let offset_i64 = i64::try_from(offset_usize)
+            .map_err(|e| eyre::eyre!("MFT record location doesn't fit in i64: {e}"))?;
+
+        drive_handle.try_read_exact(offset_i64, data.as_mut_slice())?;
         if &data[0..4] != b"FILE" {
             bail!(
                 "Invalid MFT record signature: expected 'FILE', got {:?}",
@@ -91,32 +99,46 @@ impl MftRecord {
 
     /// Zero-copy access to the 4-byte signature.
     pub fn get_signature(&self) -> &[u8; 4] {
-        // SAFETY: first 4 bytes always exist; casting to fixed array reference.
-        unsafe { &*self.data.as_ptr().add(Self::OFFSET_FOR_SIGNATURE).cast::<[u8; 4]>() }
+        // SAFETY: an MFT record is stored as a fixed-size buffer and the first 4 bytes
+        // (signature) are always present when this object was created. We therefore
+        // can safely obtain a reference to a [u8;4] at offset 0.
+        unsafe {
+            &*self
+                .data
+                .as_ptr()
+                .add(Self::OFFSET_FOR_SIGNATURE)
+                .cast::<[u8; 4]>()
+        }
     }
 
-    #[inline(always)]
+    #[inline]
     fn read_u16(&self, offset: usize) -> u16 {
-        // SAFETY: Bounds ensured by caller placement; use unaligned read then convert LE.
+        // SAFETY: caller must ensure the requested offset is within the underlying
+        // record buffer. This function performs an unaligned read and converts from
+        // little-endian byte order.
         unsafe {
             u16::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset).cast::<u16>()
+                self.data.as_ptr().add(offset).cast::<u16>(),
             ))
         }
     }
-    #[inline(always)]
+    #[inline]
     fn read_u32(&self, offset: usize) -> u32 {
+        // SAFETY: caller must ensure the offset is valid for a u32 read inside the
+        // record buffer.
         unsafe {
             u32::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset).cast::<u32>()
+                self.data.as_ptr().add(offset).cast::<u32>(),
             ))
         }
     }
-    #[inline(always)]
+    #[inline]
     fn read_u64(&self, offset: usize) -> u64 {
+        // SAFETY: caller must ensure the offset is valid for a u64 read inside the
+        // record buffer.
         unsafe {
             u64::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset).cast::<u64>()
+                self.data.as_ptr().add(offset).cast::<u64>(),
             ))
         }
     }
@@ -124,67 +146,67 @@ impl MftRecord {
     /// Offset (in bytes from record start) to the Update Sequence Array (USA).
     /// NOTE: This was previously (incorrectly) read from 0x18/0x19 (used size field).
     /// Correct field per NTFS layout is at 0x04.
-    #[inline(always)]
+    #[inline]
     pub fn get_update_sequence_array_offset(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_UPDATE_SEQUENCE_ARRAY_OFFSET)
     }
 
     /// Number of 2-byte elements in the USA, including the first sentinel value.
-    #[inline(always)]
+    #[inline]
     pub fn get_update_sequence_array_size_words(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_UPDATE_SEQUENCE_ARRAY_SIZE)
     }
 
     /// $`LogFile` sequence number (LSN) at offset 0x08 (8 bytes LE).
-    #[inline(always)]
+    #[inline]
     pub fn get_dollar_log_file(&self) -> u64 {
         self.read_u64(Self::OFFSET_FOR_LOGFILE_SEQUENCE_NUMBER)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_sequence_number(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_SEQUENCE)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_hard_link_count(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_HARDLINKS)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_first_attribute_offset(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_FIRST_ATTR)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_flags(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_FLAGS)
     }
 
     /// Bytes in use inside this record.
-    #[inline(always)]
+    #[inline]
     pub fn get_used_size(&self) -> u32 {
         self.read_u32(Self::OFFSET_FOR_USED_SIZE)
     }
 
     /// Allocated size (record size, typically 1024 or 4096).
-    #[inline(always)]
+    #[inline]
     pub fn get_allocated_size(&self) -> u32 {
         self.read_u32(Self::OFFSET_FOR_ALLOC_SIZE)
     }
 
     /// Base record reference (8 bytes) – if non-zero, this is an extension record.
-    #[inline(always)]
+    #[inline]
     pub fn get_base_reference_raw(&self) -> u64 {
         self.read_u64(Self::OFFSET_FOR_BASE_REF)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_next_attribute_id(&self) -> u16 {
         self.read_u16(Self::OFFSET_FOR_NEXT_ATTR_ID)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_record_number(&self) -> MftRecordNumber {
         self.read_u32(Self::OFFSET_FOR_RECORD_NUMBER).into()
     }

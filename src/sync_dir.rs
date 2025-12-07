@@ -35,6 +35,11 @@ impl AsRef<Path> for SyncDirPersistencePath {
     }
 }
 
+/// Determine the current sync directory, checking the environment variable and persisted file.
+///
+/// # Errors
+///
+/// Returns an error if accessing the config directory or reading the persisted file fails.
 pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
     if let Ok(val) = std::env::var(SYNC_DIR_ENV) {
         let trimmed = val.trim();
@@ -61,6 +66,11 @@ pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
     Ok(Some(PathBuf::from(line)))
 }
 
+/// Retrieve the sync directory, failing if it is not configured.
+///
+/// # Errors
+///
+/// Returns an error if the sync directory is unset, or if retrieving it fails.
 pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
     let Some(sync_dir) = get_sync_dir()? else {
         eyre::bail!(
@@ -75,7 +85,12 @@ pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
     Ok(sync_dir)
 }
 
-pub fn set_sync_dir(path: PathBuf) -> color_eyre::eyre::Result<()> {
+/// Persist the sync directory to disk for future runs.
+///
+/// # Errors
+///
+/// Returns an error if the config directory cannot be created or the file cannot be written.
+pub fn set_sync_dir(path: impl AsRef<Path>) -> color_eyre::eyre::Result<()> {
     if std::env::var(SYNC_DIR_ENV).is_ok() {
         warn!(
             env = SYNC_DIR_ENV,
@@ -94,6 +109,7 @@ pub fn set_sync_dir(path: PathBuf) -> color_eyre::eyre::Result<()> {
     }
 
     // UTF-8 single-line text file
-    fs::write(persist_path.as_ref(), format!("{}\n", path.display()))?;
+    let path_ref = path.as_ref();
+    fs::write(persist_path.as_ref(), format!("{}\n", path_ref.display()))?;
     Ok(())
 }

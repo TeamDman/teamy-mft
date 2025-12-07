@@ -23,7 +23,7 @@ impl LogicalReadPlan {
             .filter(|s| matches!(s.kind, LogicalFileSegmentKind::Physical { .. }))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_physical_read_plan(&self) -> PhysicalReadPlan {
         self.segments
             .iter()
@@ -31,7 +31,7 @@ impl LogicalReadPlan {
             .collect()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn total_logical_size(&self) -> Information {
         self.segments
             .last()
@@ -46,7 +46,7 @@ pub struct LogicalFileSegment {
     pub kind: LogicalFileSegmentKind,
 }
 impl LogicalFileSegment {
-    #[must_use] 
+    #[must_use]
     pub fn as_physical_read_request(&self) -> Option<PhysicalReadRequest> {
         match self.kind {
             LogicalFileSegmentKind::Physical {

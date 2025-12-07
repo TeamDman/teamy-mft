@@ -55,7 +55,7 @@ const SECTOR: usize = 512; // NTFS logical sector (fixup stride)
 /// Expects a valid NTFS FILE record with a 1KB or 4KB typical size.
 /// Returns None if slice too small.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn detect_entry_size(entry0: &[u8]) -> Option<u32> {
     // total_entry_size at offset 0x1C (after used_entry_size at 0x18)
     if entry0.len() < 0x20 {
@@ -80,11 +80,10 @@ fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
 
 /// Quick check if an entry still needs fixup application.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn needs_fixup(entry: &[u8]) -> bool {
-    let (usa_offset, usa_size) = match read_update_sequence_array_fields(entry) {
-        Some(v) => v,
-        None => return false,
+    let Some((usa_offset, usa_size)) = read_update_sequence_array_fields(entry) else {
+        return false;
     };
     if usa_size < 2 {
         return false;
@@ -104,9 +103,8 @@ pub fn needs_fixup(entry: &[u8]) -> bool {
 /// Returns the state of the operation.
 #[inline]
 pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
-    let (usa_offset, usa_size) = match read_update_sequence_array_fields(entry) {
-        Some(v) => v,
-        None => return FixupState::Invalid,
+    let Some((usa_offset, usa_size)) = read_update_sequence_array_fields(entry) else {
+        return FixupState::Invalid;
     };
     if usa_size < 2 {
         return FixupState::AlreadyApplied;
@@ -167,6 +165,7 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
 /// Apply fixups to all entries in the buffer using parallelism when the `rayon` feature is enabled.
 /// Also logs basic telemetry: detected entry size, entry count, elapsed time and throughput, and outcome stats.
 pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
+    use rayon::prelude::*;
     if entry_size == 0 || !buf.len().is_multiple_of(entry_size) {
         debug!(
             "Invalid/unaligned entry size: entry_size={} buf_len={}",
@@ -175,7 +174,6 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
         );
         return FixupStats::default();
     }
-
     let entry_count = buf.len() / entry_size;
     debug!(
         "Detected entry size: {} bytes, total entries: {}",
@@ -185,7 +183,6 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
 
     let start = Instant::now();
 
-    use rayon::prelude::*;
     let stats = buf
         .par_chunks_mut(entry_size)
         .map(|entry| {
@@ -205,6 +202,10 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
         });
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "precision loss is acceptable for size estimation"
+    )]
     let total_size = Information::new::<byte>(buf.len() as f64);
     let rate = total_size.over(elapsed);
     debug!(

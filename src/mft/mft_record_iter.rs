@@ -14,6 +14,8 @@ pub struct MftRecordIter {
 }
 
 impl MftRecordIter {
+    /// # Panics
+    /// Panics if `entry_size` is zero.
     pub fn new(bytes: Bytes, entry_size: Information) -> Self {
         let total = if entry_size == Information::ZERO {
             panic!("MFT entry size cannot be zero");

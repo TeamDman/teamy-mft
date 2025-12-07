@@ -19,12 +19,16 @@ impl Default for DriveLetterPattern {
 }
 
 impl DriveLetterPattern {
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Resolve the pattern into a list of drive letters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pattern is invalid or no drives are found.
     pub fn into_drive_letters(&self) -> eyre::Result<Vec<char>> {
         parse_drive_letters(self.as_str())
     }
@@ -144,6 +148,7 @@ fn parse_drive_letters(input: &str) -> eyre::Result<Vec<char>> {
 fn get_available_drives() -> eyre::Result<Vec<char>> {
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
+    // SAFETY: GetLogicalDrives is a safe Windows API call that returns a bitmask of available drives.
     let drives_bitmask = unsafe { GetLogicalDrives() };
 
     let mut available_drives = Vec::new();

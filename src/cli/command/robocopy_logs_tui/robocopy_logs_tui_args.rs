@@ -18,6 +18,11 @@ pub struct RobocopyLogsTuiArgs {
 }
 
 impl RobocopyLogsTuiArgs {
+    /// Display robocopy logs in a TUI.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the log file cannot be read or parsed.
     pub fn invoke(self) -> eyre::Result<()> {
         info!(
             "Tailing robocopy log (skip start): {}",

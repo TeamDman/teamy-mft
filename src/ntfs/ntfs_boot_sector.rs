@@ -8,6 +8,11 @@ pub struct NtfsBootSector {
     pub data: [u8; 512],
 }
 impl NtfsBootSector {
+    /// Read the NTFS boot sector from the given drive handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the drive handle cannot be read.
     pub fn try_from_handle(drive_handle: &NtfsDriveHandle) -> eyre::Result<Self> {
         Ok(NtfsBootSector {
             data: {
@@ -17,15 +22,15 @@ impl NtfsBootSector {
             },
         })
     }
-    #[must_use] 
+    #[must_use]
     pub fn bytes_per_sector(&self) -> u16 {
         u16::from_le_bytes([self.data[0x0b], self.data[0x0c]])
     }
-    #[must_use] 
+    #[must_use]
     pub fn sectors_per_cluster(&self) -> u8 {
         self.data[0x0d]
     }
-    #[must_use] 
+    #[must_use]
     pub fn mft_cluster_number(&self) -> u64 {
         u64::from_le_bytes([
             self.data[0x30],
@@ -38,7 +43,7 @@ impl NtfsBootSector {
             self.data[0x37],
         ])
     }
-    #[must_use] 
+    #[must_use]
     pub fn bytes_per_cluster(&self) -> usize {
         self.bytes_per_sector() as usize * self.sectors_per_cluster() as usize
     }
@@ -46,18 +51,24 @@ impl NtfsBootSector {
     /// Per NTFS spec, at offset 0x40 there is a signed byte:
     /// - If negative, the record size is 2^abs(value) bytes.
     /// - If non-negative, it is `clusters_per_file_record` * `bytes_per_cluster`.
-    #[must_use] 
+    ///
+    /// # Panics
+    ///
+    /// Panics if the exponent or cluster count fails to fit into `usize` (should not happen for valid sectors).
+    #[must_use]
     pub fn file_record_size(&self) -> Information {
-        let val = self.data[0x40] as i8;
+        let val = i8::from_ne_bytes([self.data[0x40]]);
         let bytes = if val < 0 {
-            // 2^abs(val)
-            (1usize) << (-(val as isize) as usize)
+            let shift = usize::try_from(-isize::from(val))
+                .expect("record size exponent fits in usize");
+            (1usize) << shift
         } else {
-            val as usize * self.bytes_per_cluster()
+            let cluster_count = usize::try_from(val).expect("cluster count fits in usize");
+            cluster_count * self.bytes_per_cluster()
         };
         Information::new::<byte>(bytes)
     }
-    #[must_use] 
+    #[must_use]
     pub fn mft_location(&self) -> MftLocationOnDisk {
         self.into()
     }

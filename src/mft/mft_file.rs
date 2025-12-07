@@ -1,4 +1,3 @@
-use crate::mft::fast_fixup::FixupStats;
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
 use bytes::Bytes;
@@ -39,6 +38,9 @@ impl MftFile {
     pub fn size(&self) -> Information {
         Information::new::<byte>(self.bytes.len())
     }
+    /// # Panics
+    ///
+    /// Panics if the MFT entry size field is zero.
     pub fn record_size(&self) -> Information {
         if self.len() < 0x20 {
             return Information::new::<byte>(1024);
@@ -61,6 +63,11 @@ impl MftFile {
     }
 
     #[instrument(level = "debug")]
+    /// Load an MFT file from the given path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened, read, or parsed.
     pub fn from_path(mft_file_path: &Path) -> eyre::Result<Self> {
         // Open file
         let file = std::fs::File::open(mft_file_path)
@@ -70,11 +77,14 @@ impl MftFile {
 
         // Determine file size
         let mft_file_size = Information::new::<byte>(
-            file.metadata()
-                .wrap_err_with(|| {
-                    format!("Failed to get metadata for {}", mft_file_path.display())
-                })?
-                .len() as usize,
+            usize::try_from(
+                file.metadata()
+                    .wrap_err_with(|| {
+                        format!("Failed to get metadata for {}", mft_file_path.display())
+                    })?
+                    .len(),
+            )
+            .wrap_err("File size too large for usize")?,
         );
         if mft_file_size < Information::new::<byte>(1024) {
             eyre::bail!("MFT file too small: {}", mft_file_path.display());
@@ -111,6 +121,10 @@ impl MftFile {
     }
 
     /// Construct from in-memory bytes that need fixups; applies fixups and stores Bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bytes are invalid or fixups fail.
     #[instrument(level = "debug", skip_all)]
     pub fn from_bytes(mut raw: BytesMut) -> eyre::Result<Self> {
         // Ensure we have enough bytes to read the entry size field at 0x1C..=0x1F
@@ -138,7 +152,7 @@ impl MftFile {
                 entry_size_bytes
             );
         }
-        let _stats: FixupStats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
+        let _stats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
         Ok(MftFile {
             bytes: raw.freeze(),
         })

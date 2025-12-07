@@ -35,8 +35,14 @@ impl Default for Command {
 }
 
 impl Command {
-    pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
-        init_tracing(global_args.log_level(), global_args.json_log_behaviour())?;
+    /// Invoke the command with global arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tracing initialization fails or the command execution fails.
+    pub fn invoke(self, global_args: &GlobalArgs) -> eyre::Result<()> {
+        let json_behaviour = global_args.json_log_behaviour();
+        init_tracing(global_args.log_level(), &json_behaviour)?;
         match self {
             Command::Sync(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),

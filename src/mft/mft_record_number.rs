@@ -5,7 +5,7 @@ use std::ops::Deref;
 pub struct MftRecordNumber(u64);
 
 impl MftRecordNumber {
-    #[must_use] 
+    #[must_use]
     pub const fn new(record_number: u64) -> Self {
         Self(record_number)
     }
@@ -48,7 +48,7 @@ impl MftRecordNumber {
     pub const DOLLAR_USN_JRNL: MftRecordNumber = MftRecordNumber(15);
 
     /// Returns true if this record number is within the reserved system file range (0–15 inclusive).
-    #[must_use] 
+    #[must_use]
     pub const fn is_reserved(self) -> bool {
         self.0 < 16
     }

@@ -2,8 +2,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum JsonLogBehaviour {
     #[default]
     None,
@@ -13,7 +12,7 @@ pub enum JsonLogBehaviour {
 
 impl JsonLogBehaviour {
     /// Return the requested JSON log output path, if any.
-    #[must_use] 
+    #[must_use]
     pub fn get_path(&self) -> Option<Cow<'_, PathBuf>> {
         match self {
             JsonLogBehaviour::None => None,
@@ -22,7 +21,6 @@ impl JsonLogBehaviour {
         }
     }
 }
-
 
 impl FromStr for JsonLogBehaviour {
     type Err = std::convert::Infallible;
