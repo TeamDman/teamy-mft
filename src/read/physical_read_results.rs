@@ -248,7 +248,9 @@ mod test {
         // Provide 64 bytes starting at 64, containing bytes 64..127.
         let mut data = vec![0u8; 64];
         for (i, b) in data.iter_mut().enumerate() {
-            *b = 64 + i as u8; // distinct content to verify slice is correct
+            // i is a usize here; convert explicitly to u8 so the test saturates clearly and
+            // avoids clippy's pedantic truncation/sign-loss warnings.
+            *b = 64u8 + u8::try_from(i).unwrap(); // distinct content to verify slice is correct
         }
         let read_results = PhysicalReadResults {
             entries: [PhysicalReadResultEntry {

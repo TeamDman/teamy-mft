@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 #[test]
-#[ignore]
-fn create_deep_folders() -> eyre::Result<()> {
+#[ignore = "manual check for problems with deep folder structures"]
+fn create_deep_folders() {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
 
@@ -65,5 +65,4 @@ fn create_deep_folders() -> eyre::Result<()> {
     println!("Maximum depth reached: {depth}");
     println!("Final path length: {}", path.to_string_lossy().len());
 
-    Ok(())
 }

@@ -62,7 +62,7 @@ mod test {
     use uom::si::usize::Information;
 
     #[test]
-    fn it_works() -> eyre::Result<()> {
+    fn it_works() {
         let request =
             PhysicalReadRequest::new(Information::new::<byte>(100), Information::new::<byte>(50));
         assert_eq!(request.physical_end(), Information::new::<byte>(150));
@@ -76,8 +76,6 @@ mod test {
         assert_eq!(aligned.offset, Information::new::<byte>(64));
         assert_eq!(aligned.length, Information::new::<byte>(128));
         assert_eq!(aligned.physical_end(), Information::new::<byte>(192));
-
-        Ok(())
     }
 
     #[test]

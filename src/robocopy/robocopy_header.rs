@@ -116,6 +116,14 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
+    fn normalize(s: &str) -> String {
+        s.trim_start_matches('\n')
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn parse_header_from_sample() -> eyre::Result<()> {
         // Load full sample log
@@ -148,13 +156,6 @@ mod tests {
             "*.* /TEE /S /E /DCOPY:DA /COPY:DAT /MT:16 /R:1000000 /W:5"
         );
         // Normalize both expected header block and display (trim leading blank lines & trailing whitespace per line)
-        fn normalize(s: &str) -> String {
-            s.trim_start_matches('\n')
-                .lines()
-                .map(str::trim_end)
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
         let expected_display = normalize(&header_str);
         let actual_display = normalize(&header.to_string());
         assert_eq!(

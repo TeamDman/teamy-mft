@@ -79,7 +79,7 @@ mod tests {
             // Generate an arbitrary CLI instance
             let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
                 // If we run out of data, refresh with new seed
-                data = vec![i as u8; 1024];
+                data = vec![u8::try_from(i).unwrap(); 1024];
                 rng = arbitrary::Unstructured::new(&data);
                 Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
             };
@@ -116,7 +116,7 @@ mod tests {
 
         for i in 0..50 {
             let cli = if let Ok(cli) = Cli::arbitrary(&mut rng) { cli } else {
-                data = vec![(i * 2) as u8; 1024];
+                data = vec![u8::try_from(i * 2).unwrap(); 1024];
                 rng = arbitrary::Unstructured::new(&data);
                 Cli::arbitrary(&mut rng).expect("Failed to generate CLI instance")
             };

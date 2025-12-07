@@ -104,7 +104,10 @@ mod tests {
         // mft cluster number @ 0x30
         bs.data[0x30..0x38].copy_from_slice(&mft_cluster.to_le_bytes());
         // clusters per file record @ 0x40 (signed)
-        bs.data[0x40] = rec_byte as u8;
+        // Convert the i8 into the underlying u8 representation explicitly to avoid
+        // clippy's pedantic `cast_sign_loss` warning while preserving the two's
+        // complement byte representation used in the on-disk structure.
+        bs.data[0x40] = rec_byte.to_ne_bytes()[0];
         bs
     }
 

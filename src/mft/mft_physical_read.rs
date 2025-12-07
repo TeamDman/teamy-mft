@@ -95,12 +95,11 @@ mod test {
     use uom::si::usize::Information;
 
     #[test]
-    fn it_works() -> eyre::Result<()> {
+    fn it_works() {
         assert_eq!(
             Information::new::<byte>(1_048_576).get::<byte>(),
             Information::new::<mebibyte>(1).get::<byte>()
         );
 
-        Ok(())
     }
 }

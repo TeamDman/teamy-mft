@@ -360,6 +360,29 @@ fn parse_size_to_bytes(s: &str) -> Option<Information> {
 mod tests {
     use super::*;
     use uom::si::information::mebibyte;
+    
+    fn push_new_file(
+        expected: &mut Vec<RobocopyLogEntry>,
+        size: Information,
+        path: &str,
+        percentages: &[u8],
+    ) {
+        // initial empty
+        expected.push(RobocopyLogEntry::NewFile {
+            size,
+            path: PathBuf::from(path),
+            percentages: Vec::new(),
+        });
+        let mut acc: Vec<u8> = Vec::new();
+        for &p in percentages {
+            acc.push(p);
+            expected.push(RobocopyLogEntry::NewFile {
+                size,
+                path: PathBuf::from(path),
+                percentages: acc.clone(),
+            });
+        }
+    }
 
     #[test]
     fn parse_header_and_first_entries_streaming() -> eyre::Result<()> {
@@ -395,28 +418,6 @@ mod tests {
             when,
             path: PathBuf::from(r"J:\System Volume Information\"),
         });
-        fn push_new_file(
-            expected: &mut Vec<RobocopyLogEntry>,
-            size: Information,
-            path: &str,
-            percentages: &[u8],
-        ) {
-            // initial empty
-            expected.push(RobocopyLogEntry::NewFile {
-                size,
-                path: PathBuf::from(path),
-                percentages: Vec::new(),
-            });
-            let mut acc: Vec<u8> = Vec::new();
-            for &p in percentages {
-                acc.push(p);
-                expected.push(RobocopyLogEntry::NewFile {
-                    size,
-                    path: PathBuf::from(path),
-                    percentages: acc.clone(),
-                });
-            }
-        }
         push_new_file(
             &mut expected,
             Information::new::<mebibyte>(50),
