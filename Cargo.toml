@@ -134,6 +134,9 @@ bevy-inspector-egui = { path = "D:/Repos/Games/bevy-inspector-egui/crates/bevy-i
 [patch."https://github.com/teamdman/bevy_egui"]
 bevy_egui = { path = "D:/Repos/Games/bevy_egui" }
 
+[patch.crates-io]
+teamy-windows = { path = "../teamy-rust-windows-utils" }
+
 # [patch."https://github.com/TeamDman/egui_dock"]
 # egui_dock = { path = "G:/Programming/Repos/egui_dock" }
 
