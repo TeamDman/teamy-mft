@@ -25,7 +25,8 @@ impl Deref for MftLocationOnDisk {
 }
 impl MftLocationOnDisk {
     /// Compute the on-disk byte location of a given MFT record number.
-    /// bytes_per_record must be provided explicitly (do not assume cluster size).
+    /// `bytes_per_record` must be provided explicitly (do not assume cluster size).
+    #[must_use] 
     pub fn record_location(
         &self,
         record_number: MftRecordNumber,

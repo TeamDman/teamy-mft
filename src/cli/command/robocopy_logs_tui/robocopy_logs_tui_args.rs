@@ -63,7 +63,7 @@ impl RobocopyLogsTuiArgs {
             }
         }
 
-        for chunk in rx.iter() {
+        for chunk in &rx {
             let s = String::from_utf8_lossy(&chunk);
             parser.accept(&s);
             loop {

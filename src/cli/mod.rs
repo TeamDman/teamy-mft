@@ -23,6 +23,7 @@ impl Cli {
     pub fn invoke(self) -> eyre::Result<()> {
         self.command.invoke(self.global_args)
     }
+    #[must_use] 
     pub fn display_invocation(&self) -> String {
         let mut args = self.to_args();
         // Prepend the executable name

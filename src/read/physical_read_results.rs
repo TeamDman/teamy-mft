@@ -32,7 +32,14 @@ impl PartialOrd for PhysicalReadResultEntry {
 pub struct PhysicalReadResults {
     pub entries: BTreeSet<PhysicalReadResultEntry>,
 }
+impl Default for PhysicalReadResults {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicalReadResults {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             entries: BTreeSet::new(),
@@ -54,7 +61,7 @@ impl PhysicalReadResults {
         // writer.write_all(slice)?;
 
         debug!("Writing {} logical segments", logical_plan.segments.len());
-        for logical_segment in logical_plan.segments.iter() {
+        for logical_segment in &logical_plan.segments {
             let Some(physical_segment) = logical_segment.as_physical_read_request() else {
                 // Sparse segment, skip
                 continue;

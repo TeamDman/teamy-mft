@@ -30,8 +30,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Manually includes [`::bevy::log::DEFAULT_FILTER`] to create an [`EnvFilter`]
 ///
-/// https://github.com/tokio-rs/tracing/issues/1181
-/// https://github.com/tokio-rs/tracing/issues/2809
+/// <https://github.com/tokio-rs/tracing/issues/1181>
+/// <https://github.com/tokio-rs/tracing/issues/2809>
 pub const DEFAULT_EXTRA_FILTERS: &str = r"bevy_shader=warn,offset_allocator=warn,bevy_app=info,bevy_render=info,gilrs=info,cosmic_text=info,naga=warn,wgpu=error,wgpu_hal=warn,bevy_skein=trace,bevy_winit::system=info";
 
 /// Initialize tracing subscriber with the given log level and optional JSON output.
@@ -108,6 +108,7 @@ pub fn init_tracing(level: Level, json_behaviour: JsonLogBehaviour) -> eyre::Res
     Ok(())
 }
 
+#[must_use] 
 pub fn default_json_log_path() -> PathBuf {
     let timestamp = Local::now().format("%Y-%m-%d_%Hh%Mm%Ss");
     PathBuf::from(format!("teamy_mft_log_{timestamp}.jsonl"))

@@ -38,6 +38,7 @@ impl Default for RobocopyLogParser {
 }
 
 impl RobocopyLogParser {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             buf: String::new(),
@@ -53,7 +54,7 @@ impl RobocopyLogParser {
         self.buf.push_str(chunk);
     }
 
-    /// Attempt to advance the parser. Returns NeedMoreData if no complete item yet.
+    /// Attempt to advance the parser. Returns `NeedMoreData` if no complete item yet.
     pub fn advance(&mut self) -> eyre::Result<RobocopyParseAdvance> {
         match self.state {
             InternalState::ReadingHeader => self.try_parse_header(),
@@ -120,14 +121,13 @@ impl RobocopyLogParser {
                                 path: finished.path,
                                 percentages: finished.percentages,
                             }));
-                        } else {
-                            // Emit incremental state (clone path)
-                            return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
-                                size: pending.size,
-                                path: pending.path.clone(),
-                                percentages: pending.percentages.clone(),
-                            }));
                         }
+                        // Emit incremental state (clone path)
+                        return Ok(RobocopyParseAdvance::LogEntry(RobocopyLogEntry::NewFile {
+                            size: pending.size,
+                            path: pending.path.clone(),
+                            percentages: pending.percentages.clone(),
+                        }));
                     } else if is_new_file_line(trimmed) {
                         // finalize previous without adding new pct and reprocess line
                         let finished = self.pending_new_file.take().unwrap();
@@ -137,10 +137,9 @@ impl RobocopyLogParser {
                             path: finished.path,
                             percentages: finished.percentages,
                         }));
-                    } else {
-                        // ignore noise
-                        continue;
                     }
+                    // ignore noise
+                    continue;
                 }
                 // loop to grab more data
                 continue;
@@ -193,11 +192,10 @@ impl RobocopyLogParser {
                     } else if second_line.trim().is_empty() {
                         // blank line after; accept the error anyway
                         return Ok(RobocopyParseAdvance::LogEntry(access_err));
-                    } else {
-                        // Unexpected; reinsert consumed second line for future processing and still emit error.
-                        self.buf.insert_str(0, &second_line);
-                        return Ok(RobocopyParseAdvance::LogEntry(access_err));
                     }
+                    // Unexpected; reinsert consumed second line for future processing and still emit error.
+                    self.buf.insert_str(0, &second_line);
+                    return Ok(RobocopyParseAdvance::LogEntry(access_err));
                 }
                 if is_new_file_line(trimmed) {
                     if let Some((size, path)) = parse_new_file_line(trimmed) {
@@ -212,9 +210,8 @@ impl RobocopyLogParser {
                             path,
                             percentages: Vec::new(),
                         }));
-                    } else {
-                        eyre::bail!("Failed to parse New File line: '{}'", trimmed);
                     }
+                    eyre::bail!("Failed to parse New File line: '{}'", trimmed);
                 }
                 if parse_percentage_line(trimmed).is_some() {
                     continue;
@@ -306,7 +303,7 @@ fn parse_new_file_line(line: &str) -> Option<(Information, PathBuf)> {
     // Strategy: split by tabs; filter out empty trimmed segments.
     let segs: Vec<&str> = line
         .split('\t')
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
     if segs.is_empty() {
@@ -335,7 +332,7 @@ fn parse_size_to_bytes(s: &str) -> Option<Information> {
     let (num_str, unit) = if unit_char.is_ascii_alphabetic() {
         (&t[..t.len() - 1], Some(unit_char))
     } else {
-        (&t[..], None)
+        ((&*t), None)
     };
     let number: f64 = num_str.trim().parse().ok()?;
     let factor = match unit {

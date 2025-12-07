@@ -86,11 +86,11 @@ impl ActivePhysicalReadRequest {
         // pointer is also the address of the parent ReadRequest.
         // On completion, IOCP will give us back this same pointer
         // so we can recover the Box<ReadRequest>.
-        let overlapped_ptr: *mut OVERLAPPED = &mut boxed.overlapped;
+        let overlapped_ptr: *mut OVERLAPPED = &raw mut boxed.overlapped;
         match unsafe {
             ReadFile(
                 file_handle,
-                Some(&mut boxed.buffer[..]),
+                Some(&mut *boxed.buffer ),
                 None,
                 Some(overlapped_ptr),
             )
@@ -120,16 +120,18 @@ impl ActivePhysicalReadRequest {
         let res = unsafe {
             GetQueuedCompletionStatus(
                 completion_port,
-                &mut bytes_transferred as *mut u32,
-                &mut completion_key as *mut usize,
-                &mut lp_overlapped as *mut *mut OVERLAPPED,
+                &raw mut bytes_transferred,
+                &raw mut completion_key,
+                &raw mut lp_overlapped,
                 u32::MAX,
             )
         };
         match res {
             Ok(()) => {
                 if lp_overlapped.is_null() {
-                    return Err(eyre::eyre!("IOCP returned success but OVERLAPPED ptr was null"));
+                    return Err(eyre::eyre!(
+                        "IOCP returned success but OVERLAPPED ptr was null"
+                    ));
                 }
                 // Recover original allocation using container_of pattern: lp_overlapped points to the first
                 // field (overlapped) so casting back to the parent type is sound under our invariants.
@@ -137,7 +139,8 @@ impl ActivePhysicalReadRequest {
                 let boxed_req = unsafe { Box::from_raw(req_ptr) };
                 debug!(?boxed_req, bytes_transferred, "Completed IOCP read",);
                 let mut data = boxed_req.buffer;
-                let copy_len = (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
+                let copy_len =
+                    (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
                 if copy_len < data.len() {
                     data.truncate(copy_len);
                 }

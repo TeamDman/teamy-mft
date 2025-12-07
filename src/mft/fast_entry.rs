@@ -1,7 +1,7 @@
 //! Fast entry/attribute scanning helpers (filename-only focus).
 //!
 //! These utilities operate over raw entry byte slices (after fixups applied)
-//! to extract FILE_NAME (0x30) attributes with minimal overhead.
+//! to extract `FILE_NAME` (0x30) attributes with minimal overhead.
 
 use crate::mft::fast_fixup::detect_entry_size;
 use crate::mft::mft_file::MftFile;
@@ -18,13 +18,13 @@ pub struct FileNameRef<'a> {
     pub name_utf16: &'a [u16],
 }
 
-/// Collection of FILE_NAME attributes extracted from MFT data.
+/// Collection of `FILE_NAME` attributes extracted from MFT data.
 ///
 /// This structure provides organized access to all filename references found
 /// in an MFT, with efficient lookup by entry ID.
 #[derive(Clone, Debug)]
 pub struct FileNameCollection<'a> {
-    /// All FILE_NAME references found across all entries
+    /// All `FILE_NAME` references found across all entries
     pub all_filenames: Vec<FileNameRef<'a>>,
     /// Index mapping where `per_entry[entry_id]` contains indices
     /// into `all_filenames` for all filenames belonging to that entry
@@ -70,11 +70,13 @@ impl<'a> FileNameCollection<'a> {
     }
 
     /// Get the total number of filename references collected.
+    #[must_use] 
     pub fn x30_count(&self) -> usize {
         self.all_filenames.len()
     }
 
     /// Get the number of entries that have filename attributes.
+    #[must_use] 
     pub fn entry_count(&self) -> usize {
         self.per_entry_indices.len()
     }
@@ -99,13 +101,14 @@ fn read_u64(bytes: &[u8], off: usize) -> Option<u64> {
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
 }
 
-/// Parse the total entry size from the first entry slice (delegates to fast_fixup helper)
+/// Parse the total entry size from the first entry slice (delegates to `fast_fixup` helper)
 #[inline]
+#[must_use] 
 pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
     detect_entry_size(first_entry)
 }
 
-/// Iterate all FILE_NAME attributes in an entry, invoking callback for each.
+/// Iterate all `FILE_NAME` attributes in an entry, invoking callback for each.
 /// Returns number of filename attributes found.
 pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     entry_bytes: &'a [u8],
@@ -169,7 +172,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
                         // SAFETY: constructing &[u16] from properly aligned bytes – alignment of u16 may be 2; slice.as_ptr() is aligned to 1. Use from_raw_parts_unaligned (stable?) -> fallback to copy if misaligned risk. Here we accept potential unaligned read; on x86 it's fine.
                         let raw: &[u16] = unsafe {
                             std::slice::from_raw_parts(
-                                entry_bytes[name_utf16_off..name_bytes_end].as_ptr() as *const u16,
+                                entry_bytes[name_utf16_off..name_bytes_end].as_ptr().cast::<u16>(),
                                 name_len,
                             )
                         };
@@ -189,9 +192,9 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     count
 }
 
-/// Parallel collection of all FILE_NAME attributes from MFT data.
+/// Parallel collection of all `FILE_NAME` attributes from MFT data.
 ///
-/// This function processes MFT entries in parallel to extract all FILE_NAME attributes efficiently.
+/// This function processes MFT entries in parallel to extract all `FILE_NAME` attributes efficiently.
 /// It's particularly useful for large MFT files where sequential processing would be too slow.
 ///
 /// # Example
@@ -210,7 +213,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// # let _ = demo();
 /// ```
 pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
-    let full: &'a [u8] = &*mft; // borrow the entire bytes buffer
+    let full: &'a [u8] = mft; // borrow the entire bytes buffer
     let entry_size = mft.record_size().get::<uom::si::information::byte>();
     let entry_count = mft.record_count();
 

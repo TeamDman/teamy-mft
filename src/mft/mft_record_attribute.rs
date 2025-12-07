@@ -28,41 +28,49 @@ impl<'a> MftRecordAttribute<'a> {
         })
     }
     #[inline(always)]
+    #[must_use] 
     pub fn get_attr_type(&self) -> u32 {
         u32::from_le_bytes(self.mft_record_attribute_data[0..4].try_into().unwrap())
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_total_length(&self) -> u32 {
         u32::from_le_bytes(self.mft_record_attribute_data[4..8].try_into().unwrap())
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_is_non_resident(&self) -> bool {
         self.mft_record_attribute_data[8] != 0
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_name_len(&self) -> u8 {
         self.mft_record_attribute_data[9]
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_name_offset(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[10..12].try_into().unwrap())
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_flags(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[12..14].try_into().unwrap())
     }
 
     #[inline(always)]
+    #[must_use] 
     pub fn get_attr_id(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[14..16].try_into().unwrap())
     }
 
     // Resident specific
+    #[must_use] 
     pub fn get_resident_content(&self) -> Option<&[u8]> {
         if self.get_is_non_resident() || self.mft_record_attribute_data.len() < 0x18 {
             return None;
@@ -78,6 +86,7 @@ impl<'a> MftRecordAttribute<'a> {
     }
 
     // Non-resident specific
+    #[must_use] 
     pub fn get_non_resident_header(&self) -> Option<MftRecordAttributeNonResidentHeader<'_>> {
         if !self.get_is_non_resident() || self.mft_record_attribute_data.len() < 0x40 {
             return None;
@@ -85,6 +94,7 @@ impl<'a> MftRecordAttribute<'a> {
         Some(MftRecordAttributeNonResidentHeader::new(self))
     }
 
+    #[must_use] 
     pub fn as_x80(&self) -> Option<MftRecordX80DollarDataAttribute<'_>> {
         MftRecordX80DollarDataAttribute::new(*self).ok()
     }

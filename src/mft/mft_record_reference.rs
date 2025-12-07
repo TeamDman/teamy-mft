@@ -4,7 +4,7 @@ use core::fmt;
 use core::ops::Add;
 use core::ops::Deref;
 
-/// Represents the 8-byte on-disk MFT file reference (FILE_REFERENCE / MFT reference).
+/// Represents the 8-byte on-disk MFT file reference (`FILE_REFERENCE` / MFT reference).
 /// Layout (little-endian):
 ///   bits 0..=47  : MFT record (entry) number
 ///   bits 48..=63 : sequence number (stale detection)
@@ -15,24 +15,29 @@ impl MftRecordReference {
     pub const RECORD_NUMBER_MASK: u64 = (1u64 << 48) - 1;
 
     /// Creates a reference from raw u64 (no validation beyond masking).
+    #[must_use] 
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
     /// Compose from parts, validating record number fits 48 bits (debug only).
+    #[must_use] 
     pub fn from_parts(record: MftRecordNumber, sequence: MftSequenceNumber) -> Self {
         debug_assert!(
             *record <= Self::RECORD_NUMBER_MASK,
             "record number exceeds 48 bits"
         );
-        let raw = (*record & Self::RECORD_NUMBER_MASK) | ((sequence.get() as u64) << 48);
+        let raw = (*record & Self::RECORD_NUMBER_MASK) | (u64::from(sequence.get()) << 48);
         Self(raw)
     }
+    #[must_use] 
     pub fn to_raw(self) -> u64 {
         self.0
     }
+    #[must_use] 
     pub fn get_record_number(self) -> MftRecordNumber {
         MftRecordNumber::new(self.0 & Self::RECORD_NUMBER_MASK)
     }
+    #[must_use] 
     pub fn get_sequence_number(self) -> MftSequenceNumber {
         MftSequenceNumber::new((self.0 >> 48) as u16)
     }

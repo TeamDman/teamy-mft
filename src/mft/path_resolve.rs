@@ -1,4 +1,4 @@
-//! Basic sequential path resolution over collected FileNameRef entries.
+//! Basic sequential path resolution over collected `FileNameRef` entries.
 //! This is a first-pass simple implementation (non-parallel) to be optimized later.
 
 use crate::mft::fast_entry::FileNameCollection;
@@ -31,13 +31,15 @@ fn decode_name(units: &[u16]) -> Cow<'_, str> {
 pub struct ResolvedPaths(pub Vec<Option<PathBuf>>);
 
 impl ResolvedPaths {
+    #[must_use] 
     pub fn unresolved_count(&self) -> usize {
         self.0.iter().filter(|p| p.is_none()).count()
     }
+    #[must_use] 
     pub fn resolved_count(&self) -> usize {
         self.0.len() - self.unresolved_count()
     }
-    /// Iterate borrowing resolved entries (entry_id, &PathBuf)
+    /// Iterate borrowing resolved entries (`entry_id`, &`PathBuf`)
     pub fn resolved(&self) -> impl Iterator<Item = (u32, &PathBuf)> {
         self.0
             .iter()
@@ -76,14 +78,17 @@ impl IntoIterator for ResolvedPaths {
 #[derive(Debug, Default, Clone)]
 pub struct MftEntryPathCollection(pub Vec<Vec<PathBuf>>);
 impl MftEntryPathCollection {
+    #[must_use] 
     pub fn entry_count(&self) -> usize {
         self.0.len()
     }
+    #[must_use] 
     pub fn total_paths(&self) -> usize {
-        self.0.iter().map(|v| v.len()).sum()
+        self.0.iter().map(std::vec::Vec::len).sum()
     }
+    #[must_use] 
     pub fn paths_for(&self, entry_id: usize) -> &[PathBuf] {
-        self.0.get(entry_id).map(|v| &v[..]).unwrap_or(&[])
+        self.0.get(entry_id).map_or(&[], |v| &**v)
     }
 }
 

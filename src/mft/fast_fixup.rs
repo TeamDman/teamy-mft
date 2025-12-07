@@ -55,6 +55,7 @@ const SECTOR: usize = 512; // NTFS logical sector (fixup stride)
 /// Expects a valid NTFS FILE record with a 1KB or 4KB typical size.
 /// Returns None if slice too small.
 #[inline]
+#[must_use] 
 pub fn detect_entry_size(entry0: &[u8]) -> Option<u32> {
     // total_entry_size at offset 0x1C (after used_entry_size at 0x18)
     if entry0.len() < 0x20 {
@@ -79,6 +80,7 @@ fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
 
 /// Quick check if an entry still needs fixup application.
 #[inline]
+#[must_use] 
 pub fn needs_fixup(entry: &[u8]) -> bool {
     let (usa_offset, usa_size) = match read_update_sequence_array_fields(entry) {
         Some(v) => v,
@@ -143,7 +145,7 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
         // head unused; keeps borrows disjoint.
         let _ = head;
 
-        if tail == &update_sequence[..] {
+        if tail == &*update_sequence {
             let fix_slice = &original_bytes[i * 2..i * 2 + 2];
             tail.copy_from_slice(fix_slice);
             any_applied = true;

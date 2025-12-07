@@ -35,6 +35,7 @@ impl FromStr for RobocopyStartDateTime {
 }
 
 impl RobocopyStartDateTime {
+    #[must_use] 
     pub fn as_datetime(&self) -> &DateTime<Local> {
         &self.inner
     }

@@ -15,14 +15,11 @@ pub struct PhysicalReadPlan {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Default)]
 pub enum ZeroLengthPushBehaviour {
+    #[default]
     Panic,
     NoOp,
-}
-impl Default for ZeroLengthPushBehaviour {
-    fn default() -> Self {
-        ZeroLengthPushBehaviour::Panic
-    }
 }
 impl IntoIterator for PhysicalReadPlan {
     type Item = PhysicalReadRequest;
@@ -42,6 +39,7 @@ impl FromIterator<PhysicalReadRequest> for PhysicalReadPlan {
 }
 
 impl PhysicalReadPlan {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -90,7 +88,8 @@ impl PhysicalReadPlan {
         self
     }
 
-    /// Split requests into uniform <= chunk_size pieces. Returns a new plan.
+    /// Split requests into uniform <= `chunk_size` pieces. Returns a new plan.
+    #[must_use] 
     pub fn chunked(&self, chunk_size: Information) -> Self {
         if chunk_size == Information::ZERO {
             return self.clone();
@@ -131,14 +130,17 @@ impl PhysicalReadPlan {
         self
     }
 
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }
 
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.requests.len()
     }
 
+    #[must_use] 
     pub fn total_size(&self) -> Information {
         self.requests
             .iter()

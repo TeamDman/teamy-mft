@@ -19,6 +19,7 @@ impl Default for DriveLetterPattern {
 }
 
 impl DriveLetterPattern {
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -66,7 +67,7 @@ impl Serialize for DriveLetterPattern {
 }
 // tests are placed at the end of the file
 
-impl<'a> Arbitrary<'a> for DriveLetterPattern {
+impl Arbitrary<'_> for DriveLetterPattern {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
         // 20% chance wildcard, 80% chance letters
         if (u8::arbitrary(u)?).is_multiple_of(5) {

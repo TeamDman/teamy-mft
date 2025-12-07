@@ -75,7 +75,7 @@ impl QueryArgs {
                             .collect::<Vec<String>>()
                             .join(", ")
                     );
-                    for (drive_letter, mft_path) in mft_files.into_iter() {
+                    for (drive_letter, mft_path) in mft_files {
                         let drive_letter = drive_letter.to_string();
                         let injector = nucleo.injector();
                         join_set.spawn_blocking(move || {

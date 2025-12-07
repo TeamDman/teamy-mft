@@ -26,12 +26,15 @@ pub struct MftRecordAttributeRunList<'a> {
 }
 
 impl<'a> MftRecordAttributeRunList<'a> {
+    #[must_use] 
     pub fn new(raw: &'a [u8]) -> Self {
         Self { raw }
     }
+    #[must_use] 
     pub fn as_slice(&self) -> &'a [u8] {
         self.raw
     }
+    #[must_use] 
     pub fn iter(&self) -> MftRecordAttributeRunListIter<'a> {
         MftRecordAttributeRunListIter {
             raw: self.raw,
@@ -51,7 +54,7 @@ pub struct MftRecordAttributeRunListIter<'a> {
     last_lcn: i64,
 }
 
-impl<'a> Iterator for MftRecordAttributeRunListIter<'a> {
+impl Iterator for MftRecordAttributeRunListIter<'_> {
     type Item = Result<MftRecordAttributeRunListEntry>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.raw.len() {
@@ -72,7 +75,7 @@ impl<'a> Iterator for MftRecordAttributeRunListIter<'a> {
         }
         let mut length = 0u64;
         for i in 0..length_size {
-            length |= (self.raw[self.pos + i as usize] as u64) << (8 * i);
+            length |= u64::from(self.raw[self.pos + i as usize]) << (8 * i);
         }
         self.pos += length_size as usize;
         let local_cluster_network_start_entry_index = if offset_size == 0 {
@@ -83,7 +86,7 @@ impl<'a> Iterator for MftRecordAttributeRunListIter<'a> {
             }
             let mut delta: i64 = 0;
             for i in 0..offset_size {
-                delta |= (self.raw[self.pos + i as usize] as i64) << (8 * i);
+                delta |= i64::from(self.raw[self.pos + i as usize]) << (8 * i);
             }
             let sign_bit = 1i64 << (offset_size * 8 - 1);
             if delta & sign_bit != 0 {
@@ -132,7 +135,8 @@ impl MftRecordAttributeRunListOwned {
     /// Build a logical plan preserving sparse runs.
     ///
     /// Future opportunity: produce a sparse output file
-    /// by marking destination with FSCTL_SET_SPARSE and eliding zero allocation explicitly.
+    /// by marking destination with `FSCTL_SET_SPARSE` and eliding zero allocation explicitly.
+    #[must_use] 
     pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
         let mut segments = Default::default();
         let mut logical_offset = Information::ZERO;

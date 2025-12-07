@@ -21,6 +21,7 @@ impl NtfsDriveHandle {
             handle: drive_handle,
         })
     }
+    #[must_use] 
     pub fn new_unchecked(drive_handle: Owned<HANDLE>) -> Self {
         NtfsDriveHandle {
             handle: drive_handle,
@@ -58,9 +59,9 @@ fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
             FSCTL_GET_NTFS_VOLUME_DATA,
             None,
             0,
-            Some(&mut volume_data as *mut _ as *mut _),
+            Some((&raw mut volume_data).cast::<std::ffi::c_void>()),
             std::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
-            Some(&mut bytes_returned),
+            Some(&raw mut bytes_returned),
             None,
         )
     };
@@ -85,13 +86,13 @@ pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_E
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
             None,
             0,
-            Some(&mut extents as *mut _ as *mut std::ffi::c_void),
+            Some((&raw mut extents).cast::<std::ffi::c_void>()),
             std::mem::size_of::<VOLUME_DISK_EXTENTS>() as u32,
-            Some(&mut bytes_returned),
+            Some(&raw mut bytes_returned),
             None,
         )
         .wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
-    }
+    };
 
     if extents.NumberOfDiskExtents != 1 {
         eyre::bail!("Volume spans multiple disks or has complex extents, not supported");

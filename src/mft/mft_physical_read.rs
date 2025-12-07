@@ -17,8 +17,8 @@ use uom::si::information::mebibyte;
 use uom::si::usize::Information;
 
 /// Read the complete MFT using IOCP overlapped reads.
-/// drive_letter: 'C', 'D', ...
-/// output_path: file path to write final MFT blob
+/// `drive_letter`: 'C', 'D', ...
+/// `output_path`: file path to write final MFT blob
 pub fn read_physical_mft(
     drive_letter: char,
 ) -> eyre::Result<(LogicalReadPlan, PhysicalReadResults)> {

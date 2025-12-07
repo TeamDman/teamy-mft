@@ -80,7 +80,7 @@ impl ListPathsArgs {
                 };
                 for x30 in entry
                     .iter_attributes()
-                    .filter_map(|attr| attr.ok())
+                    .filter_map(Result::ok)
                     .filter_map(|attr| match attr.data {
                         MftAttributeContent::AttrX30(data) => Some(data),
                         _ => None,
@@ -113,7 +113,7 @@ impl ListPathsArgs {
             }
             let elapsed = start.elapsed();
             let entry_count = x30_map.len();
-            let link_count: usize = x30_map.values().map(|v| v.len()).sum();
+            let link_count: usize = x30_map.values().map(std::vec::Vec::len).sum();
             info!(
                 "Indexed {} MFT entries ({} canonical FILE_NAME links) in {:.2?}",
                 entry_count, link_count, elapsed
@@ -130,7 +130,7 @@ impl ListPathsArgs {
                     .expect("links not empty")
             }
 
-            for (entry_ref, links) in x30_map.iter() {
+            for (entry_ref, links) in &x30_map {
                 if entry_ref.entry == ROOT_ENTRY {
                     continue;
                 }

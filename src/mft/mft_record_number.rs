@@ -5,6 +5,7 @@ use std::ops::Deref;
 pub struct MftRecordNumber(u64);
 
 impl MftRecordNumber {
+    #[must_use] 
     pub const fn new(record_number: u64) -> Self {
         Self(record_number)
     }
@@ -15,13 +16,13 @@ impl MftRecordNumber {
     // ---------------------------------------------------------------------
     /// 0 – $MFT (Master File Table itself)
     pub const DOLLAR_MFT: MftRecordNumber = MftRecordNumber(0);
-    /// 1 – $MFTMirr (mirror of first 4 records of $MFT)
+    /// 1 – $`MFTMirr` (mirror of first 4 records of $MFT)
     pub const DOLLAR_MFT_MIRR: MftRecordNumber = MftRecordNumber(1);
-    /// 2 – $LogFile (transaction log)
+    /// 2 – $`LogFile` (transaction log)
     pub const DOLLAR_LOG_FILE: MftRecordNumber = MftRecordNumber(2);
     /// 3 – $Volume (volume information)
     pub const DOLLAR_VOLUME: MftRecordNumber = MftRecordNumber(3);
-    /// 4 – $AttrDef (attribute definitions)
+    /// 4 – $`AttrDef` (attribute definitions)
     pub const DOLLAR_ATTR_DEF: MftRecordNumber = MftRecordNumber(4);
     /// 5 – Root directory (".")
     pub const MFT_ROOT: MftRecordNumber = MftRecordNumber(5);
@@ -29,24 +30,25 @@ impl MftRecordNumber {
     pub const DOLLAR_BITMAP: MftRecordNumber = MftRecordNumber(6);
     /// 7 – $Boot (boot sector / volume boot record copy)
     pub const DOLLAR_BOOT: MftRecordNumber = MftRecordNumber(7);
-    /// 8 – $BadClus (lists bad clusters)
+    /// 8 – $`BadClus` (lists bad clusters)
     pub const DOLLAR_BAD_CLUS: MftRecordNumber = MftRecordNumber(8);
     /// 9 – $Secure (security descriptors store)
     pub const DOLLAR_SECURE: MftRecordNumber = MftRecordNumber(9);
-    /// 10 – $UpCase (uppercase mapping table)
+    /// 10 – $`UpCase` (uppercase mapping table)
     pub const DOLLAR_UP_CASE: MftRecordNumber = MftRecordNumber(10);
     /// 11 – $Extend (directory containing extend metadata files)
     pub const DOLLAR_EXTEND: MftRecordNumber = MftRecordNumber(11);
     /// 12 – $Quota (user quota information)
     pub const DOLLAR_QUOTA: MftRecordNumber = MftRecordNumber(12);
-    /// 13 – $ObjId (object IDs)
+    /// 13 – $`ObjId` (object IDs)
     pub const DOLLAR_OBJ_ID: MftRecordNumber = MftRecordNumber(13);
     /// 14 – $Reparse (reparse point data)
     pub const DOLLAR_REPARSE: MftRecordNumber = MftRecordNumber(14);
-    /// 15 – $UsnJrnl (Update Sequence Number change journal)
+    /// 15 – $`UsnJrnl` (Update Sequence Number change journal)
     pub const DOLLAR_USN_JRNL: MftRecordNumber = MftRecordNumber(15);
 
     /// Returns true if this record number is within the reserved system file range (0–15 inclusive).
+    #[must_use] 
     pub const fn is_reserved(self) -> bool {
         self.0 < 16
     }
@@ -63,7 +65,7 @@ impl From<u64> for MftRecordNumber {
 }
 impl From<u32> for MftRecordNumber {
     fn from(record_number: u32) -> Self {
-        MftRecordNumber(record_number as u64)
+        MftRecordNumber(u64::from(record_number))
     }
 }
 

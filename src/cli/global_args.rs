@@ -28,6 +28,7 @@ pub struct GlobalArgs {
 }
 
 impl GlobalArgs {
+    #[must_use] 
     pub fn log_level(&self) -> tracing::Level {
         if self.debug {
             tracing::Level::DEBUG
@@ -37,6 +38,7 @@ impl GlobalArgs {
     }
 
     /// Determine how JSON structured logs should be handled based on the --json flag.
+    #[must_use] 
     pub fn json_log_behaviour(&self) -> JsonLogBehaviour {
         match &self.json {
             None => JsonLogBehaviour::None,

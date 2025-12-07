@@ -7,7 +7,7 @@ use std::ops::Deref;
 use teamy_windows::file::HandleReadExt;
 use uom::si::information::byte;
 
-/// https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1
+/// <https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1>
 /// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
 /// also known as “entries,” one for each file and directory on a volume but only the first 42 bytes (MFT header)
 /// have a defined purpose. The remaining 982 bytes store attributes, which are small data structures that have
@@ -92,7 +92,7 @@ impl MftRecord {
     /// Zero-copy access to the 4-byte signature.
     pub fn get_signature(&self) -> &[u8; 4] {
         // SAFETY: first 4 bytes always exist; casting to fixed array reference.
-        unsafe { &*(self.data.as_ptr().add(Self::OFFSET_FOR_SIGNATURE) as *const [u8; 4]) }
+        unsafe { &*self.data.as_ptr().add(Self::OFFSET_FOR_SIGNATURE).cast::<[u8; 4]>() }
     }
 
     #[inline(always)]
@@ -100,7 +100,7 @@ impl MftRecord {
         // SAFETY: Bounds ensured by caller placement; use unaligned read then convert LE.
         unsafe {
             u16::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset) as *const u16
+                self.data.as_ptr().add(offset).cast::<u16>()
             ))
         }
     }
@@ -108,7 +108,7 @@ impl MftRecord {
     fn read_u32(&self, offset: usize) -> u32 {
         unsafe {
             u32::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset) as *const u32
+                self.data.as_ptr().add(offset).cast::<u32>()
             ))
         }
     }
@@ -116,7 +116,7 @@ impl MftRecord {
     fn read_u64(&self, offset: usize) -> u64 {
         unsafe {
             u64::from_le(std::ptr::read_unaligned(
-                self.data.as_ptr().add(offset) as *const u64
+                self.data.as_ptr().add(offset).cast::<u64>()
             ))
         }
     }
@@ -135,7 +135,7 @@ impl MftRecord {
         self.read_u16(Self::OFFSET_FOR_UPDATE_SEQUENCE_ARRAY_SIZE)
     }
 
-    /// $LogFile sequence number (LSN) at offset 0x08 (8 bytes LE).
+    /// $`LogFile` sequence number (LSN) at offset 0x08 (8 bytes LE).
     #[inline(always)]
     pub fn get_dollar_log_file(&self) -> u64 {
         self.read_u64(Self::OFFSET_FOR_LOGFILE_SEQUENCE_NUMBER)
