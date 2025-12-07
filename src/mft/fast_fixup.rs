@@ -12,8 +12,8 @@
 //! Safety: All functions perform conservative bounds checks before touching
 //! slice indices. No unsafe code is used here.
 
-use std::time::Instant;
 use humansize::BINARY;
+use std::time::Instant;
 use teamy_uom_extensions::HumanInformationRateExt;
 use teamy_uom_extensions::HumanTimeExt;
 use teamy_uom_extensions::InformationOverExt;
