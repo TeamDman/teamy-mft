@@ -30,20 +30,20 @@ impl<'a> MftRecordAttribute<'a> {
             mft_record_attribute_data,
         })
     }
-    #[inline]
-    #[must_use]
     /// # Panics
     ///
     /// Panics if the attribute data is too short.
+    #[inline]
+    #[must_use]
     pub fn get_attr_type(&self) -> u32 {
         u32::from_le_bytes(self.mft_record_attribute_data[0..4].try_into().unwrap())
     }
 
-    #[inline]
-    #[must_use]
     /// # Panics
     ///
     /// Panics if the attribute data is too short.
+    #[inline]
+    #[must_use]
     pub fn get_total_length(&self) -> u32 {
         u32::from_le_bytes(self.mft_record_attribute_data[4..8].try_into().unwrap())
     }
@@ -60,29 +60,29 @@ impl<'a> MftRecordAttribute<'a> {
         self.mft_record_attribute_data[9]
     }
 
-    #[inline]
-    #[must_use]
     /// # Panics
     ///
     /// Panics if the attribute data is too short.
+    #[inline]
+    #[must_use]
     pub fn get_name_offset(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[10..12].try_into().unwrap())
     }
 
-    #[inline]
-    #[must_use]
     /// # Panics
     ///
     /// Panics if the attribute data is too short.
+    #[inline]
+    #[must_use]
     pub fn get_flags(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[12..14].try_into().unwrap())
     }
 
-    #[inline]
-    #[must_use]
     /// # Panics
     ///
     /// Panics if the attribute data is too short.
+    #[inline]
+    #[must_use]
     pub fn get_attr_id(&self) -> u16 {
         u16::from_le_bytes(self.mft_record_attribute_data[14..16].try_into().unwrap())
     }

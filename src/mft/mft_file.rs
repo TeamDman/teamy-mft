@@ -62,12 +62,12 @@ impl MftFile {
         }
     }
 
-    #[instrument(level = "debug")]
     /// Load an MFT file from the given path.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened, read, or parsed.
+    #[instrument(level = "debug")]
     pub fn from_path(mft_file_path: &Path) -> eyre::Result<Self> {
         // Open file
         let file = std::fs::File::open(mft_file_path)
