@@ -12,7 +12,6 @@ use teamy_uom_extensions::HumanTimeExt;
 use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
-use uom::si::f64::InformationRate;
 use uom::si::f64::Ratio;
 use uom::si::f64::Time;
 use uom::si::frequency::hertz;

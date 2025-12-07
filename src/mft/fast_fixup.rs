@@ -21,7 +21,6 @@ use thousands::Separable;
 use tracing::debug;
 use uom::si::f64::Information;
 use uom::si::f64::Time;
-use uom::si::frequency::hertz;
 use uom::si::information::byte;
 use uom::si::time::second;
 

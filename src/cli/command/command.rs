@@ -1,4 +1,3 @@
-use crate::cli::command::check::CheckArgs;
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
@@ -23,8 +22,6 @@ pub enum Command {
     GetSyncDir(GetSyncDirArgs),
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir(SetSyncDirArgs),
-    /// Validate cached MFT files have at least one Win32 FILE_NAME attribute per entry having any FILE_NAME
-    Check(CheckArgs),
     /// Query resolved file paths (substring match) across cached MFTs
     Query(QueryArgs),
     /// Explore robocopy logs in a TUI (validate file exists for now)
@@ -45,7 +42,6 @@ impl Command {
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
-            Command::Check(args) => args.invoke(),
             Command::Query(args) => args.invoke(),
             Command::RobocopyLogsTui(args) => args.invoke(),
         }
@@ -71,10 +67,6 @@ impl ToArgs for Command {
             Command::SetSyncDir(set_args) => {
                 args.push("set-sync-dir".into());
                 args.extend(set_args.to_args());
-            }
-            Command::Check(check_args) => {
-                args.push("check".into());
-                args.extend(check_args.to_args());
             }
             Command::Query(query_args) => {
                 args.push("query".into());

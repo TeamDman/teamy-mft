@@ -1,4 +1,3 @@
-pub mod check;
 pub mod get_sync_dir;
 pub mod list_paths;
 pub mod query;
