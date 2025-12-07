@@ -1,6 +1,7 @@
 use crate::mft::mft_record::MftRecord;
 use crate::mft::mft_record_attribute::MftRecordAttribute;
 
+#[derive(Debug)]
 pub struct MftRecordAttributeIter<'a> {
     mft_record: &'a MftRecord,
     position: usize,

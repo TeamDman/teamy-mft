@@ -5,6 +5,7 @@ use uom::si::information::byte;
 use uom::si::usize::Information;
 
 /// Zero-copy iterator over MFT records stored contiguously in a `Bytes` buffer.
+#[derive(Debug)]
 pub struct MftRecordIter {
     bytes: Bytes,
     entry_size: Information,

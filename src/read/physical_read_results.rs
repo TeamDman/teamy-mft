@@ -237,7 +237,7 @@ mod test {
         // Provide 64 bytes starting at 64, containing bytes 64..127.
         let mut data = vec![0u8; 64];
         for (i, b) in data.iter_mut().enumerate() {
-            *b = (64 + i as u8) as u8; // distinct content to verify slice is correct
+            *b = 64 + i as u8; // distinct content to verify slice is correct
         }
         let read_results = PhysicalReadResults {
             entries: [PhysicalReadResultEntry {

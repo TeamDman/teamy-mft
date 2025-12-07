@@ -12,6 +12,7 @@ use tracing::warn;
 
 pub const SYNC_DIR_ENV: &str = "TEAMY_MFT_SYNC_DIR";
 
+#[derive(Debug)]
 pub struct SyncDirPersistencePath {
     path: PathBuf,
 }

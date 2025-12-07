@@ -44,6 +44,7 @@ impl<'a> MftRecordAttributeRunList<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct MftRecordAttributeRunListIter<'a> {
     raw: &'a [u8],
     pos: usize,

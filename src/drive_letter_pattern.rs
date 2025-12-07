@@ -1,5 +1,4 @@
 use arbitrary::Arbitrary;
-use color_eyre::eyre::{self as eyre};
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt;
@@ -65,25 +64,7 @@ impl Serialize for DriveLetterPattern {
         serializer.serialize_str(&self.0)
     }
 }
-#[cfg(test)]
-mod test {
-    use crate::drive_letter_pattern::DriveLetterPattern;
-
-    #[tokio::test]
-    async fn serialize() -> eyre::Result<()> {
-        let pattern = DriveLetterPattern("C,D;E F".to_string());
-        let serialized = serde_json::to_string(&pattern)?;
-        assert_eq!(serialized, "\"C,D;E F\"");
-        Ok(())
-    }
-    #[tokio::test]
-    async fn deserialize() -> eyre::Result<()> {
-        let s = "\"C,D;E F\"";
-        let deserialized: DriveLetterPattern = serde_json::from_str(s)?;
-        assert_eq!(deserialized, DriveLetterPattern("C,D;E F".to_string()));
-        Ok(())
-    }
-}
+// tests are placed at the end of the file
 
 impl<'a> Arbitrary<'a> for DriveLetterPattern {
     fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Self> {
@@ -167,7 +148,9 @@ fn get_available_drives() -> eyre::Result<Vec<char>> {
     let mut available_drives = Vec::new();
     for i in 0..26 {
         if (drives_bitmask & (1 << i)) != 0 {
-            available_drives.push((b'A' + i as u8) as char);
+            // i is constrained 0..26, convert explicitly to u8 to avoid truncation warnings
+            let idx = u8::try_from(i).unwrap_or_default();
+            available_drives.push((b'A' + idx) as char);
         }
     }
 
@@ -176,4 +159,24 @@ fn get_available_drives() -> eyre::Result<Vec<char>> {
     }
 
     Ok(available_drives)
+}
+
+#[cfg(test)]
+mod test {
+    use crate::drive_letter_pattern::DriveLetterPattern;
+
+    #[tokio::test]
+    async fn serialize() -> eyre::Result<()> {
+        let pattern = DriveLetterPattern("C,D;E F".to_string());
+        let serialized = serde_json::to_string(&pattern)?;
+        assert_eq!(serialized, "\"C,D;E F\"");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn deserialize() -> eyre::Result<()> {
+        let s = "\"C,D;E F\"";
+        let deserialized: DriveLetterPattern = serde_json::from_str(s)?;
+        assert_eq!(deserialized, DriveLetterPattern("C,D;E F".to_string()));
+        Ok(())
+    }
 }

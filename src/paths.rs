@@ -10,6 +10,7 @@ fn project_dirs() -> eyre::Result<ProjectDirs> {
         .ok_or_else(|| eyre!("Could not determine project directories"))
 }
 
+#[derive(Debug)]
 pub struct ConfigDirPath {
     path: PathBuf,
 }

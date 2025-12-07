@@ -62,8 +62,6 @@ impl Invocable for Cli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arbitrary::Arbitrary;
-    use clap::Parser;
 
     #[test]
     fn fuzz_cli_args_roundtrip() {

@@ -72,7 +72,7 @@ impl ActivePhysicalReadRequest {
         };
         Self {
             overlapped,
-            buffer: vec![0; request.length.get::<byte>() as usize],
+            buffer: vec![0; request.length.get::<byte>()],
             response_index,
             original: request,
         }
@@ -129,21 +129,15 @@ impl ActivePhysicalReadRequest {
         match res {
             Ok(()) => {
                 if lp_overlapped.is_null() {
-                    return Err(eyre::eyre!(
-                        "IOCP returned success but OVERLAPPED ptr was null"
-                    ));
+                    return Err(eyre::eyre!("IOCP returned success but OVERLAPPED ptr was null"));
                 }
-                // Recover the original allocation using the classic
-                // "container_of" pattern: lp_overlapped points to the
-                // first field of ReadRequest, thus also to the start of
-                // the allocation, so casting back to *mut ReadRequest is
-                // sound under the invariants documented above.
-                let req_ptr = lp_overlapped as *mut ActivePhysicalReadRequest;
+                // Recover original allocation using container_of pattern: lp_overlapped points to the first
+                // field (overlapped) so casting back to the parent type is sound under our invariants.
+                let req_ptr = lp_overlapped.cast::<ActivePhysicalReadRequest>();
                 let boxed_req = unsafe { Box::from_raw(req_ptr) };
                 debug!(?boxed_req, bytes_transferred, "Completed IOCP read",);
                 let mut data = boxed_req.buffer;
-                let copy_len =
-                    (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
+                let copy_len = (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
                 if copy_len < data.len() {
                     data.truncate(copy_len);
                 }
@@ -157,13 +151,13 @@ impl ActivePhysicalReadRequest {
             }
             Err(e) => {
                 if lp_overlapped.is_null() {
-                    return Err(eyre::eyre!("GetQueuedCompletionStatus failed: {e:?}"));
+                    Err(eyre::eyre!("GetQueuedCompletionStatus failed: {e:?}"))
                 } else {
                     // Same recovery path on error: take ownership back
                     // and allow the allocation to be freed when dropped.
-                    let req_ptr = lp_overlapped as *mut ActivePhysicalReadRequest;
+                    let req_ptr = lp_overlapped.cast::<ActivePhysicalReadRequest>();
                     let boxed_req = unsafe { Box::from_raw(req_ptr) };
-                    return Err(eyre::eyre!("I/O operation failed for {boxed_req:?}: {e:?}"));
+                    Err(eyre::eyre!("I/O operation failed for {boxed_req:?}: {e:?}"))
                 }
             }
         }

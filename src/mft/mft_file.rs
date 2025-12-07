@@ -52,7 +52,7 @@ impl MftFile {
         }
     }
     pub fn record_count(&self) -> usize {
-        let entry_size_bytes = self.record_size().get::<byte>() as usize;
+        let entry_size_bytes = self.record_size().get::<byte>();
         if entry_size_bytes == 0 {
             0
         } else {

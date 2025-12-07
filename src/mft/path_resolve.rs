@@ -120,7 +120,7 @@ pub fn resolve_paths_all_parallel(
     }
     for entry_id in 0..entry_count {
         for fref in file_names.filenames_for_entry(entry_id as u32) {
-            let parent = (fref.parent_ref & 0xFFFFFFFFFFFF) as usize;
+            let parent = (fref.parent_ref & 0xFFFF_FFFF_FFFF) as usize;
             if parent >= entry_count {
                 continue;
             }

@@ -19,6 +19,7 @@ use windows::core::Owned;
 use windows::core::PCWSTR;
 use windows::core::Param;
 
+#[derive(Debug)]
 pub struct PhysicalReader {
     remaining: Vec<PhysicalReadRequest>,
     results: Vec<Option<PhysicalReadResultEntry>>,
@@ -30,6 +31,7 @@ pub struct PhysicalReader {
     iocp_handle: Owned<HANDLE>,
 }
 
+#[derive(Debug)]
 pub enum PhysicalReaderEnqueueResult {
     Enqueued,
     Full,

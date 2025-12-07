@@ -1,6 +1,5 @@
 use eyre::Context;
 use eyre::eyre;
-use std::mem::size_of;
 use std::ops::Deref;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
@@ -9,8 +8,9 @@ use windows::Win32::System::Ioctl::NTFS_VOLUME_DATA_BUFFER;
 use windows::Win32::System::Ioctl::VOLUME_DISK_EXTENTS;
 use windows::core::Owned;
 
-const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x00560000;
+const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
 
+#[derive(Debug)]
 pub struct NtfsDriveHandle {
     pub handle: Owned<HANDLE>,
 }
@@ -59,7 +59,7 @@ fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
             None,
             0,
             Some(&mut volume_data as *mut _ as *mut _),
-            size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
+            std::mem::size_of::<NTFS_VOLUME_DATA_BUFFER>() as u32,
             Some(&mut bytes_returned),
             None,
         )
@@ -86,7 +86,7 @@ pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_E
             None,
             0,
             Some(&mut extents as *mut _ as *mut std::ffi::c_void),
-            size_of::<VOLUME_DISK_EXTENTS>() as u32,
+            std::mem::size_of::<VOLUME_DISK_EXTENTS>() as u32,
             Some(&mut bytes_returned),
             None,
         )
