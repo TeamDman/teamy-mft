@@ -54,6 +54,7 @@ uom = { version = "0.37.0", features = ["usize"] }
 compact_str = "0.9.0"
 # mft = { version = "0.6.1", git = "https://github.com/TeamDman/mft", branch = "mine" }
 mft = "0.6.1"
+mimalloc = "0.1.48"
 
 [build-dependencies]
 embed-resource = "3.0.3"
