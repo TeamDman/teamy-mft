@@ -3,7 +3,6 @@ use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::robocopy_logs_tui::RobocopyLogsTuiArgs;
-use crate::cli::command::run::RunArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
 use crate::cli::global_args::GlobalArgs;
@@ -30,8 +29,6 @@ pub enum Command {
     Query(QueryArgs),
     /// Explore robocopy logs in a TUI (validate file exists for now)
     RobocopyLogsTui(RobocopyLogsTuiArgs),
-    /// Run the UI or diagnostics situations
-    Run(RunArgs),
 }
 
 impl Default for Command {
@@ -42,13 +39,7 @@ impl Default for Command {
 
 impl Command {
     pub fn invoke(self, global_args: GlobalArgs) -> eyre::Result<()> {
-        let should_init_tracing = match &self {
-            Command::Run(run_args) => run_args.should_init_tracing(),
-            _ => true,
-        };
-        if should_init_tracing {
-            init_tracing(global_args.log_level(), global_args.json_log_behaviour())?;
-        }
+        init_tracing(global_args.log_level(), global_args.json_log_behaviour())?;
         match self {
             Command::Sync(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
@@ -57,7 +48,6 @@ impl Command {
             Command::Check(args) => args.invoke(),
             Command::Query(args) => args.invoke(),
             Command::RobocopyLogsTui(args) => args.invoke(),
-            Command::Run(args) => args.invoke(global_args),
         }
     }
 }
@@ -93,10 +83,6 @@ impl ToArgs for Command {
             Command::RobocopyLogsTui(logs_args) => {
                 args.push("robocopy-logs-tui".into());
                 args.extend(logs_args.to_args());
-            }
-            Command::Run(run_args) => {
-                args.push("run".into());
-                args.extend(run_args.to_args());
             }
         }
         args

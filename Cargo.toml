@@ -43,29 +43,16 @@ crossbeam-channel = "0.5"
 mft = { version = "0.6.1", git = "https://github.com/TeamDman/mft", branch = "mine" }
 rustc-hash = "2.1.1"
 winstructs = "0.3.2"
-uom = { version = "0.37.0", features = [
-    "autoconvert",
-    "human",
-    "usize",
-], git = "https://github.com/TeamDman/uom", branch = "mine" }
 rayon = { version = "1.10" }
 humantime = "2.2.0"
 thousands = "0.2.0"
 nucleo = "0.5.0"
 chrono = "0.4.41"
-compact_str = { version = "0.9.0", git = "https://github.com/TeamDman/compact_str", features = [
-    "bevy-reflect",
-], rev = "7e4f92aa131a62ffabe468f748309e06c932b616" }
+compact_str = { version = "0.9.0", git = "https://github.com/TeamDman/compact_str", rev = "7e4f92aa131a62ffabe468f748309e06c932b616" }
 teamy-windows = "0.3.0"
-bevy = { version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", branch = "teamy-mft", features = [
-    "custom_window_icon",
-    "jpeg",
-] }
-bevy_ui_render = { version = "0.18.0-dev", git = "https://github.com/TeamDman/bevy.git", branch = "teamy-mft" }
-bevy-inspector-egui = { git = "https://github.com/TeamDman/bevy-inspector-egui.git", branch = "teamy-mft" }
 tempfile = "3.20"
-bevy_skein = { git = "https://github.com/TeamDman/skein.git", branch = "teamy-mft" }
-bevy_mesh_outline = { git = "https://github.com/TeamDman/bevy_mesh_outline.git", branch = "teamy-mft" }
+teamy-uom-extensions = "0.1.0"
+uom = { version = "0.37.0", features = ["usize"] }
 
 [build-dependencies]
 embed-resource = "3.0.3"
@@ -73,72 +60,18 @@ embed-resource = "3.0.3"
 [dev-dependencies]
 tempfile = "3.20"
 
-# Enable for super duper release, slow as shit otherwise.
+[patch."https://github.com/TeamDman/mft"]
+mft = { path = "D:/Repos/Rust/mft" }
+
+[patch.crates-io]
+teamy-windows = { path = "../teamy-rust-windows-utils" }
+
+# Enable for super duper release, slow as shit though.
 # [profile.release]
 # codegen-units = 1
 # lto = true
 # opt-level = "z"
 # strip = true
-
-[patch."https://github.com/TeamDman/skein"]
-bevy_skein = { path = "G:/Programming/Repos/skein" }
-
-[patch."https://github.com/TeamDman/bevy_mesh_outline"]
-bevy_mesh_outline = { path = "G:/Programming/Repos/bevy_mesh_outline" }
-
-[patch."https://github.com/TeamDman/bevy"]
-# we are also patching bevy_* crates used by bevy_egui that aren't explicitly used here
-bevy = { path = "D:/Repos/games/bevy" }
-bevy_app = { path = "D:/Repos/games/bevy/crates/bevy_app" }
-bevy_asset = { path = "D:/Repos/games/bevy/crates/bevy_asset" }
-bevy_color = { path = "D:/Repos/games/bevy/crates/bevy_color" }
-bevy_platform = { path = "D:/Repos/games/bevy/crates/bevy_platform" }
-bevy_ecs = { path = "D:/Repos/games/bevy/crates/bevy_ecs" }
-bevy_log = { path = "D:/Repos/games/bevy/crates/bevy_log" }
-bevy_camera = { path = "D:/Repos/games/bevy/crates/bevy_camera" }
-bevy_math = { path = "D:/Repos/games/bevy/crates/bevy_math" }
-bevy_mesh = { path = "D:/Repos/games/bevy/crates/bevy_mesh" }
-bevy_light = { path = "D:/Repos/games/bevy/crates/bevy_light" }
-bevy_reflect = { path = "D:/Repos/games/bevy/crates/bevy_reflect" }
-bevy_state = { path = "D:/Repos/games/bevy/crates/bevy_state" }
-bevy_time = { path = "D:/Repos/games/bevy/crates/bevy_time" }
-bevy_utils = { path = "D:/Repos/games/bevy/crates/bevy_utils" }
-bevy_window = { path = "D:/Repos/games/bevy/crates/bevy_window" }
-bevy_render = { path = "D:/Repos/games/bevy/crates/bevy_render" }
-bevy_core_pipeline = { path = "D:/Repos/games/bevy/crates/bevy_core_pipeline" }
-bevy_pbr = { path = "D:/Repos/games/bevy/crates/bevy_pbr" }
-bevy_ptr = { path = "D:/Repos/games/bevy/crates/bevy_ptr" }
-bevy_image = { path = "D:/Repos/games/bevy/crates/bevy_image" }
-bevy_a11y = { path = "D:/Repos/games/bevy/crates/bevy_a11y" }
-bevy_shader = { path = "D:/Repos/games/bevy/crates/bevy_shader" }
-bevy_tasks = { path = "D:/Repos/games/bevy/crates/bevy_tasks" }
-bevy_transform = { path = "D:/Repos/games/bevy/crates/bevy_transform" }
-bevy_ui_render = { path = "D:/Repos/games/bevy/crates/bevy_ui_render" }
-bevy_picking = { path = "D:/Repos/games/bevy/crates/bevy_picking" }
-bevy_derive = { path = "D:/Repos/games/bevy/crates/bevy_derive" }
-bevy_input = { path = "D:/Repos/games/bevy/crates/bevy_input" }
-bevy_winit = { path = "D:/Repos/games/bevy/crates/bevy_winit" }
-
-[patch."https://github.com/TeamDman/compact_str"]
-compact_str = { path = "../compact_str/compact_str" }
-
-[patch."https://github.com/TeamDman/mft"]
-mft = { path = "D:/Repos/Rust/mft" }
-
-[patch."https://github.com/TeamDman/uom"]
-uom = { path = "../uom" }
-
-[patch."https://github.com/TeamDman/bevy-inspector-egui"]
-bevy-inspector-egui = { path = "D:/Repos/Games/bevy-inspector-egui/crates/bevy-inspector-egui" }
-
-[patch."https://github.com/teamdman/bevy_egui"]
-bevy_egui = { path = "D:/Repos/Games/bevy_egui" }
-
-[patch.crates-io]
-teamy-windows = { path = "../teamy-rust-windows-utils" }
-
-# [patch."https://github.com/TeamDman/egui_dock"]
-# egui_dock = { path = "G:/Programming/Repos/egui_dock" }
 
 # Enable max optimizations for dependencies, but not for our code:
 [profile.dev.package."*"]

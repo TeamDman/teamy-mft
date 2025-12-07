@@ -1,2 +1,0 @@
-- hide paths that are deleted
-- convert path reading logic to new format for parallel data processing

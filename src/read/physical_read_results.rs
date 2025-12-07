@@ -1,4 +1,5 @@
-use crate::read::logical_read_plan::LogicalReadPlan;
+use humansize::BINARY;
+use teamy_uom_extensions::HumanInformationExt;use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use std::collections::BTreeSet;
 use std::io::Seek;
@@ -69,7 +70,7 @@ impl PhysicalReadResults {
                 debug!(
                     physical_offset_current = physical_offset_current.get::<byte>(),
                     physical_offset_end = physical_offset_end.get::<byte>(),
-                    remaining = (physical_offset_end - physical_offset_current).get_human(),
+                    remaining = (physical_offset_end - physical_offset_current).format_human(BINARY),
                     "Locating physical data for logical segment",
                 );
 

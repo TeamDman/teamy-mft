@@ -7,6 +7,8 @@ use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_results::PhysicalReadResults;
 use eyre::WrapErr;
+use humansize::BINARY;
+use teamy_uom_extensions::HumanInformationExt;
 use teamy_windows::handle::get_read_only_drive_handle;
 use teamy_windows::string::EasyPCWSTR;
 use tracing::info;
@@ -76,7 +78,7 @@ pub fn read_physical_mft(
                 .iter()
                 .map(|e| e.request.length)
                 .sum::<Information>()
-                .get_human(),
+                .format_human(BINARY),
         );
         Ok((logical_read_plan, physical_read_results))
     }

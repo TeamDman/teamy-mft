@@ -1,32 +1,30 @@
 use crate::mft::fast_fixup::FixupStats;
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
-use bevy::ecs::component::Component;
-use bevy::reflect::Reflect;
 use bytes::Bytes;
 use bytes::BytesMut;
 use eyre::Context;
+use humansize::BINARY;
 use std::fmt::Debug;
 use std::io::Read;
 use std::ops::Deref;
 use std::path::Path;
 use std::time::Instant;
+use teamy_uom_extensions::HumanInformationExt;
 use thousands::Separable;
 use tracing::debug;
 use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::usize::Information;
 
-#[derive(Component, Reflect)]
 pub struct MftFile {
-    #[reflect(ignore)]
     bytes: Bytes,
 }
 impl Debug for MftFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MftFile")
-            .field("size", &self.size().get_human())
-            .field("entry_size", &self.record_size().get_human())
+            .field("size", &self.size().format_human(BINARY))
+            .field("entry_size", &self.record_size().format_human(BINARY))
             .field("entry_count", &self.record_count().separate_with_commas())
             .finish()
     }
@@ -83,7 +81,7 @@ impl MftFile {
         }
 
         // Read all bytes
-        debug!("Reading cached bytes: {}", mft_file_size.get_human());
+        debug!("Reading cached bytes: {}", mft_file_size.format_human(BINARY));
         let read_start = Instant::now();
         let bytes = {
             let mut buf = Vec::with_capacity(mft_file_size.get::<byte>());
@@ -100,7 +98,7 @@ impl MftFile {
         // Log summary
         debug!(
             "Read {} in {:.2?}, found entry size {} bytes and {} entries",
-            mft_file_size.get_human(),
+            mft_file_size.format_human(BINARY),
             read_start.elapsed(),
             rtn.record_size().get::<byte>().separate_with_commas(),
             rtn.record_count().separate_with_commas()

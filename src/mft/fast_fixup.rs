@@ -13,6 +13,7 @@
 //! slice indices. No unsafe code is used here.
 
 use std::time::Instant;
+use teamy_uom_extensions::HumanTimeExt;
 use thousands::Separable;
 use tracing::debug;
 use uom::si::f64::Information;
@@ -204,7 +205,7 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     let rate = total_size / elapsed;
     debug!(
         "Took {elapsed} to process {count} records ({rate}/s) - fixup stats: applied={applied} already-applied={already_applied} invalid={invalid}",
-        elapsed = elapsed.get_human(),
+        elapsed = elapsed.format_human(),
         count = entry_count.separate_with_commas(),
         rate = rate.get::<hertz>().trunc().separate_with_commas(),
         applied = stats.applied.separate_with_commas(),

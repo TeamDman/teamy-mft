@@ -3,8 +3,13 @@ use crate::mft::mft_file::MftFile;
 use crate::mft::path_resolve;
 use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
+use humansize::BINARY;
+use teamy_uom_extensions::HumanInformationRateExt;
+use teamy_uom_extensions::HumanTimeExt;
+use teamy_uom_extensions::InformationOverExt;
 use std::path::Path;
 use std::time::Instant;
+use teamy_uom_extensions::HumanInformationExt;
 use thousands::Separable;
 use tracing::debug;
 use uom::si::f64::InformationRate;
@@ -34,14 +39,12 @@ pub fn process_mft_file(
     let scan_start = Instant::now();
     let file_names = fast_entry::collect_filenames(&mft_file);
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
-    let scan_rate = InformationRate::from(
-        uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64) / scan_elapsed,
-    );
+    let scan_rate = mft_file.size().over(scan_elapsed);
     debug!(
         drive_letter = &drive_letter,
         "Took {} ({}) entries_with_names={}",
-        scan_elapsed.get_human(),
-        scan_rate.get_human(),
+        scan_elapsed.format_human(),
+        scan_rate.format_human(BINARY),
         file_names.entry_count().separate_with_commas()
     );
 
@@ -61,8 +64,8 @@ pub fn process_mft_file(
     debug!(
         drive_letter = &drive_letter,
         "Took {} ({}) entries_resolved={} total_paths={}",
-        path_resolve_elapsed.get_human(),
-        resolve_rate.get_human(),
+        path_resolve_elapsed.format_human(),
+        resolve_rate.format_human(BINARY),
         resolved_entries.separate_with_commas(),
         total_paths.separate_with_commas()
     );
@@ -71,13 +74,13 @@ pub fn process_mft_file(
         drive_letter = &drive_letter,
         "MFT {}: size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
         mft_file_path.display(),
-        mft_file.size().get_human(),
+        mft_file.size().format_human(BINARY),
         mft_file.record_count().separate_with_commas(),
-        mft_file.record_size().get_human(),
+        mft_file.record_size().format_human(BINARY),
         file_names.x30_count().separate_with_commas(),
         resolved_entries.separate_with_commas(),
-        scan_elapsed.get_human(),
-        path_resolve_elapsed.get_human()
+        scan_elapsed.format_human(),
+        path_resolve_elapsed.format_human()
     );
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
@@ -90,9 +93,9 @@ pub fn process_mft_file(
         "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file_path.display(),
         mft_file.record_count().separate_with_commas(),
-        elapsed.get_human(),
-        mft_file.size().get_human(),
-        total_data_rate.get_human(),
+        elapsed.format_human(),
+        mft_file.size().format_human(BINARY),
+        total_data_rate.format_human(BINARY),
         entries_rate.get::<hertz>().trunc().separate_with_commas()
     );
     Ok(multi)
