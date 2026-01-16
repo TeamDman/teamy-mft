@@ -84,3 +84,5 @@ https://github.com/bahamas10/ysap/blob/main/code/2025-09-26-what-is-an-inode/mak
 https://flatcap.github.io/linux-ntfs/ntfs/index.html
 
 [Wookash Podcast - File Pilot: Design Meets Performance | Vjekoslav Krajačić](https://www.youtube.com/watch?v=pS2oLNR1PO8)
+
+[Daniel Blagy - File System Visualizer in javascript with threejs](https://www.youtube.com/watch?v=e5qaHhQ_1E8)
