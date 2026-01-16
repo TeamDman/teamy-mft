@@ -14,8 +14,6 @@ categories = ["command-line-utilities", "file-system"]
 arbitrary = { version = "1.4.1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 bytes = "1.10.1"
 directories = "5"
 dunce = "1"

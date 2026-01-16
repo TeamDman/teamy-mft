@@ -1461,8 +1461,6 @@ dependencies = [
  "nucleo",
  "rayon",
  "rustc-hash",
- "serde",
- "serde_json",
  "strum",
  "teamy-uom-extensions",
  "teamy-windows",
