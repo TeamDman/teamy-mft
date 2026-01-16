@@ -7,7 +7,6 @@ pub mod mft_process;
 pub mod ntfs;
 pub mod paths;
 pub mod read;
-pub mod robocopy;
 pub mod sync_dir;
 
 use crate::cli::Cli;

@@ -1,7 +1,6 @@
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
-use crate::cli::command::robocopy_logs_tui::RobocopyLogsTuiArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
 use crate::cli::global_args::GlobalArgs;
@@ -24,8 +23,6 @@ pub enum Command {
     SetSyncDir(SetSyncDirArgs),
     /// Query resolved file paths (substring match) across cached MFTs
     Query(QueryArgs),
-    /// Explore robocopy logs in a TUI (validate file exists for now)
-    RobocopyLogsTui(RobocopyLogsTuiArgs),
 }
 
 impl Default for Command {
@@ -49,7 +46,6 @@ impl Command {
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
             Command::Query(args) => args.invoke(),
-            Command::RobocopyLogsTui(args) => args.invoke(),
         }
     }
 }
@@ -77,10 +73,6 @@ impl ToArgs for Command {
             Command::Query(query_args) => {
                 args.push("query".into());
                 args.extend(query_args.to_args());
-            }
-            Command::RobocopyLogsTui(logs_args) => {
-                args.push("robocopy-logs-tui".into());
-                args.extend(logs_args.to_args());
             }
         }
         args
