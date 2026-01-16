@@ -182,7 +182,7 @@ impl ToArgs for SyncArgs {
     fn to_args(&self) -> Vec<OsString> {
         let mut args = Vec::new();
         if self.drive_pattern != DriveLetterPattern::default() {
-            args.push(self.drive_pattern.as_str().into());
+            args.push(self.drive_pattern.as_ref().into());
         }
         if self.overwrite_existing != ExistingOutputBehaviour::default() {
             args.push("--overwrite-existing".into());

@@ -170,7 +170,7 @@ impl ToArgs for QueryArgs {
         args.push(self.query.clone().into());
         if self.drive_pattern != DriveLetterPattern::default() {
             args.push("--drive-pattern".into());
-            args.push(self.drive_pattern.as_str().into());
+            args.push(self.drive_pattern.as_ref().into());
         }
         if self.limit != 100 {
             args.push("--limit".into());

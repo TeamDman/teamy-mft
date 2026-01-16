@@ -1,4 +1,5 @@
 use arbitrary::Arbitrary;
+use eyre::ensure;
 use std::fmt;
 use std::str::FromStr;
 
@@ -17,18 +18,37 @@ impl Default for DriveLetterPattern {
 }
 
 impl DriveLetterPattern {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
     /// Resolve the pattern into a list of drive letters.
     ///
     /// # Errors
     ///
     /// Returns an error if the pattern is invalid or no drives are found.
     pub fn into_drive_letters(&self) -> eyre::Result<Vec<char>> {
-        parse_drive_letters(self.as_str())
+        let input = self.as_ref().trim();
+
+        if input == "*" {
+            return get_available_drives();
+        }
+
+        let mut rtn = Vec::new();
+
+        for (i, char) in input.chars().enumerate() {
+            let skippable = char.is_whitespace() || char == ',' || char == ';';
+            if skippable {
+                continue;
+            }
+
+            ensure!(
+                char.is_ascii_alphabetic(),
+                "Invalid drive letter character at position {i}: '{char}'"
+            );
+            
+            rtn.push(char.to_ascii_uppercase());
+        }
+
+        ensure!(!rtn.is_empty(), "No drive letters found in: '{}'", input);
+
+        Ok(rtn)
     }
 }
 
@@ -42,10 +62,13 @@ impl FromStr for DriveLetterPattern {
     type Err = eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
-        if s.is_empty() {
-            return Err(eyre::eyre!("empty drive letter pattern"));
-        }
+        ensure!(!s.is_empty(), "empty drive letter pattern");
         Ok(DriveLetterPattern(s.to_string()))
+    }
+}
+impl AsRef<str> for DriveLetterPattern {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -75,54 +98,11 @@ impl Arbitrary<'_> for DriveLetterPattern {
     }
 }
 
-/// Parse drive letters from input string, handling wildcards and multiple drives
-fn parse_drive_letters(input: &str) -> eyre::Result<Vec<char>> {
-    let input = input.trim();
-
-    if input == "*" {
-        // Get all available drives
-        return get_available_drives();
-    }
-
-    // Parse individual drive letters
-    let mut drives = Vec::new();
-
-    // Handle various separators: space, comma, semicolon
-    let parts: Vec<&str> = input
-        .split(|c: char| c.is_whitespace() || c == ',' || c == ';')
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for part in parts {
-        let part = part.trim();
-        if part.len() == 1 {
-            if let Some(drive_char) = part.chars().next() {
-                if drive_char.is_ascii_alphabetic() {
-                    drives.push(drive_char.to_ascii_uppercase());
-                } else {
-                    return Err(eyre::eyre!("Invalid drive letter: '{}'", part));
-                }
-            }
-        } else if part.len() > 1 {
-            // Handle multiple characters as individual drive letters
-            for drive_char in part.chars() {
-                if drive_char.is_ascii_alphabetic() {
-                    drives.push(drive_char.to_ascii_uppercase());
-                } else {
-                    return Err(eyre::eyre!("Invalid drive letter: '{}'", drive_char));
-                }
-            }
-        }
-    }
-
-    if drives.is_empty() {
-        return Err(eyre::eyre!("No valid drive letters found in: '{}'", input));
-    }
-
-    Ok(drives)
-}
-
 /// Get all available drives on the system
+///
+/// Maybe see also:
+/// <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlogicaldrivestringsw>
+/// <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>
 fn get_available_drives() -> eyre::Result<Vec<char>> {
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
@@ -138,9 +118,7 @@ fn get_available_drives() -> eyre::Result<Vec<char>> {
         }
     }
 
-    if available_drives.is_empty() {
-        return Err(eyre::eyre!("No drives found on system"));
-    }
+    ensure!(!available_drives.is_empty(), "No drives found on system");
 
     Ok(available_drives)
 }
