@@ -1,5 +1,6 @@
 use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
+use eyre::bail;
 use std::any::type_name;
 use std::ptr::null_mut;
 use tracing::debug;
@@ -118,9 +119,7 @@ impl ActivePhysicalReadRequest {
             Ok(()) => {}
             Err(e) => {
                 if e.code() != ERROR_IO_PENDING.into() {
-                    return Err(eyre::eyre!(
-                        "ReadFile failed to queue request {boxed:?}: {e:?}"
-                    ));
+                    bail!("ReadFile failed to queue request {boxed:?}: {e:?}");
                 }
             }
         }
@@ -158,9 +157,7 @@ impl ActivePhysicalReadRequest {
         match res {
             Ok(()) => {
                 if lp_overlapped.is_null() {
-                    return Err(eyre::eyre!(
-                        "IOCP returned success but OVERLAPPED ptr was null"
-                    ));
+                    bail!("IOCP returned success but OVERLAPPED ptr was null");
                 }
                 // Recover original allocation using container_of pattern: lp_overlapped points to the first
                 // field (overlapped) so casting back to the parent type is sound under our invariants.
