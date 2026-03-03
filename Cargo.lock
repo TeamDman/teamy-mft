@@ -1488,11 +1488,10 @@ dependencies = [
 
 [[package]]
 name = "teamy-windows"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96bcb5bca0d7611d4df073ffa5e4e3a604174ef5491c781819d771e4e63c4dc8"
+version = "0.9.0"
 dependencies = [
  "crossbeam-channel",
+ "dunce",
  "eyre",
  "tracing",
  "uom",
