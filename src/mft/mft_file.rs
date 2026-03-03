@@ -14,6 +14,7 @@ use std::time::Instant;
 use teamy_uom_extensions::HumanInformationExt;
 use thousands::Separable;
 use tracing::debug;
+use tracing::debug_span;
 use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::usize::Information;
@@ -73,23 +74,27 @@ impl MftFile {
     /// Returns an error if the file cannot be opened, read, or parsed.
     #[instrument(level = "debug")]
     pub fn from_path(mft_file_path: &Path) -> eyre::Result<Self> {
-        // Open file
-        let file = std::fs::File::open(mft_file_path)
-            .wrap_err_with(|| format!("Failed to open {}", mft_file_path.display()))?;
+        let file = {
+            let _span = debug_span!("open_file", path = %mft_file_path.display()).entered();
+            std::fs::File::open(mft_file_path)
+                .wrap_err_with(|| format!("Failed to open {}", mft_file_path.display()))?
+        };
 
         debug!("Opened MFT file: {}", mft_file_path.display());
 
-        // Determine file size
-        let mft_file_size = Information::new::<byte>(
-            usize::try_from(
-                file.metadata()
-                    .wrap_err_with(|| {
-                        format!("Failed to get metadata for {}", mft_file_path.display())
-                    })?
-                    .len(),
+        let mft_file_size = {
+            let _span = debug_span!("read_metadata", path = %mft_file_path.display()).entered();
+            Information::new::<byte>(
+                usize::try_from(
+                    file.metadata()
+                        .wrap_err_with(|| {
+                            format!("Failed to get metadata for {}", mft_file_path.display())
+                        })?
+                        .len(),
+                )
+                .wrap_err("File size too large for usize")?,
             )
-            .wrap_err("File size too large for usize")?,
-        );
+        };
         if mft_file_size < Information::new::<byte>(1024) {
             bail!("MFT file too small: {}", mft_file_path.display());
         }
@@ -101,6 +106,12 @@ impl MftFile {
         );
         let read_start = Instant::now();
         let bytes = {
+            let _span = debug_span!(
+                "read_all_bytes",
+                path = %mft_file_path.display(),
+                file_size_bytes = mft_file_size.get::<byte>()
+            )
+            .entered();
             let mut buf = Vec::with_capacity(mft_file_size.get::<byte>());
             let mut reader = std::io::BufReader::new(&file);
             reader
@@ -109,8 +120,10 @@ impl MftFile {
             BytesMut::from(Bytes::from(buf))
         };
 
-        // Defer fixups and struct construction to from_bytes
-        let rtn = MftFile::from_bytes(bytes)?;
+        let rtn = {
+            let _span = debug_span!("construct_from_bytes").entered();
+            MftFile::from_bytes(bytes)?
+        };
 
         // Log summary
         debug!(
@@ -131,34 +144,53 @@ impl MftFile {
     /// Returns an error if the bytes are invalid or fixups fail.
     #[instrument(level = "debug", skip_all)]
     pub fn from_bytes(mut raw: BytesMut) -> eyre::Result<Self> {
-        // Ensure we have enough bytes to read the entry size field at 0x1C..=0x1F
-        if raw.len() < 0x20 {
-            bail!(
-                "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
-                raw.len()
-            );
+        {
+            let _span = debug_span!("validate_minimum_header_size", raw_len = raw.len()).entered();
+            if raw.len() < 0x20 {
+                bail!(
+                    "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
+                    raw.len()
+                );
+            }
         }
 
-        // Read entry size in bytes (little-endian u32 at offset 0x1C)
-        let entry_size_bytes =
-            u32::from_le_bytes([raw[0x1C], raw[0x1D], raw[0x1E], raw[0x1F]]) as usize;
+        let entry_size_bytes = {
+            let _span = debug_span!("read_entry_size_from_header").entered();
+            u32::from_le_bytes([raw[0x1C], raw[0x1D], raw[0x1E], raw[0x1F]]) as usize
+        };
 
-        // Validate the entry size field
-        if entry_size_bytes == 0 {
-            bail!("Entry size field is zero (invalid/unknown)");
+        {
+            let _span = debug_span!(
+                "validate_entry_size",
+                entry_size_bytes = entry_size_bytes,
+                raw_len = raw.len()
+            )
+            .entered();
+            if entry_size_bytes == 0 {
+                bail!("Entry size field is zero (invalid/unknown)");
+            }
+            if !raw.len().is_multiple_of(entry_size_bytes) {
+                bail!(
+                    "Buffer length ({}) is not a multiple of entry size ({})",
+                    raw.len(),
+                    entry_size_bytes
+                );
+            }
         }
 
-        // Ensure the buffer length aligns to the entry size
-        if !raw.len().is_multiple_of(entry_size_bytes) {
-            bail!(
-                "Buffer length ({}) is not a multiple of entry size ({})",
-                raw.len(),
-                entry_size_bytes
-            );
+        {
+            let _span = debug_span!("apply_fixups_parallel", entry_size_bytes = entry_size_bytes)
+                .entered();
+            let _stats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
         }
-        let _stats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
+
+        let bytes = {
+            let _span = debug_span!("freeze_bytes").entered();
+            raw.freeze()
+        };
+
         Ok(MftFile {
-            bytes: raw.freeze(),
+            bytes,
         })
     }
 

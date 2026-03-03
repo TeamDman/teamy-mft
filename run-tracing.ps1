@@ -30,7 +30,7 @@ if ($wt) {
 
 try {
 	Write-Host "Running: cargo run --release --features tracy -- query $($QueryArgs -join ' ')"
-	cargo run --release --features tracy -- query @QueryArgs
+	cargo run --release --features tracy -- query @QueryArgs --debug
 }
 finally {
 	$slugPattern = [Regex]::Escape($slug)

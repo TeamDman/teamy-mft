@@ -4,6 +4,7 @@ use crate::mft::path_resolve;
 use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
 use humansize::BINARY;
+use tracing::debug_span;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -13,6 +14,7 @@ use teamy_uom_extensions::HumanTimeExt;
 use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
+use tracing::instrument;
 use uom::si::f64::Ratio;
 use uom::si::f64::Time;
 use uom::si::frequency::hertz;
@@ -26,23 +28,27 @@ use uom::si::time::second;
 /// # Errors
 ///
 /// Returns an error if reading or parsing the cached MFT data fails.
+#[instrument(level = "debug")]
 pub fn process_mft_file(
     drive_letter: &str,
     mft_file_path: &Path,
 ) -> Result<MftEntryPathCollection> {
-    debug!(
-        drive_letter = &drive_letter,
-        "Processing MFT file: {}",
-        mft_file_path.display()
-    );
-
     let start = std::time::Instant::now();
 
     let mft_file = MftFile::from_path(mft_file_path)?;
 
     // collect filename attributes (parallel)
     let scan_start = Instant::now();
-    let file_names = fast_entry::collect_filenames(&mft_file);
+    let file_names = {
+        let _span = debug_span!(
+            "collect_filenames",
+            drive_letter = %drive_letter,
+            mft_size = mft_file.size().format_human(BINARY),
+            mft_entries = mft_file.record_count().separate_with_commas(),
+        )
+        .entered();
+        fast_entry::collect_filenames(&mft_file)
+    };
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = mft_file.size().over(scan_elapsed);
     debug!(

@@ -7,6 +7,8 @@ use crate::mft::fast_fixup::detect_entry_size;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_index::MftRecordIndex;
 use rayon::prelude::*;
+use tracing::debug_span;
+use tracing::instrument;
 
 pub const ATTR_TYPE_FILE_NAME: u32 = 0x30;
 const ATTRIBUTE_TYPE_END: u32 = 0xFFFF_FFFF;
@@ -122,26 +124,33 @@ pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
 
 /// Iterate all `FILE_NAME` attributes in an entry, invoking callback for each.
 /// Returns number of filename attributes found.
+#[cfg_attr(feature = "tracy", instrument(level = "debug", skip_all))]
 pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     entry_bytes: &'a [u8],
     entry_id: u32,
     mut f: F,
 ) -> usize {
-    // Signature check
-    if entry_bytes.len() < 0x18 || &entry_bytes[0..4] != b"FILE" {
-        return 0;
-    }
-    let first_attr_off = match read_u16(entry_bytes, 0x14) {
-        Some(v) => v as usize,
-        None => return 0,
+    let first_attr_off = {
+        #[cfg(feature = "tracy")]
+        let _span = debug_span!("validate_entry_header").entered();
+        if entry_bytes.len() < 0x18 || &entry_bytes[0..4] != b"FILE" {
+            return 0;
+        }
+        let first_attr_off = match read_u16(entry_bytes, 0x14) {
+            Some(v) => v as usize,
+            None => return 0,
+        };
+        if first_attr_off == 0 || first_attr_off >= entry_bytes.len() {
+            return 0;
+        }
+        first_attr_off
     };
-    if first_attr_off == 0 || first_attr_off >= entry_bytes.len() {
-        return 0;
-    }
 
     let mut offset = first_attr_off;
     let mut count = 0;
     while offset + 16 <= entry_bytes.len() {
+        #[cfg(feature = "tracy")]
+        let _span = debug_span!("scan_attribute_header").entered();
         // minimal attribute header length guard
         let Some(attr_type) = read_u32(entry_bytes, offset) else {
             break;
@@ -158,6 +167,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
         }
         let non_res_flag = entry_bytes.get(offset + 8).copied().unwrap_or(0);
         if attr_type == ATTR_TYPE_FILE_NAME && non_res_flag == 0 {
+            let _span = debug_span!("parse_resident_file_name").entered();
             // Resident attribute header layout (offsets relative to attribute start)
             if offset + 24 > entry_bytes.len() {
                 break;
@@ -231,59 +241,81 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// ```
 /// # Panics
 /// Panics if the MFT entry count exceeds `u32::MAX`.
+#[instrument(level = "debug", skip_all)]
 pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
     type PerThreadData<'a> = Vec<(Vec<FileNameRef<'a>>, Vec<(u32, usize)>)>;
 
-    let full: &'a [u8] = mft; // borrow the entire bytes buffer
-    let entry_size = mft.record_size().get::<uom::si::information::byte>();
-    let entry_count = mft.record_count();
-    let per_entry_deleted = mft
-        .iter_records()
-        .map(|record| record.is_deleted())
-        .collect();
+    let (full, entry_size, entry_count, per_entry_deleted) = {
+        let _span = debug_span!("prepare_collection_inputs").entered();
+        let full: &'a [u8] = mft; // borrow the entire bytes buffer
+        let entry_size = mft.record_size().get::<uom::si::information::byte>();
+        let entry_count = mft.record_count();
+        let per_entry_deleted = {
+            let _span = debug_span!("collect_deleted_flags").entered();
+            mft.iter_records().map(|record| record.is_deleted()).collect()
+        };
+        (full, entry_size, entry_count, per_entry_deleted)
+    };
 
-    let per_thread: PerThreadData = (0..entry_count)
-        .into_par_iter()
-        .map(|idx| {
-            let mut list = Vec::new();
-            let mut pairs = Vec::new();
-            let start = idx * entry_size;
-            let end = start + entry_size;
-            let record_bytes: &'a [u8] = &full[start..end];
-            for_each_filename(
-                record_bytes,
-                u32::try_from(idx).expect("idx should fit in u32"),
-                |fref| {
-                    let global_index = list.len();
-                    list.push(fref);
-                    pairs.push((fref.entry_id, global_index));
-                },
-            );
-            (list, pairs)
-        })
-        .collect();
+    let per_thread: PerThreadData = {
+        let _span = debug_span!("parallel_collect_filenames").entered();
+        (0..entry_count)
+            .into_par_iter()
+            .map(|idx| {
+                #[cfg(feature = "tracy")]
+                let _span = debug_span!("scan_entry_for_filenames").entered();
+                let mut list = Vec::new();
+                let mut pairs = Vec::new();
+                let start = idx * entry_size;
+                let end = start + entry_size;
+                let record_bytes: &'a [u8] = &full[start..end];
+                for_each_filename(
+                    record_bytes,
+                    u32::try_from(idx).expect("idx should fit in u32"),
+                    |fref| {
+                        let global_index = list.len();
+                        list.push(fref);
+                        pairs.push((fref.entry_id, global_index));
+                    },
+                );
+                (list, pairs)
+            })
+            .collect()
+    };
 
-    let total = per_thread.iter().map(|(v, _)| v.len()).sum();
-    let mut file_names = Vec::with_capacity(total);
-    for (v, _) in &per_thread {
-        file_names.extend_from_slice(v);
-    }
-
-    let mut per_entry: Vec<Vec<usize>> = vec![Vec::new(); entry_count];
-    let mut base = 0usize;
-    for (v, pairs) in per_thread {
-        for (entry_id, local_idx) in pairs {
-            let global_idx = base + local_idx;
-            if let Some(vec) = per_entry.get_mut(entry_id as usize) {
-                vec.push(global_idx);
-            }
+    let mut file_names = {
+        let _span = debug_span!("flatten_thread_results").entered();
+        let total = per_thread.iter().map(|(v, _)| v.len()).sum();
+        let mut file_names = Vec::with_capacity(total);
+        for (v, _) in &per_thread {
+            file_names.extend_from_slice(v);
         }
-        base += v.len();
-    }
+        file_names
+    };
 
-    FileNameCollection {
-        all_filenames: file_names,
-        per_entry_indices: per_entry,
-        per_entry_deleted,
+    let per_entry = {
+        let _span = debug_span!("build_per_entry_index").entered();
+        let mut per_entry: Vec<Vec<usize>> = vec![Vec::new(); entry_count];
+        let mut base = 0usize;
+        for (v, pairs) in per_thread {
+            for (entry_id, local_idx) in pairs {
+                let global_idx = base + local_idx;
+                if let Some(vec) = per_entry.get_mut(entry_id as usize) {
+                    vec.push(global_idx);
+                }
+            }
+            base += v.len();
+        }
+        per_entry
+    };
+
+    {
+        let _span = debug_span!("finalize_collection").entered();
+
+        FileNameCollection {
+            all_filenames: std::mem::take(&mut file_names),
+            per_entry_indices: per_entry,
+            per_entry_deleted,
+        }
     }
 }

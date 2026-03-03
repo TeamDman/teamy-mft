@@ -19,6 +19,8 @@ use teamy_uom_extensions::HumanTimeExt;
 use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
+use tracing::debug_span;
+use tracing::instrument;
 use uom::si::f64::Information;
 use uom::si::f64::Time;
 use uom::si::information::byte;
@@ -164,17 +166,26 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
 
 /// Apply fixups to all entries in the buffer using parallelism when the `rayon` feature is enabled.
 /// Also logs basic telemetry: detected entry size, entry count, elapsed time and throughput, and outcome stats.
+#[instrument(level = "debug", skip_all)]
 pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     use rayon::prelude::*;
-    if entry_size == 0 || !buf.len().is_multiple_of(entry_size) {
-        debug!(
-            "Invalid/unaligned entry size: entry_size={} buf_len={}",
-            entry_size,
-            buf.len()
-        );
-        return FixupStats::default();
+    {
+        let _span = debug_span!("validate_entry_alignment").entered();
+        if entry_size == 0 || !buf.len().is_multiple_of(entry_size) {
+            debug!(
+                "Invalid/unaligned entry size: entry_size={} buf_len={}",
+                entry_size,
+                buf.len()
+            );
+            return FixupStats::default();
+        }
     }
-    let entry_count = buf.len() / entry_size;
+
+    let entry_count = {
+        let _span = debug_span!("compute_entry_count").entered();
+        buf.len() / entry_size
+    };
+
     debug!(
         "Detected entry size: {} bytes, total entries: {}",
         entry_size.separate_with_commas(),
@@ -183,31 +194,47 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
 
     let start = Instant::now();
 
-    let stats = buf
-        .par_chunks_mut(entry_size)
-        .map(|entry| {
-            if entry.len() < entry_size {
-                return FixupState::Invalid;
-            }
-            apply_fixup_in_place(entry)
-        })
-        .fold(FixupStats::default, |mut acc, state| {
-            acc.record(state);
-            acc
-        })
-        .reduce(FixupStats::default, |a, b| FixupStats {
-            applied: a.applied + b.applied,
-            already_applied: a.already_applied + b.already_applied,
-            invalid: a.invalid + b.invalid,
-        });
+    let stats = {
+        let _span = debug_span!("parallel_apply_fixups").entered();
+        buf.par_chunks_mut(entry_size)
+            .enumerate()
+            .map(|(_entry_index, entry)| {
+                #[cfg(feature = "tracy")]
+                let _span = debug_span!("apply_fixup_to_entry").entered();
+                if entry.len() < entry_size {
+                    return FixupState::Invalid;
+                }
+                apply_fixup_in_place(entry)
+            })
+            .fold(FixupStats::default, |mut acc, state| {
+                #[cfg(feature = "tracy")]
+                let _span = debug_span!("fold_fixup_state").entered();
+                acc.record(state);
+                acc
+            })
+            .reduce(FixupStats::default, |a, b| {
+                #[cfg(feature = "tracy")]
+                let _span = debug_span!("reduce_fixup_stats").entered();
+                FixupStats {
+                    applied: a.applied + b.applied,
+                    already_applied: a.already_applied + b.already_applied,
+                    invalid: a.invalid + b.invalid,
+                }
+            })
+    };
 
-    let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "precision loss is acceptable for size estimation"
-    )]
-    let total_size = Information::new::<byte>(buf.len() as f64);
-    let rate = total_size.over(elapsed);
+    let (elapsed, rate) = {
+        let _span = debug_span!("compute_fixup_telemetry").entered();
+        let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "precision loss is acceptable for size estimation"
+        )]
+        let total_size = Information::new::<byte>(buf.len() as f64);
+        let rate = total_size.over(elapsed);
+        (elapsed, rate)
+    };
+
     debug!(
         "Took {elapsed} to process {count} records ({rate}) - fixup stats: applied={applied} already-applied={already_applied} invalid={invalid}",
         elapsed = elapsed.format_human(),

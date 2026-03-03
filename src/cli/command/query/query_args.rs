@@ -12,6 +12,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use std::time::Instant;
 use teamy_windows::storage::DriveLetterPattern;
 use thousands::Separable;
 use tokio::task::JoinSet;
@@ -91,25 +92,35 @@ impl QueryArgs {
                 .collect()
         };
 
-        let mut nucleo = nucleo::Nucleo::<ResolvedPath>::new(
-            nucleo::Config::DEFAULT,
-            Arc::new(|| {}), // notify callback
-            None,            // default threads
-            1,               // single column for matching
-        );
-        nucleo.pattern.reparse(
-            0,
-            &self.query,
-            nucleo::pattern::CaseMatching::Smart,
-            nucleo::pattern::Normalization::Smart,
-            false,
-        );
+        let mut nucleo = {
+            let _span = info_span!("create_nucleo_matcher").entered();
+            nucleo::Nucleo::<ResolvedPath>::new(
+                nucleo::Config::DEFAULT,
+                Arc::new(|| {}), // notify callback
+                None,            // default threads
+                1,               // single column for matching
+            )
+        };
+
+        {
+            let _span = info_span!("configure_nucleo_pattern", query = %self.query).entered();
+            nucleo.pattern.reparse(
+                0,
+                &self.query,
+                nucleo::pattern::CaseMatching::Smart,
+                nucleo::pattern::Normalization::Smart,
+                false,
+            );
+        }
 
         let nucleo = {
             let _span = info_span!("load_and_match_paths", drives = mft_files.len()).entered();
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?;
+            let runtime = {
+                let _span = info_span!("build_tokio_runtime").entered();
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?
+            };
             let rtn = runtime
                 .block_on(async {
                     let mut join_set: JoinSet<eyre::Result<Option<Nucleo<ResolvedPath>>>> =
@@ -123,36 +134,108 @@ impl QueryArgs {
                             .collect::<Vec<String>>()
                             .join(", ")
                     );
-                    for (drive_letter, mft_path) in mft_files {
-                        let drive_letter = drive_letter.to_string();
-                        let include_deleted = self.include_deleted;
-                        let injector = nucleo.injector();
-                        join_set.spawn_blocking(move || {
-                            let _span = info_span!("process_drive", drive_letter = %drive_letter).entered();
-                            let files = process_mft_file(&drive_letter, &mft_path).wrap_err(
-                                format!("Failed to process MFT file for drive {drive_letter}"),
-                            )?;
-                            let count_of_paths_from_drive = files.total_paths();
+                    {
+                        let _span = info_span!("spawn_drive_tasks", drives = mft_files.len()).entered();
+                        for (drive_letter, mft_path) in mft_files {
+                            let drive_letter = drive_letter.to_string();
+                            let include_deleted = self.include_deleted;
+                            let injector = nucleo.injector();
+                            debug!(drive_letter = %drive_letter, "Spawning drive worker task");
+                            join_set.spawn_blocking(move || {
+                                let _span =
+                                    info_span!("process_drive", drive_letter = %drive_letter)
+                                        .entered();
+                                let total_started_at = Instant::now();
 
-                            for file_path in files.0.into_iter().flatten() {
-                                if !include_deleted && file_path.has_deleted_entries() {
-                                    continue;
+                                debug!(
+                                    drive_letter = %drive_letter,
+                                    include_deleted,
+                                    "Starting drive processing"
+                                );
+
+                                let mft_load_started_at = Instant::now();
+                                let files = {
+                                    let _span = info_span!(
+                                        "load_and_parse_mft",
+                                        drive_letter = %drive_letter
+                                    )
+                                    .entered();
+                                    process_mft_file(&drive_letter, &mft_path).wrap_err(format!(
+                                        "Failed to process MFT file for drive {drive_letter}",
+                                    ))?
+                                };
+                                let mft_load_elapsed_ms = mft_load_started_at.elapsed().as_millis();
+                                let count_of_paths_from_drive = {
+                                    let _span = info_span!(
+                                        "count_paths_from_drive",
+                                        drive_letter = %drive_letter
+                                    )
+                                    .entered();
+                                    files.total_paths()
+                                };
+
+                                debug!(
+                                    drive_letter = %drive_letter,
+                                    path_count = count_of_paths_from_drive,
+                                    elapsed_ms = mft_load_elapsed_ms,
+                                    "Loaded and parsed MFT file"
+                                );
+
+                                let inject_started_at = Instant::now();
+                                let mut scanned_path_count = 0usize;
+                                let mut deleted_filtered_count = 0usize;
+                                let mut injected_count = 0usize;
+
+                                {
+                                    let _span = info_span!(
+                                        "filter_and_inject_paths",
+                                        drive_letter = %drive_letter,
+                                        include_deleted = include_deleted
+                                    )
+                                    .entered();
+                                    for file_path in files.0.into_iter().flatten() {
+                                        scanned_path_count += 1;
+                                        if !include_deleted && file_path.has_deleted_entries() {
+                                            deleted_filtered_count += 1;
+                                        } else {
+                                            injector.push(file_path, |x, cols| {
+                                                cols[0] = x.path.to_string_lossy().into();
+                                            });
+                                            injected_count += 1;
+                                        }
+                                    }
                                 }
-                                injector.push(file_path, |x, cols| {
-                                    cols[0] = x.path.to_string_lossy().into();
-                                });
-                            }
 
-                            let count_of_paths_total = injector.injected_items();
+                                let inject_elapsed_ms = inject_started_at.elapsed().as_millis();
 
-                            debug!(
-                                drive_letter = &drive_letter,
-                                "Added {} paths to be queried against, up to {}",
-                                count_of_paths_from_drive.separate_with_commas(),
-                                count_of_paths_total.separate_with_commas(),
-                            );
-                            eyre::Ok(None)
-                        });
+                                let count_of_paths_total = {
+                                    let _span =
+                                        info_span!("query_injected_items_count").entered();
+                                    injector.injected_items()
+                                };
+
+                                debug!(
+                                    drive_letter = %drive_letter,
+                                    scanned_path_count = scanned_path_count,
+                                    deleted_filtered_count = deleted_filtered_count,
+                                    injected_count = injected_count,
+                                    count_of_paths_total = count_of_paths_total,
+                                    inject_elapsed_ms = inject_elapsed_ms,
+                                    total_elapsed_ms = total_started_at.elapsed().as_millis(),
+                                    "Finished drive processing"
+                                );
+
+                                debug!(
+                                    drive_letter = %drive_letter,
+                                    "Added {} paths from this drive (scanned {}, filtered deleted {}), up to {} total in injector",
+                                    injected_count.separate_with_commas(),
+                                    scanned_path_count.separate_with_commas(),
+                                    deleted_filtered_count.separate_with_commas(),
+                                    count_of_paths_total.separate_with_commas(),
+                                );
+                                eyre::Ok(None)
+                            });
+                        }
                     }
 
                     // Only stop ticking nucleo when all MFT processing tasks are done
@@ -162,6 +245,7 @@ impl QueryArgs {
                     join_set.spawn_blocking(move || {
                         let _span = info_span!("nucleo_tick_loop").entered();
                         debug!("Ticking Nucleo...");
+                        let tick_started_at = Instant::now();
                         loop {
                             let status = nucleo.tick(100);
                             if !status.running
@@ -169,15 +253,35 @@ impl QueryArgs {
                             {
                                 break;
                             }
-                            debug!("Tick status: {:?}", status);
                         }
+                        debug!(
+                            elapsed_ms = tick_started_at.elapsed().as_millis(),
+                            "Tick loop complete"
+                        );
                         eyre::Ok(Some(nucleo))
                     });
 
                     let mut nucleo: Option<Nucleo<ResolvedPath>> = None;
-                    while let Some(res) = join_set.join_next().await {
-                        nucleo = nucleo.or(res??);
-                        remaining.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        let _span = info_span!("await_worker_results").entered();
+                        while let Some(res) = join_set.join_next().await {
+                            let task_result = res??;
+                            match task_result {
+                                Some(returned_nucleo) => {
+                                    debug!("Received Nucleo instance from tick loop task");
+                                    nucleo = Some(returned_nucleo);
+                                }
+                                None => {
+                                    let previous_remaining =
+                                        remaining.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                                    debug!(
+                                        remaining_before = previous_remaining,
+                                        remaining_after = previous_remaining.saturating_sub(1),
+                                        "Drive worker completed"
+                                    );
+                                }
+                            }
+                        }
                     }
                     eyre::Ok(nucleo)
                 })?
