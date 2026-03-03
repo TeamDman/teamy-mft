@@ -1,5 +1,6 @@
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
+use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use bytes::BytesMut;
 use eyre::Context;
@@ -42,7 +43,7 @@ impl MftFile {
     /// # Panics
     ///
     /// Panics if the MFT entry size field is less than 0 or if the buffer is too small to read the entry size field.
-    pub fn record_size(&self) -> Information {
+    pub fn record_size(&self) -> MftRecordSize {
         debug_assert!(
             self.len() >= 0x20,
             "MFT buffer too small to read entry size field, got {} bytes",
@@ -50,7 +51,7 @@ impl MftFile {
         );
         let size = u32::from_le_bytes([self[0x1C], self[0x1D], self[0x1E], self[0x1F]]) as usize;
         debug_assert!(size > 0, "MFT entry size field is zero (invalid/unknown)");
-        Information::new::<byte>(size)
+        MftRecordSize::new(Information::new::<byte>(size)).expect("MFT record size must be valid")
     }
 
     /// # Panics
