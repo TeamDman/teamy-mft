@@ -9,6 +9,7 @@ use eyre::Context;
 use eyre::OptionExt;
 use nucleo::Nucleo;
 use std::ffi::OsString;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -34,6 +35,9 @@ pub struct QueryArgs {
     /// Include paths that contain one or more deleted MFT entries
     #[clap(long)]
     pub include_deleted: bool,
+    /// Show only paths that contain one or more deleted MFT entries
+    #[clap(long)]
+    pub only_deleted: bool,
 }
 
 fn render_resolved_path(path: &ResolvedPath, colorize: bool) -> String {
@@ -71,7 +75,7 @@ impl QueryArgs {
         clippy::too_many_lines,
         reason = "function handles complex query logic with multiple threads"
     )]
-    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted))]
+    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted))]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
@@ -139,6 +143,7 @@ impl QueryArgs {
                         for (drive_letter, mft_path) in mft_files {
                             let drive_letter = drive_letter.to_string();
                             let include_deleted = self.include_deleted;
+                            let only_deleted = self.only_deleted;
                             let injector = nucleo.injector();
                             debug!(drive_letter = %drive_letter, "Spawning drive worker task");
                             join_set.spawn_blocking(move || {
@@ -150,6 +155,7 @@ impl QueryArgs {
                                 debug!(
                                     drive_letter = %drive_letter,
                                     include_deleted,
+                                    only_deleted,
                                     "Starting drive processing"
                                 );
 
@@ -190,12 +196,19 @@ impl QueryArgs {
                                     let _span = info_span!(
                                         "filter_and_inject_paths",
                                         drive_letter = %drive_letter,
-                                        include_deleted = include_deleted
+                                        include_deleted = include_deleted,
+                                        only_deleted = only_deleted
                                     )
                                     .entered();
                                     for file_path in files.0.into_iter().flatten() {
                                         scanned_path_count += 1;
-                                        if !include_deleted && file_path.has_deleted_entries() {
+                                        let has_deleted_entries = file_path.has_deleted_entries();
+                                        if only_deleted && !has_deleted_entries {
+                                            deleted_filtered_count += 1;
+                                        } else if !only_deleted
+                                            && !include_deleted
+                                            && has_deleted_entries
+                                        {
                                             deleted_filtered_count += 1;
                                         } else {
                                             injector.push(file_path, |x, cols| {
@@ -308,7 +321,10 @@ impl QueryArgs {
                 if i >= self.limit {
                     break;
                 }
-                println!("{}", render_resolved_path(item.data, self.include_deleted));
+                println!(
+                    "{}",
+                    render_resolved_path(item.data, std::io::stdout().is_terminal() && (self.include_deleted || self.only_deleted))
+                );
             }
         }
 
@@ -332,6 +348,9 @@ impl ToArgs for QueryArgs {
         }
         if self.include_deleted {
             args.push("--include-deleted".into());
+        }
+        if self.only_deleted {
+            args.push("--only-deleted".into());
         }
         args
     }
