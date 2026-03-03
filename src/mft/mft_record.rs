@@ -4,7 +4,7 @@ use crate::mft::mft_record_number::MftRecordNumber;
 use bytes::Bytes;
 use eyre::bail;
 use std::ops::Deref;
-use teamy_windows::file::HandleReadExt;
+use teamy_windows::storage::HandleReadExt;
 use uom::si::information::byte;
 
 /// <https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1>

@@ -1,6 +1,6 @@
 use crate::mft::mft_location::MftLocationOnDisk;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
-use teamy_windows::file::HandleReadExt;
+use teamy_windows::storage::HandleReadExt;
 use uom::si::information::byte;
 use uom::si::usize::Information;
 
