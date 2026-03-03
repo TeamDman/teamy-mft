@@ -25,6 +25,9 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 
+#[cfg(feature = "tracy")]
+use tracing_tracy::TracyLayer;
+
 /// Manually includes [`::bevy::log::DEFAULT_FILTER`] to create an [`EnvFilter`]
 ///
 /// <https://github.com/tokio-rs/tracing/issues/1181>
@@ -84,6 +87,14 @@ pub fn init_tracing(level: Level, json_behaviour: &JsonLogBehaviour) -> eyre::Re
             .with_line_number(true)
             .with_writer(json_writer);
 
+        #[cfg(feature = "tracy")]
+        let subscriber = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stderr_layer)
+            .with(json_layer)
+            .with(TracyLayer::default());
+
+        #[cfg(not(feature = "tracy"))]
         let subscriber = tracing_subscriber::registry()
             .with(env_filter)
             .with(stderr_layer)
@@ -98,15 +109,23 @@ pub fn init_tracing(level: Level, json_behaviour: &JsonLogBehaviour) -> eyre::Re
 
         info!(path = %json_log_path.display(), "JSON log output initialized");
     } else {
+        #[cfg(feature = "tracy")]
         let subscriber = tracing_subscriber::registry()
             .with(env_filter)
-            .with(stderr_layer);
+            .with(stderr_layer)
+            .with(TracyLayer::default());
+
+        #[cfg(not(feature = "tracy"))]
+        let subscriber = tracing_subscriber::registry().with(env_filter).with(stderr_layer);
         if let Err(error) = subscriber.try_init() {
             eprintln!(
                 "Failed to initialize tracing subscriber - are you running `cargo test`? If so, multiple test entrypoints may be running from the same process. https://github.com/tokio-rs/console/issues/505 : {error}"
             );
             return Ok(());
         }
+
+        #[cfg(feature = "tracy")]
+        info!("Tracy profiling layer initialized");
     }
 
     debug!("Tracing initialized with level: {:?}", level);

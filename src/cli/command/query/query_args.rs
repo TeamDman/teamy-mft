@@ -17,6 +17,8 @@ use thousands::Separable;
 use tokio::task::JoinSet;
 use tracing::debug;
 use tracing::info;
+use tracing::info_span;
+use tracing::instrument;
 
 #[derive(Args, Arbitrary, PartialEq, Debug, Default)]
 pub struct QueryArgs {
@@ -68,20 +70,26 @@ impl QueryArgs {
         clippy::too_many_lines,
         reason = "function handles complex query logic with multiple threads"
     )]
+    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted))]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
             eyre::bail!("query string required")
         }
-        let sync_dir = try_get_sync_dir()?;
+        let sync_dir = {
+            let _span = info_span!("resolve_sync_dir").entered();
+            try_get_sync_dir()?
+        };
 
-        let mft_files: Vec<(char, PathBuf)> = self
-            .drive_pattern
-            .into_drive_letters()?
-            .into_iter()
-            .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
-            .filter(|(_, p)| p.is_file())
-            .collect();
+        let mft_files: Vec<(char, PathBuf)> = {
+            let _span = info_span!("discover_mft_files").entered();
+            self.drive_pattern
+                .into_drive_letters()?
+                .into_iter()
+                .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
+                .filter(|(_, p)| p.is_file())
+                .collect()
+        };
 
         let mut nucleo = nucleo::Nucleo::<ResolvedPath>::new(
             nucleo::Config::DEFAULT,
@@ -98,6 +106,7 @@ impl QueryArgs {
         );
 
         let nucleo = {
+            let _span = info_span!("load_and_match_paths", drives = mft_files.len()).entered();
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
@@ -119,6 +128,7 @@ impl QueryArgs {
                         let include_deleted = self.include_deleted;
                         let injector = nucleo.injector();
                         join_set.spawn_blocking(move || {
+                            let _span = info_span!("process_drive", drive_letter = %drive_letter).entered();
                             let files = process_mft_file(&drive_letter, &mft_path).wrap_err(
                                 format!("Failed to process MFT file for drive {drive_letter}"),
                             )?;
@@ -150,6 +160,7 @@ impl QueryArgs {
                     let remaining_clone = Arc::clone(&remaining);
 
                     join_set.spawn_blocking(move || {
+                        let _span = info_span!("nucleo_tick_loop").entered();
                         debug!("Ticking Nucleo...");
                         loop {
                             let status = nucleo.tick(100);
@@ -177,18 +188,24 @@ impl QueryArgs {
             rtn
         };
 
-        let snapshot = nucleo.snapshot();
+        let snapshot = {
+            let _span = info_span!("snapshot_results").entered();
+            nucleo.snapshot()
+        };
         info!(
             "Found {} matching items out of {} total items, showing up to {}",
             snapshot.matched_item_count().separate_with_commas(),
             snapshot.item_count().separate_with_commas(),
             self.limit.separate_with_commas()
         );
-        for (i, item) in snapshot.matched_items(..).enumerate() {
-            if i >= self.limit {
-                break;
+        {
+            let _span = info_span!("print_results").entered();
+            for (i, item) in snapshot.matched_items(..).enumerate() {
+                if i >= self.limit {
+                    break;
+                }
+                println!("{}", render_resolved_path(item.data, self.include_deleted));
             }
-            println!("{}", render_resolved_path(item.data, self.include_deleted));
         }
 
         // Skip drop handlers for faster exit
