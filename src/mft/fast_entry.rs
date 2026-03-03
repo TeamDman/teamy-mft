@@ -5,6 +5,7 @@
 
 use crate::mft::fast_fixup::detect_entry_size;
 use crate::mft::mft_file::MftFile;
+use crate::mft::mft_record_index::MftRecordIndex;
 use rayon::prelude::*;
 
 pub const ATTR_TYPE_FILE_NAME: u32 = 0x30;
@@ -85,9 +86,9 @@ impl<'a> FileNameCollection<'a> {
 
     /// Returns true when the entry is marked deleted (not in-use) in MFT flags.
     #[must_use]
-    pub fn is_entry_deleted(&self, entry_id: usize) -> bool {
+    pub fn is_entry_deleted(&self, entry_id: MftRecordIndex) -> bool {
         self.per_entry_deleted
-            .get(entry_id)
+            .get(entry_id.get())
             .copied()
             .unwrap_or(false)
     }

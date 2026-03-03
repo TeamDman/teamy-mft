@@ -10,6 +10,7 @@ pub mod mft_record_attribute_non_resident_header;
 pub mod mft_record_attribute_run_list;
 pub mod mft_record_attribute_x80_data_attribute;
 pub mod mft_record_flags;
+pub mod mft_record_index;
 pub mod mft_record_iter;
 pub mod mft_record_location;
 pub mod mft_record_number;

@@ -2,6 +2,7 @@
 //! This is a first-pass simple implementation (non-parallel) to be optimized later.
 
 use crate::mft::fast_entry::FileNameCollection;
+use crate::mft::mft_record_index::MftRecordIndex;
 use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
@@ -176,10 +177,10 @@ pub fn resolve_paths_all_parallel(
     }
     #[allow(clippy::cast_sign_loss, reason = "depth is non-negative")]
     let max_depth = depth.iter().copied().max().unwrap_or(0) as usize;
-    let mut layers: Vec<Vec<usize>> = vec![Vec::new(); max_depth + 1];
+    let mut layers: Vec<Vec<MftRecordIndex>> = vec![Vec::new(); max_depth + 1];
     for (i, d) in depth.iter().enumerate() {
         #[allow(clippy::cast_sign_loss, reason = "depth is non-negative")]
-        layers[*d as usize].push(i);
+        layers[*d as usize].push(MftRecordIndex::new(i));
     }
 
     // Results storage
@@ -196,15 +197,15 @@ pub fn resolve_paths_all_parallel(
 
     // Process each layer: build outputs in parallel (read-only borrow of earlier results) then write.
     for layer_ids in &layers {
-        let layer_outputs: Vec<(usize, Vec<ResolvedPath>)> = layer_ids
+        let layer_outputs: Vec<(MftRecordIndex, Vec<ResolvedPath>)> = layer_ids
             .par_iter()
             .map(|&entry_id| {
-                if !results[entry_id].is_empty() {
+                if !results[entry_id.get()].is_empty() {
                     return (entry_id, Vec::new());
                 }
                 let mut acc: Vec<ResolvedPath> = Vec::new();
-                for bn in &per_entry[entry_id] {
-                    if bn.parent == entry_id {
+                for bn in &per_entry[entry_id.get()] {
+                    if bn.parent == entry_id.get() {
                         continue;
                     }
                     let parent_paths = &results[bn.parent];
@@ -250,7 +251,7 @@ pub fn resolve_paths_all_parallel(
         // Write phase
         for (id, acc) in layer_outputs {
             if !acc.is_empty() {
-                results[id] = acc;
+                results[id.get()] = acc;
             }
         }
     }

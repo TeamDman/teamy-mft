@@ -1,4 +1,5 @@
 use crate::mft::mft_record::MftRecord;
+use crate::mft::mft_record_index::MftRecordIndex;
 use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use uom::si::information::byte;
@@ -8,7 +9,7 @@ use uom::si::information::byte;
 pub struct MftRecordIter {
     bytes: Bytes,
     entry_size: MftRecordSize,
-    index: usize,
+    index: MftRecordIndex,
     total_record_count: usize,
 }
 
@@ -21,7 +22,7 @@ impl MftRecordIter {
         Self {
             bytes,
             entry_size,
-            index: 0,
+            index: MftRecordIndex::new(0),
             total_record_count,
         }
     }
@@ -34,7 +35,7 @@ impl Iterator for MftRecordIter {
             return None;
         }
         let entry_size_bytes = self.entry_size.get::<byte>();
-        let start = self.index * entry_size_bytes;
+        let start = self.index.get() * entry_size_bytes;
         let end = start + entry_size_bytes;
         self.index += 1;
         Some(MftRecord::from_bytes_unchecked(
@@ -43,7 +44,7 @@ impl Iterator for MftRecordIter {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.total_record_count.saturating_sub(self.index);
+        let remaining = self.total_record_count.saturating_sub(self.index.get());
         (remaining, Some(remaining))
     }
 }
