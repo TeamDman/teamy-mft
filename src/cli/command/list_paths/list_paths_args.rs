@@ -1,5 +1,4 @@
 use crate::cli::to_args::ToArgs;
-use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft::mft_file::MftFile;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
@@ -10,6 +9,7 @@ use mft::MftParser;
 use mft::attribute::MftAttributeContent;
 use mft::attribute::x30::FileNamespace;
 use rustc_hash::FxHashMap;
+use teamy_windows::storage::DriveLetterPattern;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;

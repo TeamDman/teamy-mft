@@ -1,5 +1,4 @@
 use crate::cli::to_args::ToArgs;
-use crate::drive_letter_pattern::DriveLetterPattern;
 use crate::mft::mft_physical_read::read_physical_mft;
 use crate::ntfs::ntfs_drive_handle::get_volume_disk_extents;
 use crate::sync_dir::try_get_sync_dir;
@@ -10,6 +9,7 @@ use eyre::Context;
 use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
+use teamy_windows::storage::DriveLetterPattern;
 use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::path::PathBuf;
