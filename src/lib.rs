@@ -1,4 +1,3 @@
-#![feature(btree_cursors)]
 pub mod cli;
 
 pub mod mft;

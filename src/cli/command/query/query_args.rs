@@ -1,16 +1,18 @@
 use crate::cli::to_args::ToArgs;
+use crate::mft::path_resolve::ResolvedPath;
 use crate::mft_process::process_mft_file;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
+use color_eyre::owo_colors::OwoColorize;
 use eyre::Context;
 use eyre::OptionExt;
 use nucleo::Nucleo;
-use teamy_windows::storage::DriveLetterPattern;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+use teamy_windows::storage::DriveLetterPattern;
 use thousands::Separable;
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -26,6 +28,33 @@ pub struct QueryArgs {
     /// Maximum number of results to show
     #[clap(long, default_value_t = 100usize)]
     pub limit: usize,
+    /// Include paths that contain one or more deleted MFT entries
+    #[clap(long)]
+    pub include_deleted: bool,
+}
+
+fn render_resolved_path(path: &ResolvedPath, colorize: bool) -> String {
+    if !colorize {
+        return path.path.display().to_string();
+    }
+
+    let mut rendered = String::new();
+    rendered.push_str(&path.root_prefix);
+    for (index, component) in path.components.iter().enumerate() {
+        if !rendered.ends_with('\\')
+            && !rendered.ends_with('/')
+            && (index > 0 || !path.root_prefix.is_empty())
+        {
+            rendered.push('\\');
+        }
+        let is_deleted = path.component_deleted.get(index).copied().unwrap_or(false);
+        if is_deleted {
+            rendered.push_str(&component.red().to_string());
+        } else {
+            rendered.push_str(&component.green().to_string());
+        }
+    }
+    rendered
 }
 
 impl QueryArgs {
@@ -54,7 +83,7 @@ impl QueryArgs {
             .filter(|(_, p)| p.is_file())
             .collect();
 
-        let mut nucleo = nucleo::Nucleo::<PathBuf>::new(
+        let mut nucleo = nucleo::Nucleo::<ResolvedPath>::new(
             nucleo::Config::DEFAULT,
             Arc::new(|| {}), // notify callback
             None,            // default threads
@@ -74,7 +103,7 @@ impl QueryArgs {
                 .build()?;
             let rtn = runtime
                 .block_on(async {
-                    let mut join_set: JoinSet<eyre::Result<Option<Nucleo<PathBuf>>>> =
+                    let mut join_set: JoinSet<eyre::Result<Option<Nucleo<ResolvedPath>>>> =
                         JoinSet::new();
 
                     info!(
@@ -87,6 +116,7 @@ impl QueryArgs {
                     );
                     for (drive_letter, mft_path) in mft_files {
                         let drive_letter = drive_letter.to_string();
+                        let include_deleted = self.include_deleted;
                         let injector = nucleo.injector();
                         join_set.spawn_blocking(move || {
                             let files = process_mft_file(&drive_letter, &mft_path).wrap_err(
@@ -95,8 +125,11 @@ impl QueryArgs {
                             let count_of_paths_from_drive = files.total_paths();
 
                             for file_path in files.0.into_iter().flatten() {
+                                if !include_deleted && file_path.has_deleted_entries() {
+                                    continue;
+                                }
                                 injector.push(file_path, |x, cols| {
-                                    cols[0] = x.to_string_lossy().into();
+                                    cols[0] = x.path.to_string_lossy().into();
                                 });
                             }
 
@@ -130,7 +163,7 @@ impl QueryArgs {
                         eyre::Ok(Some(nucleo))
                     });
 
-                    let mut nucleo: Option<Nucleo<PathBuf>> = None;
+                    let mut nucleo: Option<Nucleo<ResolvedPath>> = None;
                     while let Some(res) = join_set.join_next().await {
                         nucleo = nucleo.or(res??);
                         remaining.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -155,7 +188,7 @@ impl QueryArgs {
             if i >= self.limit {
                 break;
             }
-            println!("{}", item.data.display());
+            println!("{}", render_resolved_path(item.data, self.include_deleted));
         }
 
         // Skip drop handlers for faster exit
@@ -175,6 +208,9 @@ impl ToArgs for QueryArgs {
         if self.limit != 100 {
             args.push("--limit".into());
             args.push(self.limit.to_string().into());
+        }
+        if self.include_deleted {
+            args.push("--include-deleted".into());
         }
         args
     }

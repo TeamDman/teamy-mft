@@ -1,19 +1,13 @@
 use crate::mft::mft_record_attribute_iter::MftRecordAttributeIter;
+use crate::mft::mft_record_flags::MftRecordFlags;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
+use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use eyre::bail;
-use teamy_windows::storage::HandleReadExt;
 use std::ops::Deref;
+use teamy_windows::storage::HandleReadExt;
 use uom::si::information::byte;
-
-/// <https://digitalinvestigator.blogspot.com/2022/03/the-ntfs-master-file-table-mft.html?m=1>
-/// "On a standard hard drive with 512-byte sectors, the MFT is structured as a series of 1,024-byte records,
-/// also known as “entries,” one for each file and directory on a volume but only the first 42 bytes (MFT header)
-/// have a defined purpose. The remaining 982 bytes store attributes, which are small data structures that have
-/// a very specific purpose. However, on advanced format (AF) drives with 4KB sectors,
-/// each MFT record will be 4,096 bytes instead."
-pub const MFT_RECORD_SIZE: u16 = 1024;
 
 /// Zero-copy record view backed by `bytes::Bytes`.
 /// Can be cloned cheaply and stored in ECS components.
@@ -76,8 +70,9 @@ impl MftRecord {
     pub fn try_from_handle(
         drive_handle: &impl HandleReadExt,
         mft_record_location: MftRecordLocationOnDisk,
+        mft_record_size: MftRecordSize,
     ) -> eyre::Result<Self> {
-        let mut data = [0u8; MFT_RECORD_SIZE as usize];
+        let mut data = vec![0u8; mft_record_size.get::<byte>()];
         // Convert the location to a signed offset for the read call. Use a checked conversion
         // so we fail with a clear error instead of silently wrapping on platforms where
         // `usize` may be larger than `i64`.
@@ -86,14 +81,14 @@ impl MftRecord {
             .map_err(|e| eyre::eyre!("MFT record location doesn't fit in i64: {e}"))?;
 
         drive_handle.try_read_exact(offset_i64, data.as_mut_slice())?;
-        if &data[0..4] != b"FILE" {
+        if data.len() < 4 || &data[0..4] != b"FILE" {
             bail!(
                 "Invalid MFT record signature: expected 'FILE', got {:?}",
                 String::from_utf8_lossy(&data[0..4])
             );
         }
         Ok(Self {
-            data: Bytes::from(data.to_vec()),
+            data: Bytes::from(data),
         })
     }
 
@@ -179,8 +174,32 @@ impl MftRecord {
     }
 
     #[inline]
-    pub fn get_flags(&self) -> u16 {
-        self.read_u16(Self::OFFSET_FOR_FLAGS)
+    pub fn flags(&self) -> MftRecordFlags {
+        MftRecordFlags::from(self.read_u16(Self::OFFSET_FOR_FLAGS))
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn flags_is_in_use(flags: MftRecordFlags) -> bool {
+        flags.is_in_use()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn flags_is_deleted(flags: MftRecordFlags) -> bool {
+        flags.is_deleted()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_in_use(&self) -> bool {
+        Self::flags_is_in_use(self.flags())
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn is_deleted(&self) -> bool {
+        Self::flags_is_deleted(self.flags())
     }
 
     /// Bytes in use inside this record.

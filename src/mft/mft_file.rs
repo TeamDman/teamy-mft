@@ -3,6 +3,7 @@ use crate::mft::mft_record_iter::MftRecordIter;
 use bytes::Bytes;
 use bytes::BytesMut;
 use eyre::Context;
+use eyre::bail;
 use humansize::BINARY;
 use std::fmt::Debug;
 use std::io::Read;
@@ -40,26 +41,28 @@ impl MftFile {
     }
     /// # Panics
     ///
-    /// Panics if the MFT entry size field is zero.
+    /// Panics if the MFT entry size field is less than 0 or if the buffer is too small to read the entry size field.
     pub fn record_size(&self) -> Information {
-        if self.len() < 0x20 {
-            return Information::new::<byte>(1024);
-        }
+        debug_assert!(
+            self.len() >= 0x20,
+            "MFT buffer too small to read entry size field, got {} bytes",
+            self.len()
+        );
         let size = u32::from_le_bytes([self[0x1C], self[0x1D], self[0x1E], self[0x1F]]) as usize;
-        if size == 0 {
-            // Information::new::<byte>(1024)
-            panic!("MFT entry size field is zero (invalid/unknown)");
-        } else {
-            Information::new::<byte>(size)
-        }
+        debug_assert!(size > 0, "MFT entry size field is zero (invalid/unknown)");
+        Information::new::<byte>(size)
     }
+
+    /// # Panics
+    ///
+    /// Panics if the MFT entry size field is zero or if the buffer is too small to read the entry size field.
     pub fn record_count(&self) -> usize {
         let entry_size_bytes = self.record_size().get::<byte>();
-        if entry_size_bytes == 0 {
-            0
-        } else {
-            self.bytes.len() / entry_size_bytes
-        }
+        debug_assert!(
+            entry_size_bytes > 0,
+            "MFT entry size field is zero (invalid/unknown)"
+        );
+        self.bytes.len() / entry_size_bytes
     }
 
     /// Load an MFT file from the given path.
@@ -87,7 +90,7 @@ impl MftFile {
             .wrap_err("File size too large for usize")?,
         );
         if mft_file_size < Information::new::<byte>(1024) {
-            eyre::bail!("MFT file too small: {}", mft_file_path.display());
+            bail!("MFT file too small: {}", mft_file_path.display());
         }
 
         // Read all bytes
@@ -129,7 +132,7 @@ impl MftFile {
     pub fn from_bytes(mut raw: BytesMut) -> eyre::Result<Self> {
         // Ensure we have enough bytes to read the entry size field at 0x1C..=0x1F
         if raw.len() < 0x20 {
-            eyre::bail!(
+            bail!(
                 "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
                 raw.len()
             );
@@ -141,12 +144,12 @@ impl MftFile {
 
         // Validate the entry size field
         if entry_size_bytes == 0 {
-            eyre::bail!("Entry size field is zero (invalid/unknown)");
+            bail!("Entry size field is zero (invalid/unknown)");
         }
 
         // Ensure the buffer length aligns to the entry size
         if !raw.len().is_multiple_of(entry_size_bytes) {
-            eyre::bail!(
+            bail!(
                 "Buffer length ({}) is not a multiple of entry size ({})",
                 raw.len(),
                 entry_size_bytes

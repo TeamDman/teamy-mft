@@ -9,13 +9,13 @@ use eyre::Context;
 use eyre::bail;
 use eyre::eyre;
 use itertools::Itertools;
-use teamy_windows::storage::DriveLetterPattern;
 use std::ffi::OsString;
 use std::fs::create_dir_all;
 use std::path::PathBuf;
 use std::thread;
 use teamy_windows::elevation::enable_backup_privileges;
 use teamy_windows::elevation::ensure_elevated;
+use teamy_windows::storage::DriveLetterPattern;
 use tracing::error;
 use tracing::info;
 
@@ -141,7 +141,7 @@ impl SyncArgs {
                         match read_physical_mft(drive_letter) {
                             Ok((logical_segments, physical_read_results)) => {
                                 physical_read_results
-                                    .write_to_file(&logical_segments, &output_path)
+                                    .read_into_path(&logical_segments, &output_path)
                                     .wrap_err("Failed writing MFT output file")?;
                             }
                             Err(e) => {

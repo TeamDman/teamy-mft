@@ -6,6 +6,29 @@ use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResolvedPath {
+    pub path: PathBuf,
+    pub root_prefix: String,
+    pub components: Vec<String>,
+    pub component_deleted: Vec<bool>,
+}
+
+impl ResolvedPath {
+    #[must_use]
+    pub fn has_deleted_entries(&self) -> bool {
+        self.component_deleted.iter().any(|is_deleted| *is_deleted)
+    }
+
+    #[must_use]
+    fn deleted_segment_count(&self) -> usize {
+        self.component_deleted
+            .iter()
+            .filter(|is_deleted| **is_deleted)
+            .count()
+    }
+}
+
 /// Decode UTF-16 little endian slice to String (lossy ASCII fast-path optional later).
 fn decode_name(units: &[u16]) -> Cow<'_, str> {
     use std::char::decode_utf16;
@@ -29,7 +52,7 @@ fn decode_name(units: &[u16]) -> Cow<'_, str> {
 /// A mapping from MFT entry ID to zero/one/many resolved paths.
 /// Because an entry can have multiple x30 attributes, one entry may have more than one full path associated with it.
 #[derive(Debug, Default, Clone)]
-pub struct MftEntryPathCollection(pub Vec<Vec<PathBuf>>);
+pub struct MftEntryPathCollection(pub Vec<Vec<ResolvedPath>>);
 impl MftEntryPathCollection {
     #[must_use]
     pub fn entry_count(&self) -> usize {
@@ -40,7 +63,7 @@ impl MftEntryPathCollection {
         self.0.iter().map(std::vec::Vec::len).sum()
     }
     #[must_use]
-    pub fn paths_for(&self, entry_id: usize) -> &[PathBuf] {
+    pub fn paths_for(&self, entry_id: usize) -> &[ResolvedPath] {
         self.0.get(entry_id).map_or(&[], |v| &**v)
     }
 }
@@ -160,20 +183,26 @@ pub fn resolve_paths_all_parallel(
     }
 
     // Results storage
-    let mut results: Vec<Vec<PathBuf>> = vec![Vec::new(); entry_count];
+    let root_prefix_display = root_prefix.to_string_lossy().into_owned();
+    let mut results: Vec<Vec<ResolvedPath>> = vec![Vec::new(); entry_count];
     if entry_count > 5 {
-        results[5].push(root_prefix.to_path_buf());
+        results[5].push(ResolvedPath {
+            path: root_prefix.to_path_buf(),
+            root_prefix: root_prefix_display,
+            components: Vec::new(),
+            component_deleted: Vec::new(),
+        });
     }
 
     // Process each layer: build outputs in parallel (read-only borrow of earlier results) then write.
     for layer_ids in &layers {
-        let layer_outputs: Vec<(usize, Vec<PathBuf>)> = layer_ids
+        let layer_outputs: Vec<(usize, Vec<ResolvedPath>)> = layer_ids
             .par_iter()
             .map(|&entry_id| {
                 if !results[entry_id].is_empty() {
                     return (entry_id, Vec::new());
                 }
-                let mut acc: Vec<PathBuf> = Vec::new();
+                let mut acc: Vec<ResolvedPath> = Vec::new();
                 for bn in &per_entry[entry_id] {
                     if bn.parent == entry_id {
                         continue;
@@ -183,14 +212,37 @@ pub fn resolve_paths_all_parallel(
                         continue;
                     }
                     for parent_path in parent_paths {
-                        let mut p = parent_path.clone();
+                        let mut p = parent_path.path.clone();
                         p.push(&bn.name);
-                        acc.push(p);
+                        let mut components = parent_path.components.clone();
+                        components.push(bn.name.clone());
+                        let mut component_deleted = parent_path.component_deleted.clone();
+                        component_deleted.push(file_names.is_entry_deleted(entry_id));
+                        acc.push(ResolvedPath {
+                            path: p,
+                            root_prefix: parent_path.root_prefix.clone(),
+                            components,
+                            component_deleted,
+                        });
                     }
                 }
                 if acc.len() > 1 {
-                    acc.sort();
-                    acc.dedup();
+                    let mut dedup = rustc_hash::FxHashMap::<PathBuf, ResolvedPath>::default();
+                    for candidate in acc {
+                        dedup
+                            .entry(candidate.path.clone())
+                            .and_modify(|existing| {
+                                if candidate.deleted_segment_count()
+                                    < existing.deleted_segment_count()
+                                {
+                                    *existing = candidate.clone();
+                                }
+                            })
+                            .or_insert(candidate);
+                    }
+                    let mut deduped = dedup.into_values().collect::<Vec<_>>();
+                    deduped.sort_by(|left, right| left.path.cmp(&right.path));
+                    acc = deduped;
                 }
                 (entry_id, acc)
             })

@@ -29,6 +29,8 @@ pub struct FileNameCollection<'a> {
     /// Index mapping where `per_entry[entry_id]` contains indices
     /// into `all_filenames` for all filenames belonging to that entry
     pub per_entry_indices: Vec<Vec<usize>>,
+    /// Per-entry deleted state derived from MFT record flags (true when not in-use)
+    pub per_entry_deleted: Vec<bool>,
 }
 
 impl<'a> FileNameCollection<'a> {
@@ -79,6 +81,15 @@ impl<'a> FileNameCollection<'a> {
     #[must_use]
     pub fn entry_count(&self) -> usize {
         self.per_entry_indices.len()
+    }
+
+    /// Returns true when the entry is marked deleted (not in-use) in MFT flags.
+    #[must_use]
+    pub fn is_entry_deleted(&self, entry_id: usize) -> bool {
+        self.per_entry_deleted
+            .get(entry_id)
+            .copied()
+            .unwrap_or(false)
     }
 }
 
@@ -225,6 +236,10 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
     let full: &'a [u8] = mft; // borrow the entire bytes buffer
     let entry_size = mft.record_size().get::<uom::si::information::byte>();
     let entry_count = mft.record_count();
+    let per_entry_deleted = mft
+        .iter_records()
+        .map(|record| record.is_deleted())
+        .collect();
 
     let per_thread: PerThreadData = (0..entry_count)
         .into_par_iter()
@@ -268,5 +283,6 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
     FileNameCollection {
         all_filenames: file_names,
         per_entry_indices: per_entry,
+        per_entry_deleted,
     }
 }

@@ -35,7 +35,9 @@ impl LogicalReadPlan {
     pub fn total_logical_size(&self) -> Information {
         self.segments
             .last()
-            .map_or(Information::ZERO, |s| s.logical_offset + s.length)
+            .map_or(Information::ZERO, |s: &LogicalFileSegment| {
+                s.logical_offset + s.length
+            })
     }
 }
 

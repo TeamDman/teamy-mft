@@ -2,6 +2,7 @@ use crate::mft::mft_record::MftRecord;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
+use crate::mft::mft_record_size::MftRecordSize;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use crate::read::logical_read_plan::LogicalReadPlan;
@@ -44,6 +45,7 @@ pub fn read_physical_mft(
             })?;
 
         let boot_sector = NtfsBootSector::try_from_handle(&drive_handle)?;
+        let mft_record_size = MftRecordSize::new(boot_sector.file_record_size())?;
         let dollar_mft_record = MftRecord::try_from_handle(
             &drive_handle,
             MftRecordLocationOnDisk::from_record_number(
@@ -51,6 +53,7 @@ pub fn read_physical_mft(
                 MftRecordNumber::DOLLAR_MFT,
                 boot_sector.file_record_size(),
             ),
+            mft_record_size,
         )?;
 
         // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).

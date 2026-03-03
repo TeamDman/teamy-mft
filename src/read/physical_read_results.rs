@@ -1,3 +1,4 @@
+use crate::read::logical_read_plan::LogicalFileSegment;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use humansize::BINARY;
@@ -5,7 +6,6 @@ use std::collections::BTreeSet;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
-use std::ops::Bound;
 use teamy_uom_extensions::HumanInformationExt;
 use tracing::debug;
 use uom::si::information::byte;
@@ -32,6 +32,40 @@ impl PartialOrd for PhysicalReadResultEntry {
 pub struct PhysicalReadResults {
     pub entries: BTreeSet<PhysicalReadResultEntry>,
 }
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ReadIntoStep<'a> {
+    /// Destination logical file offset where this chunk should be written.
+    pub logical_offset: Information,
+    /// Source physical device offset this chunk came from.
+    pub physical_offset: Information,
+    /// Borrowed data chunk to be written at `logical_offset`.
+    pub bytes: &'a [u8],
+}
+
+impl ReadIntoStep<'_> {
+    #[must_use]
+    pub fn length(&self) -> Information {
+        Information::new::<byte>(self.bytes.len())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActivePhysicalSegment {
+    logical_offset_start: Information,
+    physical_offset_start: Information,
+    physical_offset_current: Information,
+    physical_offset_end: Information,
+}
+
+#[derive(Debug)]
+pub struct ReadIntoIter<'a> {
+    entries: &'a BTreeSet<PhysicalReadResultEntry>,
+    logical_segments: std::collections::btree_set::Iter<'a, LogicalFileSegment>,
+    active_segment: Option<ActivePhysicalSegment>,
+    done: bool,
+}
+
 impl Default for PhysicalReadResults {
     fn default() -> Self {
         Self::new()
@@ -46,12 +80,72 @@ impl PhysicalReadResults {
         }
     }
 
-    /// Consumes the results and writes them to a file (pre-sizing & zero-filling gaps by allocation).
+    /// Produces an iterator of planned "read into" chunks.
+    ///
+    /// This is the planning layer: no I/O is performed here.
+    /// Consumers can use this for assertions in tests or custom write targets.
+    ///
+    /// The iterator yields steps in logical write order and borrows bytes directly
+    /// from `self`, avoiding extra allocations in the hot path.
+    #[must_use]
+    pub fn read_into_iter<'a>(&'a self, logical_plan: &'a LogicalReadPlan) -> ReadIntoIter<'a> {
+        ReadIntoIter {
+            entries: &self.entries,
+            logical_segments: logical_plan.segments.iter(),
+            active_segment: None,
+            done: false,
+        }
+    }
+
+    /// Reads planned data into a writer.
+    ///
+    /// This is the execution layer on top of [`Self::read_into_iter`].
+    /// Each yielded step is written via `seek + write_all`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if expected physical data is missing or if seeking/writing fails.
+    pub fn read_into_writer<W: Seek + Write>(
+        &self,
+        logical_plan: &LogicalReadPlan,
+        writer: &mut W,
+    ) -> eyre::Result<()> {
+        for step in self.read_into_iter(logical_plan) {
+            let step = step?;
+
+            debug!(
+                logical_offset = step.logical_offset.get::<byte>(),
+                physical_offset = step.physical_offset.get::<byte>(),
+                bytes_to_write = step.length().get::<byte>(),
+                "Writing physical data for logical segment",
+            );
+
+            writer.seek(SeekFrom::Start(step.logical_offset.get::<byte>() as u64))?;
+            writer.write_all(step.bytes)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reads the logical plan into a file path (pre-sizing & zero-filling gaps by allocation).
+    ///
+    /// This is a convenience helper on top of [`Self::read_into_writer`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use teamy_mft::read::logical_read_plan::LogicalReadPlan;
+    /// # use teamy_mft::read::physical_read_results::PhysicalReadResults;
+    /// # fn demo(results: &PhysicalReadResults, plan: &LogicalReadPlan) -> eyre::Result<()> {
+    /// results.read_into_path(plan, "mft.bin")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns an error if creating, seeking, or writing to the output file fails or if expected data is missing.
-    pub fn write_to_file(
+    pub fn read_into_path(
         &self,
         logical_plan: &LogicalReadPlan,
         output_path: impl AsRef<std::path::Path>,
@@ -61,70 +155,78 @@ impl PhysicalReadResults {
         file.set_len(logical_plan.total_logical_size().get::<byte>() as u64)?;
 
         let mut writer = std::io::BufWriter::new(file);
-        // writer.seek(SeekFrom::Start(logical_offset))?;
-        // writer.write_all(slice)?;
+        self.read_into_writer(logical_plan, &mut writer)?;
 
-        debug!("Writing {} logical segments", logical_plan.segments.len());
-        for logical_segment in &logical_plan.segments {
-            let Some(physical_segment) = logical_segment.as_physical_read_request() else {
-                // Sparse segment, skip
-                continue;
-            };
-            // A given logical segment may have been split into multiple physical reads.
-            let mut physical_offset_current = physical_segment.offset;
-            let physical_offset_end = physical_segment.offset + physical_segment.length;
+        writer.flush()?;
+        Ok(())
+    }
 
-            debug!(
-                ?logical_segment,
-                "Identifying physical data for logical segment"
-            );
-            while physical_offset_current < physical_offset_end {
+    /// Compatibility wrapper for older callsites.
+    ///
+    /// Prefer [`Self::read_into_path`] for new code.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if creating, seeking, or writing to the output file fails or if expected data is missing.
+    pub fn write_to_file(
+        &self,
+        logical_plan: &LogicalReadPlan,
+        output_path: impl AsRef<std::path::Path>,
+    ) -> eyre::Result<()> {
+        self.read_into_path(logical_plan, output_path)
+    }
+}
+
+impl<'a> Iterator for ReadIntoIter<'a> {
+    type Item = eyre::Result<ReadIntoStep<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        loop {
+            if let Some(active) = &mut self.active_segment {
+                if active.physical_offset_current >= active.physical_offset_end {
+                    self.active_segment = None;
+                    continue;
+                }
+
+                let physical_offset_current = active.physical_offset_current;
                 debug!(
                     physical_offset_current = physical_offset_current.get::<byte>(),
-                    physical_offset_end = physical_offset_end.get::<byte>(),
+                    physical_offset_end = active.physical_offset_end.get::<byte>(),
                     remaining =
-                        (physical_offset_end - physical_offset_current).format_human(BINARY),
+                        (active.physical_offset_end - physical_offset_current).format_human(BINARY),
                     "Locating physical data for logical segment",
                 );
 
-                // Identify the entry that contains this offset
-                // Find the entry containing this offset. Use lower_bound and if it overshoots,
-                // step back to the predecessor and verify containment.
-                let mut cursor =
-                    self.entries
-                        .lower_bound(Bound::Included(&PhysicalReadResultEntry {
-                            request: PhysicalReadRequest::new(
-                                physical_offset_current,
-                                Information::new::<byte>(1),
-                            ),
-                            data: vec![],
-                        }));
-                let mut entry = cursor.next();
-                if let Some(e) = entry {
-                    if e.request.offset > physical_offset_current {
-                        entry = cursor.prev();
-                    }
-                } else {
-                    // lower_bound returned end; try the last element
-                    entry = self.entries.last();
-                }
+                let probe = PhysicalReadResultEntry {
+                    request: PhysicalReadRequest::new(
+                        physical_offset_current,
+                        Information::new::<byte>(usize::MAX),
+                    ),
+                    data: vec![],
+                };
+                let entry = self.entries.range(..=probe).next_back();
                 let Some(entry) = entry else {
-                    eyre::bail!(
+                    self.done = true;
+                    return Some(Err(eyre::eyre!(
                         "Missing physical read data at offset {physical_offset_current:?} - no entries available"
-                    );
+                    )));
                 };
                 if !(entry.request.offset <= physical_offset_current
                     && physical_offset_current < entry.request.offset + entry.request.length)
                 {
-                    eyre::bail!(
+                    self.done = true;
+                    return Some(Err(eyre::eyre!(
                         "Missing physical read data at offset {physical_offset_current:?} - not contained in any entry"
-                    );
+                    )));
                 }
 
-                // Identify what part of this entry to write
                 let offset_within_entry = physical_offset_current - entry.request.offset;
                 let bytes_available = entry.request.length - offset_within_entry;
-                let bytes_needed = physical_offset_end - physical_offset_current;
+                let bytes_needed = active.physical_offset_end - physical_offset_current;
                 let bytes_to_write = if bytes_available < bytes_needed {
                     bytes_available
                 } else {
@@ -138,23 +240,35 @@ impl PhysicalReadResults {
                     offset_within_entry = offset_within_entry.get::<byte>(),
                     bytes_to_write = bytes_to_write.get::<byte>(),
                     physical_offset_current = physical_offset_current.get::<byte>(),
-                    "Writing physical data for logical segment",
+                    "Planning physical data write for logical segment",
                 );
 
-                // Write it
-                writer.seek(SeekFrom::Start(
-                    logical_segment.logical_offset.get::<byte>() as u64
-                        + (physical_offset_current - physical_segment.offset).get::<byte>() as u64,
-                ))?;
-                writer.write_all(slice)?;
-
-                // Advance
-                physical_offset_current += bytes_to_write;
+                let step = ReadIntoStep {
+                    logical_offset: active.logical_offset_start
+                        + (physical_offset_current - active.physical_offset_start),
+                    physical_offset: physical_offset_current,
+                    bytes: slice,
+                };
+                active.physical_offset_current += bytes_to_write;
+                return Some(Ok(step));
             }
-        }
 
-        writer.flush()?;
-        Ok(())
+            let next_logical_segment = self.logical_segments.next()?;
+            let Some(physical_segment) = next_logical_segment.as_physical_read_request() else {
+                continue;
+            };
+
+            debug!(
+                ?next_logical_segment,
+                "Identifying physical data for logical segment"
+            );
+            self.active_segment = Some(ActivePhysicalSegment {
+                logical_offset_start: next_logical_segment.logical_offset,
+                physical_offset_start: physical_segment.offset,
+                physical_offset_current: physical_segment.offset,
+                physical_offset_end: physical_segment.offset + physical_segment.length,
+            });
+        }
     }
 }
 
@@ -166,6 +280,7 @@ mod test {
     use crate::read::physical_read_request::PhysicalReadRequest;
     use crate::read::physical_read_results::PhysicalReadResultEntry;
     use crate::read::physical_read_results::PhysicalReadResults;
+    use crate::read::physical_read_results::ReadIntoStep;
     use uom::si::information::byte;
     use uom::si::usize::Information;
 
@@ -215,7 +330,7 @@ mod test {
             .collect(),
         };
 
-        read_results.write_to_file(&read_plan, &path)?;
+        read_results.read_into_path(&read_plan, &path)?;
         let bytes = std::fs::read(&path).unwrap();
         // The file is pre-sized to the total logical size: 4 + 6 gap + 3 = 13
         assert_eq!(bytes.len(), 13);
@@ -266,12 +381,92 @@ mod test {
 
         // Expect write to succeed and produce 10 bytes taken from within the aligned block starting at 100.
         // Specifically, bytes 100..110 correspond to indices 36..46 within the data above.
-        read_results.write_to_file(&read_plan, &path)?;
+        read_results.read_into_path(&read_plan, &path)?;
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(bytes.len(), 10);
         for (i, b) in bytes.iter().enumerate() {
             assert_eq!(*b as usize, 100 + i);
         }
         Ok(())
+    }
+
+    #[test]
+    fn write_plan_steps_can_be_asserted_without_io() -> eyre::Result<()> {
+        let read_plan = LogicalReadPlan {
+            segments: [LogicalFileSegment {
+                logical_offset: Information::new::<byte>(0),
+                length: Information::new::<byte>(10),
+                kind: LogicalFileSegmentKind::Physical {
+                    physical_offset: Information::new::<byte>(100),
+                },
+            }]
+            .into_iter()
+            .collect(),
+        };
+
+        let mut data = vec![0u8; 64];
+        for (i, b) in data.iter_mut().enumerate() {
+            *b = 64u8 + u8::try_from(i).unwrap();
+        }
+
+        let read_results = PhysicalReadResults {
+            entries: [PhysicalReadResultEntry {
+                request: PhysicalReadRequest {
+                    offset: Information::new::<byte>(64),
+                    length: Information::new::<byte>(64),
+                },
+                data,
+            }]
+            .into_iter()
+            .collect(),
+        };
+
+        let plan = read_results
+            .read_into_iter(&read_plan)
+            .collect::<eyre::Result<Vec<ReadIntoStep<'_>>>>()?;
+
+        assert_eq!(plan.len(), 1);
+        let step = plan[0];
+        assert_eq!(step.logical_offset, Information::new::<byte>(0),);
+        assert_eq!(step.physical_offset, Information::new::<byte>(100),);
+        assert_eq!(step.length(), Information::new::<byte>(10),);
+        assert_eq!(
+            step.bytes,
+            &[100, 101, 102, 103, 104, 105, 106, 107, 108, 109],
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn write_plan_errors_on_missing_physical_data() {
+        let read_plan = LogicalReadPlan {
+            segments: [LogicalFileSegment {
+                logical_offset: Information::new::<byte>(0),
+                length: Information::new::<byte>(8),
+                kind: LogicalFileSegmentKind::Physical {
+                    physical_offset: Information::new::<byte>(100),
+                },
+            }]
+            .into_iter()
+            .collect(),
+        };
+
+        let read_results = PhysicalReadResults {
+            entries: [PhysicalReadResultEntry {
+                request: PhysicalReadRequest {
+                    offset: Information::new::<byte>(100),
+                    length: Information::new::<byte>(4),
+                },
+                data: vec![1, 2, 3, 4],
+            }]
+            .into_iter()
+            .collect(),
+        };
+
+        let err = read_results
+            .read_into_iter(&read_plan)
+            .collect::<eyre::Result<Vec<ReadIntoStep<'_>>>>()
+            .expect_err("expected missing data error");
+        assert!(err.to_string().contains("Missing physical read data"));
     }
 }
