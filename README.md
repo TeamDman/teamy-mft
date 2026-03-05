@@ -21,7 +21,7 @@ Commands:
   get-sync-dir       Get the currently configured sync directory
   set-sync-dir       Set the sync directory (defaults to current directory if omitted)
   check              Validate cached MFT files have at least one Win32 FILE_NAME attribute per entry having any FILE_NAME
-  query              Query resolved file paths (substring match) across cached MFTs
+  query              Query indexed file paths (substring match) across cached .mft_search_index files
   robocopy-logs-tui  Explore robocopy logs in a TUI (validate file exists for now)
   help               Print this message or the help of the given subcommand(s)
 

@@ -21,7 +21,7 @@ pub enum Command {
     GetSyncDir(GetSyncDirArgs),
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir(SetSyncDirArgs),
-    /// Query resolved file paths (substring match) across cached MFTs
+    /// Query indexed file paths (substring match) across cached .mft_search_index files
     Query(QueryArgs),
 }
 

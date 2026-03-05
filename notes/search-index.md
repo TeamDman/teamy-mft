@@ -19,6 +19,20 @@
 
 ---
 
+## Current Status (Implemented)
+
+- `sync` supports stages:
+	- `teamy-mft sync`
+	- `teamy-mft sync mft`
+	- `teamy-mft sync index`
+- `sync` default runs MFT stage then index stage.
+- Combined `sync` reuses in-memory MFT bytes for index stage (no reread of newly-written `.mft`).
+- Search index files are written per drive as `.mft_search_index`.
+- `query` now uses indexed search as the default path (no separate fast flag).
+- Query loads `.mft_search_index` via mmap and runs `nucleo` over indexed rows.
+
+---
+
 ## Non-goals (for first iteration)
 
 - No semantic/vector indexing in this phase.
@@ -27,11 +41,11 @@
 
 ---
 
-## Current Baseline (what we are replacing)
+## Current Baseline (remaining work)
 
-- `query` loads `.mft`, reconstructs full paths, then pushes full path string into nucleo.
-- Matching is done on one full path column, so every query pays path reconstruction + fuzzy work.
-- `sync` only produces `.mft` files.
+- `query` is now index-first, but row layout is still path-row oriented (not yet segment graph + postings).
+- Search index format is still early v1 and can evolve toward segment-aware structures.
+- `sync index` builds rows by processing `.mft` snapshots and serializing path records.
 
 Latency bottlenecks today:
 - cold disk read + parsing
@@ -56,11 +70,11 @@ Per selected drive:
 	- Otherwise (for `sync index`) read `<drive>.mft` from disk.
 	- Build and persist `<drive>.mft_search_index`.
 
-### 2) Query over index, not raw reconstructed paths
+### 2) Query over index
 
 - Open `<drive>.mft_search_index`.
 - Parse query into path-segment-oriented constraints.
-- Run `nucleo` against unique segment names to get candidate `name_id`s.
+- Run `nucleo` against indexed data to get candidate rows.
 - Execute constraint-first filtering using compact IDs/relations.
 - Reconstruct full paths only for final matches to print.
 
@@ -265,19 +279,16 @@ Deliverable:
 Deliverable:
 - End-to-end two-stage sync with no duplicate MFT read in combined mode.
 
-## Phase 5: Query command migration
+## Phase 5: Query command evolution (next)
 
-1. Add indexed query path behind a flag initially:
-	- `--use-search-index` (default off for one release)
+1. Keep indexed query as the only path.
 2. Implement parser for segment/hierarchy constraints.
-3. Route fuzzy segment matching through `nucleo` on unique segment dictionary.
-4. Execute candidate filtering on index structures.
+3. Route fuzzy segment matching through `nucleo` on segment dictionary (not full rows).
+4. Execute candidate filtering on structural index data.
 5. Reconstruct full paths only for survivors.
-5. Compare output parity against old query mode.
-6. Flip default to indexed path once stable.
 
 Deliverable:
-- Lower-latency query path with functional equivalence for common queries.
+- Lower-latency indexed query with hierarchy-aware semantics.
 
 ## Phase 6: Optimization + hardening
 
@@ -377,7 +388,7 @@ Per drive in sync dir:
   - `C.mft_search_index.tmp`
 
 Compatibility:
-- If index missing, `query` can fall back to current raw `.mft` path.
+- If index missing or invalid, `query` should error with rebuild guidance (`sync index`).
 - If index version mismatched, rebuild suggestion/error.
 
 ---
@@ -442,13 +453,13 @@ Track counts:
 
 ---
 
-## Rollout Plan
+## Rollout Plan (updated)
 
-1. Land `sync` mode refactor + index format writer/reader.
-2. Land indexed query behind opt-in flag.
-3. Validate correctness + latency wins in real corpus.
-4. Switch default query path to index.
-5. Keep fallback mode for one release cycle.
+1. Land `sync` mode refactor + index format writer/reader. ✅
+2. Land indexed query path. ✅
+3. Add segment-aware index structures (name dictionary + postings).
+4. Add hierarchy-aware query parser/executor.
+5. Benchmark and tune p50/p95 query latency.
 
 ---
 
@@ -470,9 +481,9 @@ Track counts:
 
 ## Suggested Immediate Next PRs
 
-1. PR1: `sync` subcommand modes + shared stage orchestration skeleton.
-2. PR2: `.mft_search_index` format v1 + builder + loader.
-3. PR3: indexed query engine + `--use-search-index` + parity tests.
-4. PR4: latency benchmarks + default switch.
+1. PR1: Segment dictionary + postings sections in `.mft_search_index`.
+2. PR2: Query parser for segment + hierarchy constraints (`src/hello.java`, `.jar$`, etc).
+3. PR3: Query executor over `name_id`/`node_id` graph with deferred path reconstruction.
+4. PR4: Benchmark harness and tracing-driven optimizations.
 
-This sequence gets usable wins quickly while preserving flexibility for deeper trie/zstd experiments later.
+This sequence keeps current indexed behavior working while moving toward the target low-latency architecture.
