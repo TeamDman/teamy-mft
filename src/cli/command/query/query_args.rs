@@ -1,6 +1,8 @@
 use crate::cli::to_args::ToArgs;
 use crate::mft::path_resolve::ResolvedPath;
 use crate::mft_process::process_mft_file;
+use crate::search_index::load::MappedSearchIndex;
+use crate::search_index::format::SearchIndexPathRow;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
@@ -38,6 +40,9 @@ pub struct QueryArgs {
     /// Show only paths that contain one or more deleted MFT entries
     #[clap(long)]
     pub only_deleted: bool,
+    /// Use .mft_search_index files (fast path) when available
+    #[clap(long)]
+    pub fast: bool,
 }
 
 fn render_resolved_path(path: &ResolvedPath, colorize: bool) -> String {
@@ -64,7 +69,127 @@ fn render_resolved_path(path: &ResolvedPath, colorize: bool) -> String {
     rendered
 }
 
+#[derive(Debug, Clone)]
+struct IndexedPathRow {
+    path: String,
+    has_deleted_entries: bool,
+}
+
+fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
+    if !colorize {
+        return row.path.clone();
+    }
+    if row.has_deleted_entries {
+        row.path.red().to_string()
+    } else {
+        row.path.green().to_string()
+    }
+}
+
 impl QueryArgs {
+    fn invoke_fast(self, mft_files: Vec<(char, PathBuf)>, sync_dir: PathBuf) -> eyre::Result<()> {
+        let mut nucleo = {
+            let _span = info_span!("create_fast_nucleo_matcher").entered();
+            nucleo::Nucleo::<IndexedPathRow>::new(
+                nucleo::Config::DEFAULT,
+                Arc::new(|| {}),
+                None,
+                1,
+            )
+        };
+
+        {
+            let _span = info_span!("configure_fast_nucleo_pattern", query = %self.query).entered();
+            nucleo.pattern.reparse(
+                0,
+                &self.query,
+                nucleo::pattern::CaseMatching::Smart,
+                nucleo::pattern::Normalization::Smart,
+                false,
+            );
+        }
+
+        let mut loaded_rows = 0usize;
+        {
+            let _span = info_span!("load_search_indexes", drives = mft_files.len()).entered();
+            let injector = nucleo.injector();
+            for (drive_letter, _) in mft_files {
+                let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
+                if !index_path.is_file() {
+                    eyre::bail!(
+                        "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
+                        index_path.display(),
+                        drive_letter
+                    );
+                }
+
+                let mapped = MappedSearchIndex::open(&index_path).wrap_err_with(|| {
+                    format!(
+                        "Failed loading search index for drive {} from {}",
+                        drive_letter,
+                        index_path.display()
+                    )
+                })?;
+
+                let rows: Vec<SearchIndexPathRow> = mapped.rows().wrap_err_with(|| {
+                    format!(
+                        "Failed parsing search index rows for drive {} from {}",
+                        drive_letter,
+                        index_path.display()
+                    )
+                })?;
+
+                for row in rows {
+                    if self.only_deleted && !row.has_deleted_entries {
+                        continue;
+                    }
+                    if !self.only_deleted && !self.include_deleted && row.has_deleted_entries {
+                        continue;
+                    }
+
+                    let item = IndexedPathRow {
+                        path: row.path,
+                        has_deleted_entries: row.has_deleted_entries,
+                    };
+                    injector.push(item, |x, cols| {
+                        cols[0] = x.path.clone().into();
+                    });
+                    loaded_rows += 1;
+                }
+            }
+        }
+
+        loop {
+            let status = nucleo.tick(100);
+            if !status.running {
+                break;
+            }
+        }
+
+        let snapshot = nucleo.snapshot();
+        info!(
+            loaded_rows = loaded_rows,
+            matched = snapshot.matched_item_count(),
+            total = snapshot.item_count(),
+            "Fast query completed"
+        );
+
+        for (i, item) in snapshot.matched_items(..).enumerate() {
+            if i >= self.limit {
+                break;
+            }
+            println!(
+                "{}",
+                render_indexed_path(
+                    item.data,
+                    std::io::stdout().is_terminal() && (self.include_deleted || self.only_deleted)
+                )
+            );
+        }
+
+        std::process::exit(0);
+    }
+
     /// Query MFT files for entries matching the given query.
     ///
     /// # Errors
@@ -75,7 +200,7 @@ impl QueryArgs {
         clippy::too_many_lines,
         reason = "function handles complex query logic with multiple threads"
     )]
-    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted))]
+    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, fast = self.fast))]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
         if self.query.trim().is_empty() {
@@ -95,6 +220,10 @@ impl QueryArgs {
                 .filter(|(_, p)| p.is_file())
                 .collect()
         };
+
+        if self.fast {
+            return self.invoke_fast(mft_files, sync_dir);
+        }
 
         let mut nucleo = {
             let _span = info_span!("create_nucleo_matcher").entered();
@@ -351,6 +480,9 @@ impl ToArgs for QueryArgs {
         }
         if self.only_deleted {
             args.push("--only-deleted".into());
+        }
+        if self.fast {
+            args.push("--fast".into());
         }
         args
     }

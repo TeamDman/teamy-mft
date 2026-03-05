@@ -5,6 +5,7 @@ pub mod mft_process;
 pub mod ntfs;
 pub mod paths;
 pub mod read;
+pub mod search_index;
 pub mod sync_dir;
 
 use crate::cli::Cli;

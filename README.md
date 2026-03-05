@@ -16,7 +16,7 @@ Teamy MFT commands
 Usage: teamy-mft.exe [OPTIONS] <COMMAND>
 
 Commands:
-  sync               Sync operations (requires elevation)
+  sync               Sync operations (requires elevation). Supports stages: mft, index
   list-paths         Produce newline-delimited list of file paths for matching drives from cached .mft files
   get-sync-dir       Get the currently configured sync directory
   set-sync-dir       Set the sync directory (defaults to current directory if omitted)
