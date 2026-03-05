@@ -82,7 +82,7 @@ impl ToArgs for SyncArgs {
             args.push(self.drive_pattern.as_ref().into());
         }
         if self.if_exists != IfExistsOutputBehaviour::default() {
-            args.push("--overwrite-existing".into());
+            args.push("--if-exists".into());
             args.push(self.if_exists.to_string().into());
         }
         args
