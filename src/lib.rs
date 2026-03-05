@@ -25,7 +25,6 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
-
 #[cfg(feature = "tracy")]
 use tracing_tracy::TracyLayer;
 
@@ -117,7 +116,9 @@ pub fn init_tracing(level: Level, json_behaviour: &JsonLogBehaviour) -> eyre::Re
             .with(TracyLayer::default());
 
         #[cfg(not(feature = "tracy"))]
-        let subscriber = tracing_subscriber::registry().with(env_filter).with(stderr_layer);
+        let subscriber = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stderr_layer);
         if let Err(error) = subscriber.try_init() {
             eprintln!(
                 "Failed to initialize tracing subscriber - are you running `cargo test`? If so, multiple test entrypoints may be running from the same process. https://github.com/tokio-rs/console/issues/505 : {error}"

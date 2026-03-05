@@ -1,6 +1,6 @@
-use crate::cli::to_args::ToArgs;
 use crate::cli::command::sync::sync_index_command::invoke_sync_index;
 use crate::cli::command::sync::sync_mft_command::invoke_sync_mft;
+use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Args;
 use clap::Subcommand;
@@ -54,7 +54,7 @@ impl SyncArgs {
     ///
     /// Panics if spawning worker threads fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        match self.mode.clone() {
+        match self.mode {
             None => {
                 let snapshots = invoke_sync_mft(&self, true)?;
                 invoke_sync_index(&self, Some(&snapshots))

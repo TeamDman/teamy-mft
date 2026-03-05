@@ -14,11 +14,14 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-pub(crate) fn invoke_sync_mft(args: &SyncArgs, capture_bytes: bool) -> eyre::Result<Vec<DriveSnapshot>> {
+pub(crate) fn invoke_sync_mft(
+    args: &SyncArgs,
+    capture_bytes: bool,
+) -> eyre::Result<Vec<DriveSnapshot>> {
     ensure_elevated()?;
     enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
 
-    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists, true)?;
+    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists)?;
 
     info!(
         "Found {} drives to sync: {}",
@@ -86,7 +89,7 @@ pub(crate) fn invoke_sync_mft(args: &SyncArgs, capture_bytes: bool) -> eyre::Res
     drop(snapshot_tx);
 
     for info in &drive_infos {
-        tx.send((info.drive_letter, info.output_path.clone()))
+        tx.send((info.drive_letter, info.mft_output_path.clone()))
             .wrap_err("Failed to schedule IOCP drive job")?;
     }
     drop(tx);

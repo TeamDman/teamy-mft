@@ -5,10 +5,7 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::FSCTL_GET_NTFS_VOLUME_DATA;
 use windows::Win32::System::Ioctl::NTFS_VOLUME_DATA_BUFFER;
-use windows::Win32::System::Ioctl::VOLUME_DISK_EXTENTS;
 use windows::core::Owned;
-
-const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
 
 #[derive(Debug)]
 pub struct NtfsDriveHandle {
@@ -77,48 +74,4 @@ fn validate_ntfs_filesystem(drive_handle: HANDLE) -> eyre::Result<()> {
     result.wrap_err(eyre!(
         "Drive does not appear to be using NTFS filesystem. FSCTL_GET_NTFS_VOLUME_DATA failed. MFT dumping is only supported on NTFS volumes."
     ))
-}
-
-/// Get the disk extents for the volume associated with the drive letter
-/// Query the disk extents for the target drive letter.
-///
-/// # Errors
-///
-/// Returns an error if opening the drive handle or performing the `DeviceIoControl` call fails.
-///
-/// # Panics
-///
-/// Panics if `VOLUME_DISK_EXTENTS` does not fit in `u32` (should not happen).
-pub fn get_volume_disk_extents(drive_letter: char) -> eyre::Result<VOLUME_DISK_EXTENTS> {
-    use teamy_windows::handle::get_read_only_drive_handle;
-
-    let handle = get_read_only_drive_handle(drive_letter)
-        .wrap_err_with(|| format!("Failed to open handle to drive {drive_letter}"))?;
-
-    let mut extents = VOLUME_DISK_EXTENTS::default();
-    let mut bytes_returned = 0u32;
-
-    let volume_buffer_size = u32::try_from(std::mem::size_of::<VOLUME_DISK_EXTENTS>())
-        .expect("VOLUME_DISK_EXTENTS fits in u32");
-
-    // SAFETY: DeviceIoControl writes into the provided `extents` struct whose size matches `volume_buffer_size`.
-    unsafe {
-        DeviceIoControl(
-            *handle,
-            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
-            None,
-            0,
-            Some((&raw mut extents).cast::<std::ffi::c_void>()),
-            volume_buffer_size,
-            Some(&raw mut bytes_returned),
-            None,
-        )
-        .wrap_err("DeviceIoControl for IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS failed")?;
-    };
-
-    if extents.NumberOfDiskExtents != 1 {
-        eyre::bail!("Volume spans multiple disks or has complex extents, not supported");
-    }
-
-    Ok(extents)
 }

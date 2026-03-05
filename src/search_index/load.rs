@@ -1,7 +1,7 @@
-use crate::search_index::format::SEARCH_INDEX_VERSION;
-use crate::search_index::format::SearchIndexPathRow;
-use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
+use crate::search_index::format::SEARCH_INDEX_VERSION;
+use crate::search_index::format::SearchIndexHeader;
+use crate::search_index::format::SearchIndexPathRow;
 use eyre::Context;
 use eyre::bail;
 use memmap2::Mmap;
@@ -20,11 +20,13 @@ impl MappedSearchIndex {
         let file = File::open(path)
             .wrap_err_with(|| format!("Failed opening search index file {}", path.display()))?;
 
-        let mmap = unsafe { Mmap::map(&file) }
-            .wrap_err_with(|| format!("Failed memory-mapping search index file {}", path.display()))?;
+        let mmap = unsafe { Mmap::map(&file) }.wrap_err_with(|| {
+            format!("Failed memory-mapping search index file {}", path.display())
+        })?;
 
-        let header = SearchIndexHeader::parse(&mmap)
-            .wrap_err_with(|| format!("Failed parsing search index header from {}", path.display()))?;
+        let header = SearchIndexHeader::parse(&mmap).wrap_err_with(|| {
+            format!("Failed parsing search index header from {}", path.display())
+        })?;
 
         if header.version != SEARCH_INDEX_VERSION {
             bail!(

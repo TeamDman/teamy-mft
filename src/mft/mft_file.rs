@@ -179,8 +179,8 @@ impl MftFile {
         }
 
         {
-            let _span = debug_span!("apply_fixups_parallel", entry_size_bytes = entry_size_bytes)
-                .entered();
+            let _span =
+                debug_span!("apply_fixups_parallel", entry_size_bytes = entry_size_bytes).entered();
             let _stats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
         }
 
@@ -189,9 +189,7 @@ impl MftFile {
             raw.freeze()
         };
 
-        Ok(MftFile {
-            bytes,
-        })
+        Ok(MftFile { bytes })
     }
 
     /// Iterate over fixed-size records contained in this MFT file.

@@ -1,14 +1,13 @@
 //! Basic sequential path resolution over collected `FileNameRef` entries.
 //! This is a first-pass simple implementation (non-parallel) to be optimized later.
 
-use tracing::debug_span;
-use tracing::instrument;
-
 use crate::mft::fast_entry::FileNameCollection;
 use crate::mft::mft_record_index::MftRecordIndex;
 use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::debug_span;
+use tracing::instrument;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResolvedPath {
@@ -156,8 +155,7 @@ pub fn resolve_paths_all_parallel(
                 if parent >= entry_count {
                     continue;
                 }
-                if let Some((_, ns, name_units)) = list.iter_mut().find(|(p, _, _)| *p == parent)
-                {
+                if let Some((_, ns, name_units)) = list.iter_mut().find(|(p, _, _)| *p == parent) {
                     if ns_rank(fref.namespace) < ns_rank(*ns) {
                         *ns = fref.namespace;
                         *name_units = fref.name_utf16;

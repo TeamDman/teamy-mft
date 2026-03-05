@@ -3,8 +3,8 @@ use crate::cli::command::sync::sync_args::SyncArgs;
 use crate::cli::command::sync::sync_common::DriveSnapshot;
 use crate::cli::command::sync::sync_common::resolve_drive_infos;
 use crate::mft_process::process_mft_file;
-use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::format::SearchIndexHeader;
+use crate::search_index::format::SearchIndexPathRow;
 use eyre::Context;
 use eyre::bail;
 use itertools::Itertools;
@@ -12,8 +12,11 @@ use std::collections::HashMap;
 use tracing::debug;
 use tracing::info;
 
-pub(crate) fn invoke_sync_index(args: &SyncArgs, snapshots: Option<&[DriveSnapshot]>) -> eyre::Result<()> {
-    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists, false)?;
+pub(crate) fn invoke_sync_index(
+    args: &SyncArgs,
+    snapshots: Option<&[DriveSnapshot]>,
+) -> eyre::Result<()> {
+    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists)?;
     let snapshot_map: HashMap<char, &Vec<u8>> = snapshots
         .unwrap_or(&[])
         .iter()
@@ -46,28 +49,28 @@ pub(crate) fn invoke_sync_index(args: &SyncArgs, snapshots: Option<&[DriveSnapsh
         let mft_bytes = if let Some(bytes) = snapshot_map.get(&info.drive_letter) {
             (*bytes).clone()
         } else {
-            if !info.output_path.is_file() {
+            if !info.mft_output_path.is_file() {
                 bail!(
                     "Cannot build index for drive {}: missing {}",
                     info.drive_letter,
-                    info.output_path.display()
+                    info.mft_output_path.display()
                 );
             }
-            std::fs::read(&info.output_path).wrap_err_with(|| {
+            std::fs::read(&info.mft_output_path).wrap_err_with(|| {
                 format!(
                     "Failed reading MFT snapshot for drive {} from {}",
                     info.drive_letter,
-                    info.output_path.display()
+                    info.mft_output_path.display()
                 )
             })?
         };
 
         let drive_name = info.drive_letter.to_string();
-        let files = process_mft_file(&drive_name, &info.output_path).wrap_err_with(|| {
+        let files = process_mft_file(&drive_name, &info.mft_output_path).wrap_err_with(|| {
             format!(
                 "Failed processing MFT data for drive {} from {}",
                 info.drive_letter,
-                info.output_path.display()
+                info.mft_output_path.display()
             )
         })?;
 

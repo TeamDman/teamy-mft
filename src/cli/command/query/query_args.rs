@@ -1,6 +1,6 @@
 use crate::cli::to_args::ToArgs;
-use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::format::SearchIndexPathRow;
+use crate::search_index::load::MappedSearchIndex;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use clap::Args;
@@ -136,19 +136,19 @@ impl QueryArgs {
         }
     }
 
-    fn invoke_indexed(self, mft_files: Vec<(char, PathBuf)>, sync_dir: PathBuf) -> eyre::Result<()> {
+    fn invoke_indexed(
+        self,
+        mft_files: Vec<(char, PathBuf)>,
+        sync_dir: PathBuf,
+    ) -> eyre::Result<()> {
         let mut nucleo = {
             let _span = info_span!("create_indexed_nucleo_matcher").entered();
-            nucleo::Nucleo::<IndexedPathRow>::new(
-                nucleo::Config::DEFAULT,
-                Arc::new(|| {}),
-                None,
-                1,
-            )
+            nucleo::Nucleo::<IndexedPathRow>::new(nucleo::Config::DEFAULT, Arc::new(|| {}), None, 1)
         };
 
         {
-            let _span = info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
+            let _span =
+                info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
             nucleo.pattern.reparse(
                 0,
                 &self.query,

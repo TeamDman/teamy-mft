@@ -61,7 +61,10 @@ impl SearchIndexHeader {
         for row in rows {
             let path_bytes = row.path.as_bytes();
             let path_len: u32 = path_bytes.len().try_into().wrap_err_with(|| {
-                format!("Path too long to encode in index row ({} bytes)", path_bytes.len())
+                format!(
+                    "Path too long to encode in index row ({} bytes)",
+                    path_bytes.len()
+                )
             })?;
             writer.write_all(&path_len.to_le_bytes())?;
             writer.write_all(&[u8::from(row.has_deleted_entries)])?;

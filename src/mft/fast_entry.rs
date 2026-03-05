@@ -252,7 +252,9 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
         let entry_count = mft.record_count();
         let per_entry_deleted = {
             let _span = debug_span!("collect_deleted_flags").entered();
-            mft.iter_records().map(|record| record.is_deleted()).collect()
+            mft.iter_records()
+                .map(|record| record.is_deleted())
+                .collect()
         };
         (full, entry_size, entry_count, per_entry_deleted)
     };
