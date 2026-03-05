@@ -42,7 +42,7 @@ impl std::fmt::Debug for ActivePhysicalReadRequest {
             .field("file_offset", &self.original.offset)
             .field("length", &self.original.length)
             .field("response_index", &self.response_index)
-            .field("buffer", &self.buffer)
+            .field("buffer length", &self.buffer.len())
             .field("overlapped", &format_args!("{:p}", &self.overlapped))
             .finish_non_exhaustive()
     }
