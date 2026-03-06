@@ -171,7 +171,7 @@ pub fn resolve_paths_all_parallel(
     let per_entry = {
         let _span = debug_span!("decode_raw_names_to_best_names").entered();
         let mut per_entry: Vec<Vec<BestName>> = Vec::with_capacity(entry_count);
-        for (_entry_id, raw_list) in raw.iter().enumerate() {
+        for raw_list in &raw {
             #[cfg(feature = "tracy")]
             let _span = debug_span!("decode_entry_names").entered();
             let mut v: Vec<BestName> = Vec::with_capacity(raw_list.len());
@@ -187,7 +187,7 @@ pub fn resolve_paths_all_parallel(
     };
 
     // Compute depth (minimum parent depth + 1) so parents always processed before children.
-    let (depth, layers) = {
+    let layers = {
         let _span = debug_span!("build_depth_layers").entered();
         let mut depth: Vec<i32> = vec![-1; entry_count];
         let mut mark: Vec<Mark> = vec![Mark::Unvis; entry_count];
@@ -206,10 +206,8 @@ pub fn resolve_paths_all_parallel(
             #[allow(clippy::cast_sign_loss, reason = "depth is non-negative")]
             layers[*d as usize].push(MftRecordIndex::new(i));
         }
-        (depth, layers)
+        layers
     };
-
-    let _depth = depth;
 
     // Results storage
     let mut results = {
@@ -231,7 +229,7 @@ pub fn resolve_paths_all_parallel(
     // Process each layer: build outputs in parallel (read-only borrow of earlier results) then write.
     {
         let _span = debug_span!("resolve_paths_by_layers").entered();
-        for (_layer_index, layer_ids) in layers.iter().enumerate() {
+        for layer_ids in &layers {
             let _span = debug_span!("resolve_single_layer").entered();
             let layer_outputs: Vec<(MftRecordIndex, Vec<ResolvedPath>)> = layer_ids
                 .par_iter()

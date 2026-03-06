@@ -9,6 +9,7 @@ use color_eyre::owo_colors::OwoColorize;
 use eyre::Context;
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use teamy_windows::storage::DriveLetterPattern;
@@ -136,27 +137,20 @@ impl QueryArgs {
         }
     }
 
-    fn invoke_indexed(
-        self,
-        mft_files: Vec<(char, PathBuf)>,
-        sync_dir: PathBuf,
-    ) -> eyre::Result<()> {
+    fn invoke_indexed(self, mft_files: Vec<(char, PathBuf)>, sync_dir: &Path) -> eyre::Result<()> {
         let mut nucleo = {
             let _span = info_span!("create_indexed_nucleo_matcher").entered();
             nucleo::Nucleo::<IndexedPathRow>::new(nucleo::Config::DEFAULT, Arc::new(|| {}), None, 1)
         };
 
-        {
-            let _span =
-                info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
-            nucleo.pattern.reparse(
-                0,
-                &self.query,
-                nucleo::pattern::CaseMatching::Smart,
-                nucleo::pattern::Normalization::Smart,
-                false,
-            );
-        }
+        let _span = info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
+        nucleo.pattern.reparse(
+            0,
+            &self.query,
+            nucleo::pattern::CaseMatching::Smart,
+            nucleo::pattern::Normalization::Smart,
+            false,
+        );
 
         let mut loaded_rows = 0usize;
         {
@@ -266,7 +260,7 @@ impl QueryArgs {
                 .filter(|(_, p)| p.is_file())
                 .collect()
         };
-        self.invoke_indexed(mft_files, sync_dir)
+        self.invoke_indexed(mft_files, &sync_dir)
     }
 }
 

@@ -26,7 +26,7 @@ pub struct SyncArgs {
 pub enum SyncMode {
     /// Sync raw .mft snapshots
     Mft,
-    /// Build .mft_search_index files from snapshots
+    /// Build `.mft_search_index` files from snapshots
     Index,
 }
 

@@ -35,6 +35,13 @@ impl SearchIndexHeader {
         }
     }
 
+    /// Write the search index to `output_path` atomically via a temporary file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output file cannot be created or written,
+    /// if any path is too long to encode, or if the temporary file cannot be
+    /// renamed into place.
     pub fn write_to_path(
         self,
         output_path: impl AsRef<Path>,
@@ -84,6 +91,12 @@ impl SearchIndexHeader {
         Ok(())
     }
 
+    /// Parse a `SearchIndexHeader` from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bytes` is too short to contain a full header or
+    /// if the header magic does not match `SEARCH_INDEX_MAGIC`.
     pub fn parse(bytes: &[u8]) -> eyre::Result<Self> {
         if bytes.len() < SEARCH_INDEX_HEADER_LEN {
             bail!(

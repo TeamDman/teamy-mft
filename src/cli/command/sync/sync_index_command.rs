@@ -31,7 +31,6 @@ pub(crate) fn invoke_sync_index(
     for info in drive_infos {
         let index_path = info.index_output_path;
         match (index_path.exists(), &args.if_exists) {
-            (false, _) => {}
             (true, IfExistsOutputBehaviour::Skip) => {
                 debug!(
                     drive = %info.drive_letter,
@@ -40,7 +39,7 @@ pub(crate) fn invoke_sync_index(
                 );
                 continue;
             }
-            (true, IfExistsOutputBehaviour::Overwrite) => {}
+            (false, _) | (true, IfExistsOutputBehaviour::Overwrite) => {}
             (true, IfExistsOutputBehaviour::Abort) => {
                 bail!("Aborting sync: {} already exists", index_path.display())
             }

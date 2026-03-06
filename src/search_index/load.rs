@@ -15,11 +15,19 @@ pub struct MappedSearchIndex {
 }
 
 impl MappedSearchIndex {
+    /// Open and validate a memory-mapped search index file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or mapped, if the header
+    /// cannot be parsed, or if the index version is unsupported.
     pub fn open(path: impl AsRef<Path>) -> eyre::Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)
             .wrap_err_with(|| format!("Failed opening search index file {}", path.display()))?;
 
+        // SAFETY: `file` remains alive for the duration of this call, and the
+        // resulting `Mmap` owns its mapping independently after creation.
         let mmap = unsafe { Mmap::map(&file) }.wrap_err_with(|| {
             format!("Failed memory-mapping search index file {}", path.display())
         })?;
@@ -45,8 +53,20 @@ impl MappedSearchIndex {
         &self.mmap
     }
 
+    /// Parse all path rows from the mapped search index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the mapped bytes are truncated or malformed,
+    /// or if a row path is not valid UTF-8.
     pub fn rows(&self) -> eyre::Result<Vec<SearchIndexPathRow>> {
-        let mut rows = Vec::with_capacity(self.header.node_count as usize);
+        let node_count = usize::try_from(self.header.node_count).wrap_err_with(|| {
+            format!(
+                "Search index node count {} does not fit into usize",
+                self.header.node_count
+            )
+        })?;
+        let mut rows = Vec::with_capacity(node_count);
         let mut cursor = SEARCH_INDEX_HEADER_LEN;
 
         for row_index in 0..self.header.node_count {
@@ -78,7 +98,7 @@ impl MappedSearchIndex {
             }
 
             let path = std::str::from_utf8(&self.mmap[cursor..path_end])
-                .wrap_err_with(|| format!("Invalid UTF-8 path payload at row {}", row_index))?
+                .wrap_err_with(|| format!("Invalid UTF-8 path payload at row {row_index}"))?
                 .to_owned();
             cursor = path_end;
 
