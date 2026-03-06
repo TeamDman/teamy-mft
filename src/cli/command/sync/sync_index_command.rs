@@ -1,5 +1,5 @@
-use crate::cli::command::sync::sync_args::IfExistsOutputBehaviour;
-use crate::cli::command::sync::sync_args::SyncArgs;
+use crate::cli::command::sync::sync_cli::IfExistsOutputBehaviour;
+use crate::cli::command::sync::sync_cli::SyncArgs;
 use crate::cli::command::sync::sync_common::DriveSnapshot;
 use crate::cli::command::sync::sync_common::resolve_drive_infos;
 use crate::mft_process::process_mft_file;
@@ -16,7 +16,8 @@ pub(crate) fn invoke_sync_index(
     args: &SyncArgs,
     snapshots: Option<&[DriveSnapshot]>,
 ) -> eyre::Result<()> {
-    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists)?;
+    let drive_pattern = args.parsed_drive_pattern()?;
+    let drive_infos = resolve_drive_infos(&drive_pattern, &args.if_exists)?;
     let snapshot_map: HashMap<char, &Vec<u8>> = snapshots
         .unwrap_or(&[])
         .iter()

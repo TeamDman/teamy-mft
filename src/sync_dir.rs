@@ -3,6 +3,7 @@ use crate::cli::command::Command;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::paths::ConfigDirPath;
 use crate::paths::EnsureParentDirExists;
+use figue::ToArgs;
 use std::fs;
 use std::ops::Deref;
 use std::path::Path;
@@ -79,7 +80,7 @@ pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
                 command: Command::SetSyncDir(SetSyncDirArgs { path: None }),
                 ..Default::default()
             }
-            .display_invocation()
+            .to_args_string_with_current_exe()?
         );
     };
     Ok(sync_dir)

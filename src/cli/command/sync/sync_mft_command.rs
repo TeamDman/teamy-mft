@@ -1,4 +1,4 @@
-use crate::cli::command::sync::sync_args::SyncArgs;
+use crate::cli::command::sync::sync_cli::SyncArgs;
 use crate::cli::command::sync::sync_common::DriveSnapshot;
 use crate::cli::command::sync::sync_common::resolve_drive_infos;
 use crate::mft::mft_physical_read::read_physical_mft;
@@ -21,7 +21,8 @@ pub(crate) fn invoke_sync_mft(
     ensure_elevated()?;
     enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
 
-    let drive_infos = resolve_drive_infos(&args.drive_pattern, &args.if_exists)?;
+    let drive_pattern = args.parsed_drive_pattern()?;
+    let drive_infos = resolve_drive_infos(&drive_pattern, &args.if_exists)?;
 
     info!(
         "Found {} drives to sync: {}",

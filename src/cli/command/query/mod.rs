@@ -1,3 +1,3 @@
-mod query_args;
+mod query_cli;
 
-pub use query_args::QueryArgs;
+pub use query_cli::QueryArgs;

@@ -12,12 +12,13 @@ categories = ["command-line-utilities", "file-system"]
 
 [dependencies]
 arbitrary = { version = "1.4.1", features = ["derive"] }
-clap = { version = "4", features = ["derive"] }
 color-eyre = "0.6"
 bytes = "1.10.1"
 directories = "5"
 dunce = "1"
 eyre = "0.6.12"
+facet = "0.44.1"
+figue = { git = "https://github.com/TeamDman/figue", rev = "614af4ce3e42d8a64fce47730fa39034cad2de23", features = ["arbitrary"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tracing-tracy = { version = "0.11", optional = true }
@@ -116,7 +117,7 @@ as_pointer_underscore = "warn"
 assertions_on_result_states = "warn"
 clone_on_ref_ptr = "warn"
 deref_by_slicing = "warn"
-disallowed_script_idents = "warn"
+disallowed_script_idents = "allow" # facet macros use Unicode identifiers
 empty_drop = "warn"
 empty_enum_variants_with_brackets = "warn"
 empty_structs_with_brackets = "warn"

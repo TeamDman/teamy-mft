@@ -1,28 +1,40 @@
 use crate::cli::command::sync::sync_index_command::invoke_sync_index;
 use crate::cli::command::sync::sync_mft_command::invoke_sync_mft;
-use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
-use clap::Args;
-use clap::Subcommand;
-use std::ffi::OsString;
+use eyre::Context;
+use facet::Facet;
+use figue::{self as args};
+use std::str::FromStr;
 use teamy_windows::storage::DriveLetterPattern;
 
-#[derive(Args, Arbitrary, PartialEq, Debug, Default)]
+#[derive(Facet, Arbitrary, PartialEq, Debug)]
+#[facet(rename_all = "kebab-case")]
 pub struct SyncArgs {
     /// Sync stage to run (omit to run all stages: mft then index)
-    #[clap(subcommand)]
+    #[facet(args::subcommand)]
     pub mode: Option<SyncMode>,
 
     /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D")
-    #[clap(long, default_value_t = DriveLetterPattern::default())]
-    pub drive_pattern: DriveLetterPattern,
+    #[facet(args::named, default)]
+    pub drive_pattern: String,
 
     /// Overwrite existing cached MFT files
-    #[clap(long, default_value_t = Default::default())]
+    #[facet(args::named, default)]
     pub if_exists: IfExistsOutputBehaviour,
 }
 
-#[derive(Subcommand, Arbitrary, PartialEq, Debug, Clone)]
+impl Default for SyncArgs {
+    fn default() -> Self {
+        Self {
+            mode: None,
+            drive_pattern: "*".to_string(),
+            if_exists: IfExistsOutputBehaviour::default(),
+        }
+    }
+}
+
+#[derive(Facet, Arbitrary, PartialEq, Debug, Clone)]
+#[repr(u8)]
 pub enum SyncMode {
     /// Sync raw .mft snapshots
     Mft,
@@ -30,8 +42,10 @@ pub enum SyncMode {
     Index,
 }
 
-#[derive(Default, Arbitrary, clap::ValueEnum, Clone, Debug, Eq, PartialEq, strum::Display)]
+#[derive(Default, Facet, Arbitrary, Clone, Debug, Eq, PartialEq, strum::Display)]
+#[repr(u8)]
 #[strum(serialize_all = "kebab-case")]
+#[facet(rename_all = "kebab-case")]
 pub enum IfExistsOutputBehaviour {
     /// Skip existing files
     Skip,
@@ -43,6 +57,11 @@ pub enum IfExistsOutputBehaviour {
 }
 
 impl SyncArgs {
+    pub(crate) fn parsed_drive_pattern(&self) -> eyre::Result<DriveLetterPattern> {
+        DriveLetterPattern::from_str(&self.drive_pattern)
+            .wrap_err_with(|| format!("Invalid drive pattern: {}", self.drive_pattern))
+    }
+
     /// Sync MFT data from drives.
     ///
     /// # Errors
@@ -65,26 +84,5 @@ impl SyncArgs {
             }
             Some(SyncMode::Index) => invoke_sync_index(&self, None),
         }
-    }
-}
-
-impl ToArgs for SyncArgs {
-    fn to_args(&self) -> Vec<OsString> {
-        let mut args = Vec::new();
-        if let Some(mode) = &self.mode {
-            match mode {
-                SyncMode::Mft => args.push("mft".into()),
-                SyncMode::Index => args.push("index".into()),
-            }
-        }
-        if self.drive_pattern != DriveLetterPattern::default() {
-            args.push("--drive-pattern".into());
-            args.push(self.drive_pattern.as_ref().into());
-        }
-        if self.if_exists != IfExistsOutputBehaviour::default() {
-            args.push("--if-exists".into());
-            args.push(self.if_exists.to_string().into());
-        }
-        args
     }
 }

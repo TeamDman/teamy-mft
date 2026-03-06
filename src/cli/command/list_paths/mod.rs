@@ -1,3 +1,3 @@
-mod list_paths_args;
+mod list_paths_cli;
 
-pub use list_paths_args::ListPathsArgs;
+pub use list_paths_cli::ListPathsArgs;

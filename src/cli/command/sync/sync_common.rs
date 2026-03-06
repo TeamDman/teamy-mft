@@ -1,4 +1,4 @@
-use crate::cli::command::sync::sync_args::IfExistsOutputBehaviour;
+use crate::cli::command::sync::sync_cli::IfExistsOutputBehaviour;
 use crate::sync_dir::try_get_sync_dir;
 use eyre::bail;
 use eyre::eyre;

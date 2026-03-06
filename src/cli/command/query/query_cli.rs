@@ -1,16 +1,15 @@
-use crate::cli::to_args::ToArgs;
 use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::load::MappedSearchIndex;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
-use clap::Args;
-use clap::ValueEnum;
 use color_eyre::owo_colors::OwoColorize;
 use eyre::Context;
-use std::ffi::OsString;
+use facet::Facet;
+use figue::{self as args};
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::debug;
@@ -18,30 +17,66 @@ use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
 
-#[derive(Args, Arbitrary, PartialEq, Debug, Default)]
+#[derive(Facet, PartialEq, Debug)]
+#[facet(rename_all = "kebab-case")]
 pub struct QueryArgs {
     /// Substring to search for (case-insensitive) in resolved paths (first positional)
+    #[facet(args::positional)]
     pub query: String,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
-    #[clap(long, default_value_t = DriveLetterPattern::default())]
-    pub drive_pattern: DriveLetterPattern,
+    #[facet(args::named, default)]
+    pub drive_pattern: String,
     /// Maximum number of results to show
-    #[clap(long, default_value_t = 100usize)]
+    #[facet(args::named, default)]
     pub limit: usize,
     /// Include paths that contain one or more deleted MFT entries
-    #[clap(long)]
+    #[facet(args::named, default)]
     pub include_deleted: bool,
     /// Show only paths that contain one or more deleted MFT entries
-    #[clap(long)]
+    #[facet(args::named, default)]
     pub only_deleted: bool,
     /// Output density mode
-    #[clap(long, default_value_t = QueryDensity::default())]
+    #[facet(args::named, default)]
     pub density: QueryDensity,
 }
 
-#[derive(Default, Arbitrary, ValueEnum, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
+impl<'a> Arbitrary<'a> for QueryArgs {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let mut query = String::arbitrary(u)?;
+        if query.is_empty() || query.starts_with('-') {
+            query.insert(0, 'q');
+        }
+
+        let drive_pattern = DriveLetterPattern::arbitrary(u)?.to_string();
+
+        Ok(Self {
+            query,
+            drive_pattern,
+            limit: usize::from(u16::arbitrary(u)?),
+            include_deleted: bool::arbitrary(u)?,
+            only_deleted: bool::arbitrary(u)?,
+            density: QueryDensity::arbitrary(u)?,
+        })
+    }
+}
+
+impl Default for QueryArgs {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            drive_pattern: "*".to_string(),
+            limit: 100,
+            include_deleted: false,
+            only_deleted: false,
+            density: QueryDensity::default(),
+        }
+    }
+}
+
+#[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
+#[repr(u8)]
 #[strum(serialize_all = "kebab-case")]
-#[value(rename_all = "kebab_case")]
+#[facet(rename_all = "kebab-case")]
 pub enum QueryDensity {
     #[default]
     Auto,
@@ -253,7 +288,8 @@ impl QueryArgs {
 
         let mft_files: Vec<(char, PathBuf)> = {
             let _span = info_span!("discover_mft_files").entered();
-            self.drive_pattern
+            DriveLetterPattern::from_str(&self.drive_pattern)
+                .wrap_err_with(|| format!("Invalid drive pattern: {}", self.drive_pattern))?
                 .into_drive_letters()?
                 .into_iter()
                 .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
@@ -261,39 +297,5 @@ impl QueryArgs {
                 .collect()
         };
         self.invoke_indexed(mft_files, &sync_dir)
-    }
-}
-
-impl ToArgs for QueryArgs {
-    fn to_args(&self) -> Vec<OsString> {
-        let mut args = Vec::new();
-        // positional query first
-        args.push(self.query.clone().into());
-        if self.drive_pattern != DriveLetterPattern::default() {
-            args.push("--drive-pattern".into());
-            args.push(self.drive_pattern.as_ref().into());
-        }
-        if self.limit != 100 {
-            args.push("--limit".into());
-            args.push(self.limit.to_string().into());
-        }
-        if self.include_deleted {
-            args.push("--include-deleted".into());
-        }
-        if self.only_deleted {
-            args.push("--only-deleted".into());
-        }
-        if self.density != QueryDensity::default() {
-            args.push("--density".into());
-            args.push(
-                match self.density {
-                    QueryDensity::Auto => "auto",
-                    QueryDensity::Lines => "lines",
-                    QueryDensity::Columns => "columns",
-                }
-                .into(),
-            );
-        }
-        args
     }
 }

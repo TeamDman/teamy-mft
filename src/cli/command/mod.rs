@@ -4,10 +4,6 @@ pub mod query;
 pub mod set_sync_dir;
 pub mod sync;
 
-#[allow(
-    clippy::module_inception,
-    reason = "module structure requires submodule with same name"
-)]
-mod command;
+mod command_cli;
 
-pub use command::Command;
+pub use command_cli::Command;

@@ -1,3 +1,3 @@
-mod get_sync_dir_args;
+mod get_sync_dir_cli;
 
-pub use get_sync_dir_args::GetSyncDirArgs;
+pub use get_sync_dir_cli::GetSyncDirArgs;

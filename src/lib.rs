@@ -10,19 +10,40 @@ pub mod search_index;
 pub mod sync_dir;
 
 use crate::cli::Cli;
-use clap::CommandFactory;
-use clap::FromArgMatches;
 use teamy_windows::console::console_attach;
+
+/// Version string combining package version and git revision.
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (rev ",
+    env!("GIT_REVISION"),
+    ")"
+);
 
 /// Entrypoint for the program to reduce coupling to the name of this crate.
 ///
 /// # Errors
 ///
 /// Returns an error if CLI parsing or command execution fails.
+///
+/// # Panics
+///
+/// Panics if the CLI schema is invalid (should never happen with correct code).
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    let cli = Cli::command();
-    let cli = Cli::from_arg_matches(&cli.get_matches())?;
+    let cli: Cli = figue::Driver::new(
+        figue::builder::<Cli>()
+            .expect("schema should be valid")
+            .cli(move |cli| cli.args_os(std::env::args_os().skip(1)).strict())
+            .help(move |help| {
+                help.version(VERSION)
+                    .include_implementation_source_file(true)
+                    .include_implementation_git_url("TeamDman/teamy-mft", env!("GIT_REVISION"))
+            })
+            .build(),
+    )
+    .run()
+    .unwrap();
 
     // Initialize logging
     logging_init::init_logging(&cli.global_args)?;
