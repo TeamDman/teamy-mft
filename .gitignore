@@ -4,3 +4,4 @@ target
 .jj
 *.tracy
 target_ra/
+ignore
