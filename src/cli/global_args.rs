@@ -10,6 +10,12 @@ pub struct GlobalArgs {
     #[clap(long, global = true)]
     pub debug: bool,
 
+    #[clap(long, global = true, value_name = "FILTER")]
+    pub log_filter: Option<String>,
+    
+    #[clap(long, global = true, value_name = "FILE")]
+    pub log_file: Option<String>,
+
     /// Emit structured JSON logs alongside stderr output.
     /// Optionally specify a filename; if not provided, a timestamped filename will be generated.
     #[clap(
