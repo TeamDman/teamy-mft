@@ -1,6 +1,5 @@
 pub mod command;
 pub mod global_args;
-pub mod json_log_behaviour;
 pub mod to_args;
 use crate::cli::command::Command;
 use crate::cli::global_args::GlobalArgs;
@@ -26,7 +25,7 @@ impl Cli {
     ///
     /// Returns an error if the command execution fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        self.command.invoke(&self.global_args)
+        self.command.invoke()
     }
     #[must_use]
     pub fn display_invocation(&self) -> String {

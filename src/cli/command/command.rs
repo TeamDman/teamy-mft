@@ -3,9 +3,7 @@ use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::sync::SyncArgs;
-use crate::cli::global_args::GlobalArgs;
 use crate::cli::to_args::ToArgs;
-use crate::init_tracing;
 use arbitrary::Arbitrary;
 use clap::Subcommand;
 use std::ffi::OsString;
@@ -37,9 +35,7 @@ impl Command {
     /// # Errors
     ///
     /// Returns an error if tracing initialization fails or the command execution fails.
-    pub fn invoke(self, global_args: &GlobalArgs) -> eyre::Result<()> {
-        let json_behaviour = global_args.json_log_behaviour();
-        init_tracing(global_args.log_level(), &json_behaviour)?;
+    pub fn invoke(self) -> eyre::Result<()> {
         match self {
             Command::Sync(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),

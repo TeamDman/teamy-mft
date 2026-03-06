@@ -1,4 +1,3 @@
-use crate::cli::json_log_behaviour::JsonLogBehaviour;
 use crate::cli::to_args::ToArgs;
 use arbitrary::Arbitrary;
 use clap::Args;
@@ -12,7 +11,7 @@ pub struct GlobalArgs {
 
     #[clap(long, global = true, value_name = "FILTER")]
     pub log_filter: Option<String>,
-    
+
     #[clap(long, global = true, value_name = "FILE")]
     pub log_file: Option<String>,
 
@@ -31,27 +30,6 @@ pub struct GlobalArgs {
     /// Console PID for console reuse (hidden)
     #[clap(long, hide = true, global = true)]
     pub console_pid: Option<u32>,
-}
-
-impl GlobalArgs {
-    #[must_use]
-    pub fn log_level(&self) -> tracing::Level {
-        if self.debug {
-            tracing::Level::DEBUG
-        } else {
-            tracing::Level::INFO
-        }
-    }
-
-    /// Determine how JSON structured logs should be handled based on the --json flag.
-    #[must_use]
-    pub fn json_log_behaviour(&self) -> JsonLogBehaviour {
-        match &self.json {
-            None => JsonLogBehaviour::None,
-            Some(s) if s.is_empty() => JsonLogBehaviour::SomeAutomaticPath,
-            Some(path) => JsonLogBehaviour::Some(path.into()),
-        }
-    }
 }
 
 impl ToArgs for GlobalArgs {
