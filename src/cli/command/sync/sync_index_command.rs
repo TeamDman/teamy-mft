@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use tracing::debug;
 use tracing::info;
 
-pub(crate) fn invoke_sync_index(
+pub fn invoke_sync_index(
     args: &SyncArgs,
     snapshots: Option<&[DriveSnapshot]>,
 ) -> eyre::Result<()> {

@@ -118,7 +118,7 @@ impl<'a> MftRecordAttribute<'a> {
     }
 
     #[inline]
-    pub(crate) fn raw_data(&self) -> &'a [u8] {
+    pub fn raw_data(&self) -> &'a [u8] {
         self.mft_record_attribute_data
     }
 

@@ -8,19 +8,19 @@ use teamy_windows::storage::DriveLetterPattern;
 use tracing::info;
 
 #[derive(Debug)]
-pub(crate) struct DriveSyncInfo {
-    pub(crate) drive_letter: char,
-    pub(crate) mft_output_path: PathBuf,
-    pub(crate) index_output_path: PathBuf,
+pub struct DriveSyncInfo {
+    pub drive_letter: char,
+    pub mft_output_path: PathBuf,
+    pub index_output_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DriveSnapshot {
-    pub(crate) drive_letter: char,
-    pub(crate) bytes: Vec<u8>,
+pub struct DriveSnapshot {
+    pub drive_letter: char,
+    pub bytes: Vec<u8>,
 }
 
-pub(crate) fn resolve_drive_infos(
+pub fn resolve_drive_infos(
     drive_pattern: &DriveLetterPattern,
     overwrite_existing: &IfExistsOutputBehaviour,
 ) -> eyre::Result<Vec<DriveSyncInfo>> {

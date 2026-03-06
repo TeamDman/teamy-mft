@@ -14,7 +14,7 @@ use tracing::debug;
 use tracing::error;
 use tracing::info;
 
-pub(crate) fn invoke_sync_mft(
+pub fn invoke_sync_mft(
     args: &SyncArgs,
     capture_bytes: bool,
 ) -> eyre::Result<Vec<DriveSnapshot>> {
