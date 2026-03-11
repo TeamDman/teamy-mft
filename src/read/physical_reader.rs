@@ -3,6 +3,7 @@ use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use crate::read::physical_read_results::PhysicalReadResults;
 use eyre::Context;
+use tracing::instrument;
 use std::collections::BTreeSet;
 use tracing::debug;
 use windows::Win32::Foundation::HANDLE;
@@ -44,6 +45,7 @@ impl PhysicalReader {
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened or the completion port cannot be created.
+    #[instrument(skip_all)]
     pub fn try_new(
         filename: impl Param<PCWSTR>,
         requests: impl IntoIterator<Item = PhysicalReadRequest>,

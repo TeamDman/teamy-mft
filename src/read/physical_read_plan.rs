@@ -2,6 +2,7 @@ use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResults;
 use crate::read::physical_reader::PhysicalReader;
 use std::collections::BTreeSet;
+use tracing::instrument;
 use uom::ConstZero;
 use uom::si::information::byte;
 use uom::si::usize::Information;
@@ -94,6 +95,7 @@ impl PhysicalReadPlan {
 
     /// Split requests into uniform <= `chunk_size` pieces. Returns a new plan.
     #[must_use]
+    #[instrument(skip_all)]
     pub fn chunked(&self, chunk_size: Information) -> Self {
         if chunk_size == Information::ZERO {
             return self.clone();
@@ -157,6 +159,7 @@ impl PhysicalReadPlan {
     /// # Errors
     ///
     /// Returns an error if opening the file, enqueuing IO operations, or reading fails.
+    #[instrument(skip_all)]
     pub fn read(self, filename: impl Param<PCWSTR>) -> eyre::Result<PhysicalReadResults> {
         if self.is_empty() {
             return Ok(PhysicalReadResults::new());

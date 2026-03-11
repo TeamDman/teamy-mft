@@ -1,6 +1,7 @@
 use crate::read::physical_read_plan::PhysicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use std::collections::BTreeSet;
+use tracing::instrument;
 use uom::ConstZero;
 use uom::si::usize::Information;
 
@@ -24,6 +25,7 @@ impl LogicalReadPlan {
     }
 
     #[must_use]
+    #[instrument(skip_all)]
     pub fn as_physical_read_plan(&self) -> PhysicalReadPlan {
         self.segments
             .iter()

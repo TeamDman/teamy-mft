@@ -4,6 +4,7 @@ use crate::read::logical_read_plan::LogicalFileSegmentKind;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use eyre::Result;
 use eyre::eyre;
+use tracing::instrument;
 use std::collections::BTreeSet;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -126,6 +127,7 @@ pub struct MftRecordAttributeRunListOwned {
 }
 impl MftRecordAttributeRunListOwned {
     /// Extract the data runs from the unnamed x80 attribute
+    #[instrument(skip_all)]
     pub fn from_mft_record(dollar_mft_record: &MftRecord) -> Self {
         let mut rtn = Self::default();
         for attr in dollar_mft_record.iter_attributes() {
@@ -153,6 +155,7 @@ impl MftRecordAttributeRunListOwned {
     /// Future opportunity: produce a sparse output file
     /// by marking destination with `FSCTL_SET_SPARSE` and eliding zero allocation explicitly.
     #[must_use]
+    #[instrument(skip_all)]
     pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
         let mut segments = BTreeSet::default();
         let mut logical_offset = Information::ZERO;

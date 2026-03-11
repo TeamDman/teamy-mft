@@ -1,6 +1,7 @@
 use crate::mft::mft_location::MftLocationOnDisk;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
 use teamy_windows::storage::HandleReadExt;
+use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::usize::Information;
 
@@ -13,6 +14,7 @@ impl NtfsBootSector {
     /// # Errors
     ///
     /// Returns an error if the drive handle cannot be read.
+    #[instrument(skip_all)]
     pub fn try_from_handle(drive_handle: &NtfsDriveHandle) -> eyre::Result<Self> {
         Ok(NtfsBootSector {
             data: {
@@ -22,14 +24,17 @@ impl NtfsBootSector {
             },
         })
     }
+
     #[must_use]
     pub fn bytes_per_sector(&self) -> u16 {
         u16::from_le_bytes([self.data[0x0b], self.data[0x0c]])
     }
+
     #[must_use]
     pub fn sectors_per_cluster(&self) -> u8 {
         self.data[0x0d]
     }
+
     #[must_use]
     pub fn mft_cluster_number(&self) -> u64 {
         u64::from_le_bytes([
@@ -43,10 +48,12 @@ impl NtfsBootSector {
             self.data[0x37],
         ])
     }
+
     #[must_use]
     pub fn bytes_per_cluster(&self) -> usize {
         self.bytes_per_sector() as usize * self.sectors_per_cluster() as usize
     }
+
     /// Returns the size of a single MFT file record as Information (bytes).
     /// Per NTFS spec, at offset 0x40 there is a signed byte:
     /// - If negative, the record size is 2^abs(value) bytes.
@@ -68,11 +75,13 @@ impl NtfsBootSector {
         };
         Information::new::<byte>(bytes)
     }
+
     #[must_use]
     pub fn mft_location(&self) -> MftLocationOnDisk {
         self.into()
     }
 }
+
 impl std::fmt::Debug for NtfsBootSector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NtfsBootSector")

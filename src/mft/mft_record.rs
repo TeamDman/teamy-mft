@@ -5,6 +5,7 @@ use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use eyre::bail;
+use tracing::instrument;
 use std::ops::Deref;
 use teamy_windows::storage::HandleReadExt;
 use uom::si::information::byte;
@@ -67,6 +68,7 @@ impl MftRecord {
     /// # Errors
     ///
     /// Returns an error if the record cannot be read or parsed.
+    #[instrument(skip_all)]
     pub fn try_from_handle(
         drive_handle: &impl HandleReadExt,
         mft_record_location: MftRecordLocationOnDisk,
