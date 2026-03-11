@@ -50,7 +50,7 @@ humantime = "2.2.0"
 thousands = "0.2.0"
 nucleo = "0.5.0"
 chrono = "0.4.41"
-teamy-windows = {version="0.10.0",features=["arbitrary"]}
+teamy-windows = {version="0.11.1",features=["arbitrary"]}
 tempfile = "3.20"
 teamy-uom-extensions = "0.1.0"
 uom = { version = "0.37.0", features = ["usize"] }
