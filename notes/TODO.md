@@ -1,0 +1,2 @@
+- revamping sync logic, building index vs crawling MFT, avoid intermediate read when doing both
+- Revamping query logic
