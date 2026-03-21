@@ -8,7 +8,6 @@ use crate::cli::command::sync::mft::SyncMftArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use futures::TryStreamExt;
 use teamy_windows::storage::DriveLetterPattern;
 use tokio_stream::StreamExt;
 use tracing::Instrument;
@@ -45,10 +44,10 @@ impl SyncArgs {
             .build()?;
 
         runtime.block_on(async move {
-            let command = self.command.unwrap_or_default();
-            let drive_infos = command.invoke_preflight(drive_infos, if_exists)?;
-            command.invoke(drive_infos).await?;
-            Ok(())
+            self.command
+                .unwrap_or_default()
+                .invoke(drive_infos, if_exists)
+                .await
         })
     }
 }
@@ -80,18 +79,21 @@ impl SyncCommand {
         match self {
             Self::Mft(SyncMftArgs) => SyncMftArgs.invoke_preflight(drive_infos, if_exists),
             Self::Index(SyncIndexArgs) => SyncIndexArgs.invoke_preflight(drive_infos, if_exists),
-            Self::Both => {
-                SyncMftArgs.invoke_preflight(drive_infos, if_exists)
-            }
+            Self::Both => SyncMftArgs.invoke_preflight(drive_infos, if_exists),
         }
     }
 
     /// # Errors
     ///
     /// Returns an error if the sync fails, likely caused by IO problems.
-    pub async fn invoke(&self, drive_infos: BTreeMap<char, DriveSyncInfo>) -> eyre::Result<()> {
+    pub async fn invoke(
+        &self,
+        drive_infos: BTreeMap<char, DriveSyncInfo>,
+        if_exists: &IfExistsOutputBehaviour,
+    ) -> eyre::Result<()> {
         match self {
             Self::Mft(SyncMftArgs) => {
+                let drive_infos = SyncMftArgs.invoke_preflight(drive_infos, if_exists)?;
                 let mft_data = SyncMftArgs
                     .invoke(drive_infos)
                     .instrument(info_span!("dispatch mft sync work"))
@@ -103,14 +105,38 @@ impl SyncCommand {
                 }
                 Ok(())
             }
-            Self::Index(SyncIndexArgs) => SyncIndexArgs.invoke(drive_infos).await,
+            Self::Index(SyncIndexArgs) => {
+                let drive_infos = SyncIndexArgs.invoke_preflight(drive_infos, if_exists)?;
+                SyncIndexArgs.invoke(drive_infos).await
+            }
             Self::Both => {
+                let mft_drive_infos =
+                    SyncMftArgs.invoke_preflight(drive_infos.clone(), if_exists)?;
+                let mut remaining_index_drive_infos =
+                    SyncIndexArgs.invoke_preflight(drive_infos, if_exists)?;
+
                 let mft_data = SyncMftArgs
-                    .invoke(drive_infos)
+                    .invoke(mft_drive_infos)
                     .instrument(info_span!("dispatch mft sync work"))
-                    .await?.map_ok(async |(drive_info, physical_mft)| {
-                        
-                    });
+                    .await?;
+
+                tokio::pin!(mft_data);
+                let _guard = info_span!("collect mft sync and in-memory index results").entered();
+                while let Some(result) = mft_data.next().await {
+                    let (drive_info, physical_mft) = result?;
+                    if remaining_index_drive_infos
+                        .remove(&drive_info.drive_letter)
+                        .is_some()
+                    {
+                        let mft_file = physical_mft.to_mft_file()?;
+                        SyncIndexArgs.invoke_for_mft_file(&drive_info, &mft_file)?;
+                    }
+                }
+
+                if !remaining_index_drive_infos.is_empty() {
+                    SyncIndexArgs.invoke(remaining_index_drive_infos).await?;
+                }
+
                 Ok(())
             }
         }

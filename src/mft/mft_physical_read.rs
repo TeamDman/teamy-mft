@@ -1,3 +1,4 @@
+use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record::MftRecord;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListOwned;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
@@ -32,6 +33,21 @@ impl PhysicalMftReadResult {
     pub fn write_to_path(&self, output_path: impl AsRef<std::path::Path>) -> eyre::Result<()> {
         self.physical_read_results
             .write_to_path(&self.logical_read_plan, output_path)
+    }
+
+    /// Reconstruct the logical `$MFT` stream in memory and apply fixups.
+    ///
+    /// This avoids a write-to-disk + read-back cycle when downstream code needs
+    /// an `MftFile` view over the logical MFT contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if expected physical data is missing or the resulting
+    /// MFT bytes fail validation/fixup processing.
+    #[instrument(skip_all)]
+    pub fn to_mft_file(&self) -> eyre::Result<MftFile> {
+        let bytes = self.physical_read_results.to_vec(&self.logical_read_plan)?;
+        MftFile::from_vec(bytes)
     }
 }
 

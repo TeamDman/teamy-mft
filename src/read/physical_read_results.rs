@@ -3,6 +3,7 @@ use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use humansize::BINARY;
 use std::collections::BTreeSet;
+use std::io::Cursor;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
@@ -151,6 +152,20 @@ impl PhysicalReadResults {
 
         writer.flush()?;
         Ok(())
+    }
+
+    /// Materialize the logical read plan into a contiguous in-memory buffer.
+    ///
+    /// Sparse gaps remain zero-filled in the returned vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if expected physical data is missing.
+    pub fn to_vec(&self, logical_plan: &LogicalReadPlan) -> eyre::Result<Vec<u8>> {
+        let mut bytes = vec![0u8; logical_plan.total_logical_size().get::<byte>()];
+        let mut cursor = Cursor::new(bytes.as_mut_slice());
+        self.write(logical_plan, &mut cursor)?;
+        Ok(bytes)
     }
 }
 

@@ -38,6 +38,50 @@ impl Deref for MftFile {
     }
 }
 impl MftFile {
+    fn validate_and_apply_fixups(raw: &mut [u8]) -> eyre::Result<()> {
+        {
+            let _span = debug_span!("validate_minimum_header_size", raw_len = raw.len()).entered();
+            if raw.len() < 0x20 {
+                bail!(
+                    "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
+                    raw.len()
+                );
+            }
+        }
+
+        let entry_size_bytes = {
+            let _span = debug_span!("read_entry_size_from_header").entered();
+            u32::from_le_bytes([raw[0x1C], raw[0x1D], raw[0x1E], raw[0x1F]]) as usize
+        };
+
+        {
+            let _span = debug_span!(
+                "validate_entry_size",
+                entry_size_bytes = entry_size_bytes,
+                raw_len = raw.len()
+            )
+            .entered();
+            if entry_size_bytes == 0 {
+                bail!("Entry size field is zero (invalid/unknown)");
+            }
+            if !raw.len().is_multiple_of(entry_size_bytes) {
+                bail!(
+                    "Buffer length ({}) is not a multiple of entry size ({})",
+                    raw.len(),
+                    entry_size_bytes
+                );
+            }
+        }
+
+        {
+            let _span =
+                debug_span!("apply_fixups_parallel", entry_size_bytes = entry_size_bytes).entered();
+            let _stats = apply_fixups_parallel(raw, entry_size_bytes);
+        }
+
+        Ok(())
+    }
+
     pub fn size(&self) -> Information {
         Information::new::<byte>(self.bytes.len())
     }
@@ -144,45 +188,7 @@ impl MftFile {
     /// Returns an error if the bytes are invalid or fixups fail.
     #[instrument(level = "debug", skip_all)]
     pub fn from_bytes(mut raw: BytesMut) -> eyre::Result<Self> {
-        {
-            let _span = debug_span!("validate_minimum_header_size", raw_len = raw.len()).entered();
-            if raw.len() < 0x20 {
-                bail!(
-                    "MFT buffer too small ({} bytes); need at least 0x20 to read entry size",
-                    raw.len()
-                );
-            }
-        }
-
-        let entry_size_bytes = {
-            let _span = debug_span!("read_entry_size_from_header").entered();
-            u32::from_le_bytes([raw[0x1C], raw[0x1D], raw[0x1E], raw[0x1F]]) as usize
-        };
-
-        {
-            let _span = debug_span!(
-                "validate_entry_size",
-                entry_size_bytes = entry_size_bytes,
-                raw_len = raw.len()
-            )
-            .entered();
-            if entry_size_bytes == 0 {
-                bail!("Entry size field is zero (invalid/unknown)");
-            }
-            if !raw.len().is_multiple_of(entry_size_bytes) {
-                bail!(
-                    "Buffer length ({}) is not a multiple of entry size ({})",
-                    raw.len(),
-                    entry_size_bytes
-                );
-            }
-        }
-
-        {
-            let _span =
-                debug_span!("apply_fixups_parallel", entry_size_bytes = entry_size_bytes).entered();
-            let _stats = apply_fixups_parallel(raw.as_mut(), entry_size_bytes);
-        }
+        Self::validate_and_apply_fixups(raw.as_mut())?;
 
         let bytes = {
             let _span = debug_span!("freeze_bytes").entered();
@@ -192,7 +198,26 @@ impl MftFile {
         Ok(MftFile { bytes })
     }
 
+    /// Construct from owned logical MFT bytes that still need fixups applied.
+    ///
+    /// This is useful when reconstructing a contiguous in-memory MFT from a
+    /// discontiguous physical read, avoiding a write-to-disk then read-back cycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the bytes are invalid or fixups fail.
+    #[instrument(level = "debug", skip_all)]
+    pub fn from_vec(mut raw: Vec<u8>) -> eyre::Result<Self> {
+        Self::validate_and_apply_fixups(&mut raw)?;
+        Ok(MftFile {
+            bytes: Bytes::from(raw),
+        })
+    }
+
     /// Iterate over fixed-size records contained in this MFT file.
+    ///
+    /// The logical MFT stream starts directly with record 0 (`FILE`), so there is
+    /// no file-level header to skip before iteration begins.
     ///
     /// This creates zero-copy `MftRecord` instances by slicing the shared
     /// `Bytes` buffer. No signature validation is performed.

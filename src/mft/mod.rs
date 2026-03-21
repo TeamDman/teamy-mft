@@ -1,5 +1,6 @@
 pub mod fast_entry;
 pub mod fast_fixup;
+pub mod mft_convert_to_path_collection;
 pub mod mft_file;
 pub mod mft_location;
 pub mod mft_physical_read;
@@ -18,4 +19,3 @@ pub mod mft_record_reference;
 pub mod mft_record_size;
 pub mod mft_sequence_number;
 pub mod path_resolve;
-pub mod mft_convert_to_path_collection;

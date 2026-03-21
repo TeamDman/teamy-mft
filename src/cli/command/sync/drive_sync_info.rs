@@ -13,7 +13,6 @@ pub struct DriveSyncInfo {
     pub index_output_path: PathBuf,
 }
 
-
 pub fn resolve_drive_infos(
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<BTreeMap<char, DriveSyncInfo>> {
@@ -30,11 +29,14 @@ pub fn resolve_drive_infos(
 
     let mut drive_infos = BTreeMap::default();
     for (drive_letter, drive_output_path) in drives {
-        drive_infos.insert(drive_letter, DriveSyncInfo {
+        drive_infos.insert(
             drive_letter,
-            mft_output_path: drive_output_path,
-            index_output_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
-        });
+            DriveSyncInfo {
+                drive_letter,
+                mft_output_path: drive_output_path,
+                index_output_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
+            },
+        );
     }
 
     if drive_infos.is_empty() {

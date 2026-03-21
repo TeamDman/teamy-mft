@@ -5,6 +5,9 @@ use bytes::Bytes;
 use uom::si::information::byte;
 
 /// Zero-copy iterator over MFT records stored contiguously in a `Bytes` buffer.
+///
+/// The logical `$MFT` byte stream starts at record 0, so iteration begins at
+/// byte offset 0 rather than skipping any file-level header.
 #[derive(Debug)]
 pub struct MftRecordIter {
     bytes: Bytes,
