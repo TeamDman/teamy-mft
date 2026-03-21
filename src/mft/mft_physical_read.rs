@@ -13,9 +13,27 @@ use teamy_uom_extensions::HumanInformationExt;
 use teamy_windows::handle::get_read_only_drive_handle;
 use teamy_windows::string::EasyPCWSTR;
 use tracing::info;
+use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::information::mebibyte;
 use uom::si::usize::Information;
+
+#[derive(Debug)]
+pub struct PhysicalMftReadResult {
+    pub logical_read_plan: LogicalReadPlan,
+    pub physical_read_results: PhysicalReadResults,
+}
+
+impl PhysicalMftReadResult {
+    /// # Errors
+    ///
+    /// Returns an error if writing to the specified path fails.
+    #[instrument(skip_all)]
+    pub fn write_to_path(&self, output_path: impl AsRef<std::path::Path>) -> eyre::Result<()> {
+        self.physical_read_results
+            .write_to_path(&self.logical_read_plan, output_path)
+    }
+}
 
 /// Read the complete MFT using IOCP overlapped reads.
 /// `drive_letter`: 'C', 'D', ...
@@ -24,9 +42,8 @@ use uom::si::usize::Information;
 /// # Errors
 ///
 /// Returns an error if the drive cannot be accessed or MFT cannot be read.
-pub fn read_physical_mft(
-    drive_letter: char,
-) -> eyre::Result<(LogicalReadPlan, PhysicalReadResults)> {
+#[instrument]
+pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalMftReadResult> {
     let drive_letter = drive_letter.to_ascii_uppercase();
     let volume_path = format!(r"\\.\{drive_letter}:");
     let volume_path = volume_path
@@ -87,7 +104,10 @@ pub fn read_physical_mft(
                 .sum::<Information>()
                 .format_human(BINARY),
         );
-        Ok((logical_read_plan, physical_read_results))
+        Ok(PhysicalMftReadResult {
+            logical_read_plan,
+            physical_read_results,
+        })
     }
 }
 

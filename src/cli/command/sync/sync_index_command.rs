@@ -1,5 +1,5 @@
-use crate::cli::command::sync::sync_cli::IfExistsOutputBehaviour;
-use crate::cli::command::sync::sync_cli::SyncArgs;
+use crate::cli::command::sync::IfExistsOutputBehaviour;
+use crate::cli::command::sync::SyncArgs;
 use crate::cli::command::sync::sync_common::DriveSnapshot;
 use crate::cli::command::sync::sync_common::resolve_drive_infos;
 use crate::mft_process::process_mft_file;
@@ -12,12 +12,11 @@ use std::collections::HashMap;
 use tracing::debug;
 use tracing::info;
 
-pub fn invoke_sync_index(
+pub(crate) fn invoke_sync_index(
     args: &SyncArgs,
     snapshots: Option<&[DriveSnapshot]>,
 ) -> eyre::Result<()> {
-    let drive_pattern = args.parsed_drive_pattern()?;
-    let drive_infos = resolve_drive_infos(&drive_pattern, &args.if_exists)?;
+    let drive_infos = resolve_drive_infos(&args.drive_letter_pattern, &args.if_exists)?;
     let snapshot_map: HashMap<char, &Vec<u8>> = snapshots
         .unwrap_or(&[])
         .iter()

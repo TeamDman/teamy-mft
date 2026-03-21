@@ -1,13 +1,11 @@
 use crate::cli::command::sync::sync_index_command::invoke_sync_index;
 use crate::cli::command::sync::sync_mft_command::invoke_sync_mft;
 use arbitrary::Arbitrary;
-use eyre::Context;
 use facet::Facet;
 use figue::{self as args};
-use std::str::FromStr;
 use teamy_windows::storage::DriveLetterPattern;
 
-#[derive(Facet, Arbitrary, PartialEq, Debug)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 #[facet(rename_all = "kebab-case")]
 pub struct SyncArgs {
     /// Sync stage to run (omit to run all stages: mft then index)
@@ -16,21 +14,11 @@ pub struct SyncArgs {
 
     /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
-    pub drive_pattern: String,
+    pub drive_letter_pattern: DriveLetterPattern,
 
     /// Overwrite existing cached MFT files
     #[facet(args::named, default)]
     pub if_exists: IfExistsOutputBehaviour,
-}
-
-impl Default for SyncArgs {
-    fn default() -> Self {
-        Self {
-            mode: None,
-            drive_pattern: "*".to_string(),
-            if_exists: IfExistsOutputBehaviour::default(),
-        }
-    }
 }
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Clone)]
@@ -57,11 +45,6 @@ pub enum IfExistsOutputBehaviour {
 }
 
 impl SyncArgs {
-    pub(crate) fn parsed_drive_pattern(&self) -> eyre::Result<DriveLetterPattern> {
-        DriveLetterPattern::from_str(&self.drive_pattern)
-            .wrap_err_with(|| format!("Invalid drive pattern: {}", self.drive_pattern))
-    }
-
     /// Sync MFT data from drives.
     ///
     /// # Errors
@@ -73,16 +56,23 @@ impl SyncArgs {
     ///
     /// Panics if spawning worker threads fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        match self.mode {
-            None => {
-                let snapshots = invoke_sync_mft(&self, true)?;
-                invoke_sync_index(&self, Some(&snapshots))
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            match self.mode {
+                // None => {
+                //     let snapshots = invoke_sync_mft(&self, true).await?;
+                //     invoke_sync_index(&self, Some(&snapshots))
+                // }
+                Some(SyncMode::Mft) => {
+                    invoke_sync_mft(&self).await?;
+                    Ok(())
+                }
+                Some(SyncMode::Index) => invoke_sync_index(&self, None),
+                _ => todo!(),
             }
-            Some(SyncMode::Mft) => {
-                invoke_sync_mft(&self, false)?;
-                Ok(())
-            }
-            Some(SyncMode::Index) => invoke_sync_index(&self, None),
-        }
+        })
     }
 }

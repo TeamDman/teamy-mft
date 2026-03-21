@@ -5,9 +5,9 @@ use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use eyre::bail;
-use tracing::instrument;
 use std::ops::Deref;
 use teamy_windows::storage::HandleReadExt;
+use tracing::instrument;
 use uom::si::information::byte;
 
 /// Zero-copy record view backed by `bytes::Bytes`.

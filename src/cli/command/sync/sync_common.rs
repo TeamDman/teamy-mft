@@ -21,7 +21,7 @@ pub struct DriveSnapshot {
 }
 
 pub fn resolve_drive_infos(
-    drive_pattern: &DriveLetterPattern,
+    drive_letter_pattern: &DriveLetterPattern,
     overwrite_existing: &IfExistsOutputBehaviour,
 ) -> eyre::Result<Vec<DriveSyncInfo>> {
     let sync_dir = try_get_sync_dir()?;
@@ -29,7 +29,7 @@ pub fn resolve_drive_infos(
     info!("Syncing in directory: {}", sync_dir.display());
     create_dir_all(&sync_dir)?;
 
-    let drives = drive_pattern
+    let drives = drive_letter_pattern
         .into_drive_letters()?
         .into_iter()
         .filter_map(|drive_letter| {
@@ -60,7 +60,7 @@ pub fn resolve_drive_infos(
     drive_infos.sort_by_key(|info| info.drive_letter);
 
     if drive_infos.is_empty() {
-        bail!("No drives matched the pattern: {}", drive_pattern);
+        bail!("No drives matched the pattern: {}", drive_letter_pattern);
     }
 
     Ok(drive_infos)

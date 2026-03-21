@@ -11,7 +11,6 @@ use mft::attribute::x30::FileNamespace;
 use rustc_hash::FxHashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::Instant;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::info;
@@ -30,28 +29,11 @@ fn choose_dir<'a>(
         .expect("links not empty")
 }
 
-#[derive(Facet, PartialEq, Debug)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 pub struct ListPathsArgs {
     /// Drive letter pattern to match drives whose cached MFTs will be traversed (e.g., "*", "C", "CD", "C,D")
     #[facet(args::positional, default)]
-    pub drive_pattern: String,
-}
-
-impl<'a> Arbitrary<'a> for ListPathsArgs {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let pattern = DriveLetterPattern::arbitrary(u)?;
-        Ok(Self {
-            drive_pattern: pattern.to_string(),
-        })
-    }
-}
-
-impl Default for ListPathsArgs {
-    fn default() -> Self {
-        Self {
-            drive_pattern: "*".to_string(),
-        }
-    }
+    pub drive_letter_pattern: DriveLetterPattern,
 }
 
 impl ListPathsArgs {
@@ -69,9 +51,7 @@ impl ListPathsArgs {
         // Determine sync dir
         let sync_dir = try_get_sync_dir()?;
         // Resolve drive letters from pattern
-        let drive_pattern = DriveLetterPattern::from_str(&self.drive_pattern)
-            .wrap_err_with(|| format!("Invalid drive pattern: {}", self.drive_pattern))?;
-        let drive_letters = drive_pattern.into_drive_letters()?;
+        let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         // Build list of existing cached MFT files for matching drives
         let mft_files: Vec<PathBuf> = drive_letters
             .into_iter()

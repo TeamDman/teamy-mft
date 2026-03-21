@@ -9,7 +9,6 @@ use figue::{self as args};
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Arc;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::debug;
@@ -17,7 +16,7 @@ use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
 
-#[derive(Facet, PartialEq, Debug)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 #[facet(rename_all = "kebab-case")]
 pub struct QueryArgs {
     /// Substring to search for (case-insensitive) in resolved paths (first positional)
@@ -25,7 +24,7 @@ pub struct QueryArgs {
     pub query: String,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
-    pub drive_pattern: String,
+    pub drive_letter_pattern: DriveLetterPattern,
     /// Maximum number of results to show
     #[facet(args::named, default)]
     pub limit: usize,
@@ -38,39 +37,6 @@ pub struct QueryArgs {
     /// Output density mode
     #[facet(args::named, default)]
     pub density: QueryDensity,
-}
-
-impl<'a> Arbitrary<'a> for QueryArgs {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let mut query = String::arbitrary(u)?;
-        if query.is_empty() || query.starts_with('-') {
-            query.insert(0, 'q');
-        }
-
-        let drive_pattern = DriveLetterPattern::arbitrary(u)?.to_string();
-
-        Ok(Self {
-            query,
-            drive_pattern,
-            limit: usize::from(u16::arbitrary(u)?),
-            include_deleted: bool::arbitrary(u)?,
-            only_deleted: bool::arbitrary(u)?,
-            density: QueryDensity::arbitrary(u)?,
-        })
-    }
-}
-
-impl Default for QueryArgs {
-    fn default() -> Self {
-        Self {
-            query: String::new(),
-            drive_pattern: "*".to_string(),
-            limit: 100,
-            include_deleted: false,
-            only_deleted: false,
-            density: QueryDensity::default(),
-        }
-    }
 }
 
 #[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
@@ -288,8 +254,7 @@ impl QueryArgs {
 
         let mft_files: Vec<(char, PathBuf)> = {
             let _span = info_span!("discover_mft_files").entered();
-            DriveLetterPattern::from_str(&self.drive_pattern)
-                .wrap_err_with(|| format!("Invalid drive pattern: {}", self.drive_pattern))?
+            self.drive_letter_pattern
                 .into_drive_letters()?
                 .into_iter()
                 .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
