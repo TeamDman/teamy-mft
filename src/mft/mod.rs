@@ -18,3 +18,4 @@ pub mod mft_record_reference;
 pub mod mft_record_size;
 pub mod mft_sequence_number;
 pub mod path_resolve;
+pub mod mft_convert_to_path_collection;

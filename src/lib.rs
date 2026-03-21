@@ -2,7 +2,6 @@ pub mod cli;
 
 pub mod logging_init;
 pub mod mft;
-pub mod mft_process;
 pub mod ntfs;
 pub mod paths;
 pub mod read;

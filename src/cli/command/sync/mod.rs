@@ -1,8 +1,10 @@
-mod sync_cli;
-mod sync_common;
-mod sync_index_command;
-mod sync_mft_command;
+pub mod index;
+pub mod mft;
 
-pub use sync_cli::IfExistsOutputBehaviour;
+mod drive_sync_info;
+mod if_exists_output_behaviour;
+mod sync_cli;
+
+pub use if_exists_output_behaviour::IfExistsOutputBehaviour;
 pub use sync_cli::SyncArgs;
-pub use sync_cli::SyncMode;
+pub use sync_cli::SyncCommand;

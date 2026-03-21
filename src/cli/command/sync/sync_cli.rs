@@ -1,47 +1,32 @@
-use crate::cli::command::sync::sync_index_command::invoke_sync_index;
-use crate::cli::command::sync::sync_mft_command::invoke_sync_mft;
+use std::collections::BTreeMap;
+
+use crate::cli::command::sync::IfExistsOutputBehaviour;
+use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
+use crate::cli::command::sync::drive_sync_info::resolve_drive_infos;
+use crate::cli::command::sync::index::SyncIndexArgs;
+use crate::cli::command::sync::mft::SyncMftArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use futures::TryStreamExt;
 use teamy_windows::storage::DriveLetterPattern;
+use tokio_stream::StreamExt;
+use tracing::Instrument;
+use tracing::info_span;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
-#[facet(rename_all = "kebab-case")]
 pub struct SyncArgs {
-    /// Sync stage to run (omit to run all stages: mft then index)
-    #[facet(args::subcommand)]
-    pub mode: Option<SyncMode>,
-
     /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
-    /// Overwrite existing cached MFT files
+    /// How to handle existing output files
     #[facet(args::named, default)]
     pub if_exists: IfExistsOutputBehaviour,
-}
 
-#[derive(Facet, Arbitrary, PartialEq, Debug, Clone)]
-#[repr(u8)]
-pub enum SyncMode {
-    /// Sync raw .mft snapshots
-    Mft,
-    /// Build `.mft_search_index` files from snapshots
-    Index,
-}
-
-#[derive(Default, Facet, Arbitrary, Clone, Debug, Eq, PartialEq, strum::Display)]
-#[repr(u8)]
-#[strum(serialize_all = "kebab-case")]
-#[facet(rename_all = "kebab-case")]
-pub enum IfExistsOutputBehaviour {
-    /// Skip existing files
-    Skip,
-    /// Overwrite existing files
-    #[default]
-    Overwrite,
-    /// Abort the operation if any existing files are found
-    Abort,
+    /// Sync stage to run
+    #[facet(args::subcommand)]
+    pub command: Option<SyncCommand>,
 }
 
 impl SyncArgs {
@@ -51,28 +36,83 @@ impl SyncArgs {
     ///
     /// Returns an error if the sync directory cannot be retrieved, elevation fails,
     /// or if reading/writing MFT data fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if spawning worker threads fails.
     pub fn invoke(self) -> eyre::Result<()> {
+        let drive_infos = resolve_drive_infos(&self.drive_letter_pattern)?;
+        let if_exists = &self.if_exists;
+
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
 
         runtime.block_on(async move {
-            match self.mode {
-                // None => {
-                //     let snapshots = invoke_sync_mft(&self, true).await?;
-                //     invoke_sync_index(&self, Some(&snapshots))
-                // }
-                Some(SyncMode::Mft) => {
-                    invoke_sync_mft(&self).await?;
-                    Ok(())
-                }
-                Some(SyncMode::Index) => invoke_sync_index(&self, None),
-                _ => todo!(),
-            }
+            let command = self.command.unwrap_or_default();
+            let drive_infos = command.invoke_preflight(drive_infos, if_exists)?;
+            command.invoke(drive_infos).await?;
+            Ok(())
         })
+    }
+}
+
+#[derive(Facet, Arbitrary, PartialEq, Debug, Clone, Default)]
+#[repr(u8)]
+#[facet(rename_all = "kebab-case")]
+pub enum SyncCommand {
+    /// Sync raw .mft snapshots
+    Mft(SyncMftArgs),
+    /// Build `.mft_search_index` files from snapshots
+    Index(SyncIndexArgs),
+    /// Sync both stages sequentially, with preflight checks and error handling for both stages
+    #[default]
+    Both,
+}
+
+impl SyncCommand {
+    /// Validate the sync can proceed before any command-specific work begins.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if preflight validation fails.
+    pub fn invoke_preflight(
+        &self,
+        drive_infos: BTreeMap<char, DriveSyncInfo>,
+        if_exists: &IfExistsOutputBehaviour,
+    ) -> eyre::Result<BTreeMap<char, DriveSyncInfo>> {
+        match self {
+            Self::Mft(SyncMftArgs) => SyncMftArgs.invoke_preflight(drive_infos, if_exists),
+            Self::Index(SyncIndexArgs) => SyncIndexArgs.invoke_preflight(drive_infos, if_exists),
+            Self::Both => {
+                SyncMftArgs.invoke_preflight(drive_infos, if_exists)
+            }
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the sync fails, likely caused by IO problems.
+    pub async fn invoke(&self, drive_infos: BTreeMap<char, DriveSyncInfo>) -> eyre::Result<()> {
+        match self {
+            Self::Mft(SyncMftArgs) => {
+                let mft_data = SyncMftArgs
+                    .invoke(drive_infos)
+                    .instrument(info_span!("dispatch mft sync work"))
+                    .await?;
+                tokio::pin!(mft_data);
+                let _guard = info_span!("collect mft sync results").entered();
+                while let Some(result) = mft_data.next().await {
+                    result?;
+                }
+                Ok(())
+            }
+            Self::Index(SyncIndexArgs) => SyncIndexArgs.invoke(drive_infos).await,
+            Self::Both => {
+                let mft_data = SyncMftArgs
+                    .invoke(drive_infos)
+                    .instrument(info_span!("dispatch mft sync work"))
+                    .await?.map_ok(async |(drive_info, physical_mft)| {
+                        
+                    });
+                Ok(())
+            }
+        }
     }
 }

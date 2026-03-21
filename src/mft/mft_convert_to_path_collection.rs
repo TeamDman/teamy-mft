@@ -4,7 +4,6 @@ use crate::mft::path_resolve;
 use crate::mft::path_resolve::MftEntryPathCollection;
 use eyre::Result;
 use humansize::BINARY;
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 use teamy_uom_extensions::HumanInformationExt;
@@ -29,13 +28,11 @@ use uom::si::time::second;
 ///
 /// Returns an error if reading or parsing the cached MFT data fails.
 #[instrument(level = "debug")]
-pub fn process_mft_file(
+pub fn convert_mft_file_to_path_collection(
     drive_letter: &str,
-    mft_file_path: &Path,
+    mft_file: &MftFile,
 ) -> Result<MftEntryPathCollection> {
     let start = std::time::Instant::now();
-
-    let mft_file = MftFile::from_path(mft_file_path)?;
 
     // collect filename attributes (parallel)
     let scan_start = Instant::now();
@@ -89,8 +86,7 @@ pub fn process_mft_file(
 
     debug!(
         drive_letter = &drive_letter,
-        "MFT {}: size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
-        mft_file_path.display(),
+        "MFT size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
         mft_file.size().format_human(BINARY),
         mft_file.record_count().separate_with_commas(),
         mft_file.record_size().format_human(BINARY),
@@ -115,8 +111,7 @@ pub fn process_mft_file(
     let entries_rate = Ratio::new::<ratio>(mft_file.record_count() as f64) / elapsed;
     debug!(
         drive_letter = &drive_letter,
-        "Total processing time for {} with {} entries: {} (size={} rate={} entries/s={})",
-        mft_file_path.display(),
+        "Total processing time for {drive_letter} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file.record_count().separate_with_commas(),
         elapsed.format_human(),
         mft_file.size().format_human(BINARY),
