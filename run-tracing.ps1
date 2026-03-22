@@ -101,7 +101,7 @@ $buildElapsed = $null
 $commandElapsed = $null
 $cleanupElapsed = $null
 $profilerElapsed = $null
-$captureFlushDelay = [TimeSpan]::FromSeconds(5)
+$captureFlushDelay = [TimeSpan]::FromSeconds(1)
 
 $captureDir = Join-Path $PSScriptRoot "tracy"
 if (-not (Test-Path $captureDir)) {
