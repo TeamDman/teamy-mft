@@ -3,6 +3,7 @@ use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use crate::read::physical_read_results::PhysicalReadResults;
 use eyre::Context;
+use tracing::trace;
 use std::collections::BTreeSet;
 use tracing::debug;
 use tracing::instrument;
@@ -156,7 +157,7 @@ impl PhysicalReader {
             .send(*self.file_handle)
             .wrap_err("Failed to send read request")?;
         self.in_flight += 1;
-        debug!(
+        trace!(
             in_flight = self.in_flight,
             remaining = self.remaining.len(),
             max_in_flight = self.max_in_flight,

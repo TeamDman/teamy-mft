@@ -2,6 +2,7 @@ use crate::read::logical_read_plan::LogicalFileSegment;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use humansize::BINARY;
+use tracing::trace;
 use std::collections::BTreeSet;
 use std::io::Cursor;
 use std::io::Seek;
@@ -185,7 +186,7 @@ impl<'a> Iterator for PhysicalReadResultsIter<'a> {
                 }
 
                 let physical_offset_current = active.physical_offset_current;
-                debug!(
+                trace!(
                     physical_offset_current = physical_offset_current.get::<byte>(),
                     physical_offset_end = active.physical_offset_end.get::<byte>(),
                     remaining =
@@ -242,7 +243,7 @@ impl<'a> Iterator for PhysicalReadResultsIter<'a> {
                 continue;
             };
 
-            debug!(
+            trace!(
                 ?next_logical_segment,
                 "Identifying physical data for logical segment"
             );

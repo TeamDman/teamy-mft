@@ -1,6 +1,7 @@
 use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use eyre::bail;
+use tracing::trace;
 use std::any::type_name;
 use std::ptr::null_mut;
 use tracing::debug;
@@ -165,7 +166,7 @@ impl ActivePhysicalReadRequest {
                 // SAFETY: `req_ptr` came from a boxed request whose OVERLAPPED
                 // field we previously leaked via `Box::into_raw`.
                 let boxed_req = unsafe { Box::from_raw(req_ptr) };
-                debug!(?boxed_req, bytes_transferred, "Completed IOCP read",);
+                trace!(?boxed_req, bytes_transferred, "Completed IOCP read",);
                 let mut data = boxed_req.buffer;
                 let copy_len =
                     (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
