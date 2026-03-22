@@ -31,6 +31,15 @@ const VERSION: &str = concat!(
 /// Panics if the CLI schema is invalid (should never happen with correct code).
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
+    
+    #[cfg(windows)]
+    {
+        // This can fail when stdout/stderr are redirected, so keep startup permissive.
+        let _ = teamy_windows::console::enable_ansi_support();
+
+        teamy_windows::string::warn_if_utf8_not_enabled();
+    }
+
     let cli: Cli = figue::Driver::new(
         figue::builder::<Cli>()
             .expect("schema should be valid")
@@ -51,7 +60,7 @@ pub fn main() -> eyre::Result<()> {
     if let Some(pid) = cli.global_args.console_pid {
         console_attach(pid)?;
     }
-
+    
     cli.invoke()?;
     Ok(())
 }
