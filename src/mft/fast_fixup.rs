@@ -19,6 +19,7 @@ use teamy_uom_extensions::HumanTimeExt;
 use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
+use tracing::trace;
 use tracing::debug_span;
 use tracing::instrument;
 use uom::si::f64::Information;
@@ -186,7 +187,7 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
         buf.len() / entry_size
     };
 
-    debug!(
+    trace!(
         "Detected entry size: {} bytes, total entries: {}",
         entry_size.separate_with_commas(),
         entry_count.separate_with_commas()
@@ -235,7 +236,7 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
         (elapsed, rate)
     };
 
-    debug!(
+    trace!(
         "Took {elapsed} to process {count} records ({rate}) - fixup stats: applied={applied} already-applied={already_applied} invalid={invalid}",
         elapsed = elapsed.format_human(),
         count = entry_count.separate_with_commas(),

@@ -1,3 +1,4 @@
+use tracing::trace;
 use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::path_resolve;
@@ -56,7 +57,7 @@ pub fn convert_mft_file_to_path_collection(
     };
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = mft_file.size().over(scan_elapsed);
-    debug!(
+    trace!(
         drive_letter = &drive_letter,
         "Took {} ({}) entries_with_names={}",
         scan_elapsed.format_human(),
@@ -65,7 +66,7 @@ pub fn convert_mft_file_to_path_collection(
     );
 
     // resolve paths (multi-parent default)
-    debug!(
+    trace!(
         drive_letter = &drive_letter,
         "Resolving (multi-parent) paths for {} filename attributes",
         file_names.x30_count().separate_with_commas()
@@ -83,7 +84,7 @@ pub fn convert_mft_file_to_path_collection(
     let resolved_entries_f64 = resolved_entries as f64;
     let resolved_size = uom::si::f64::Information::new::<byte>(resolved_entries_f64 * 256.0);
     let resolve_rate = resolved_size.over(path_resolve_elapsed);
-    debug!(
+    trace!(
         drive_letter = &drive_letter,
         "Took {} ({}) entries_resolved={} total_paths={}",
         path_resolve_elapsed.format_human(),
@@ -92,7 +93,7 @@ pub fn convert_mft_file_to_path_collection(
         total_paths.separate_with_commas()
     );
 
-    debug!(
+    trace!(
         drive_letter = &drive_letter,
         "MFT size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
         mft_file.size().format_human(BINARY),
