@@ -20,7 +20,6 @@ use uom::si::information::byte;
 pub struct SyncIndexArgs;
 
 impl SyncIndexArgs {
-
     /// Validate the sync can proceed before any index writes begin.
     ///
     /// # Errors
@@ -82,7 +81,7 @@ impl SyncIndexArgs {
 
         Ok(())
     }
-    
+
     /// Build a search index from an already-loaded in-memory `MftFile`.
     ///
     /// # Errors
@@ -164,5 +163,4 @@ impl SyncIndexArgs {
             )
         })
     }
-
 }

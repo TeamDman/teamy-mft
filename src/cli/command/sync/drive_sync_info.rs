@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::info;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DriveSyncInfo {
     pub drive_letter: char,
     pub mft_output_path: PathBuf,

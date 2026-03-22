@@ -8,12 +8,13 @@ use eyre::Context;
 use eyre::bail;
 use eyre::ensure;
 use facet::Facet;
+use futures::StreamExt as _;
+use futures::stream;
 use itertools::Itertools;
 use std::collections::BTreeMap;
 use teamy_windows::elevation::enable_backup_privileges;
 use teamy_windows::elevation::ensure_elevated;
 use tokio_stream::Stream;
-use tokio_stream::StreamExt;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
@@ -105,14 +106,25 @@ impl SyncMftArgs {
 pub fn read_physical_mft_stream_with_info(
     drive_infos: impl IntoIterator<Item = DriveSyncInfo>,
 ) -> impl Stream<Item = eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)>> {
-    futures::stream::iter(drive_infos.into_iter()).then(|drive_info| async {
-        let physical_mft_read_result =
-            read_physical_mft(drive_info.drive_letter).wrap_err_with(|| {
-                format!(
-                    "Failed reading MFT data for drive {}",
-                    drive_info.drive_letter
-                )
-            })?;
-        Ok((drive_info, physical_mft_read_result))
-    })
+    let drive_infos = drive_infos.into_iter().collect::<Vec<_>>();
+    let concurrency = drive_infos.len().max(1);
+
+    stream::iter(drive_infos)
+        .map(|drive_info| async move {
+            tokio::task::spawn_blocking(
+                move || -> eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)> {
+                    let physical_mft_read_result = read_physical_mft(drive_info.drive_letter)
+                        .wrap_err_with(|| {
+                            format!(
+                                "Failed reading MFT data for drive {}",
+                                drive_info.drive_letter
+                            )
+                        })?;
+                    eyre::Ok((drive_info, physical_mft_read_result))
+                },
+            )
+            .await
+            .map_err(|error| eyre::eyre!("Failed joining MFT read task: {error}"))?
+        })
+        .buffer_unordered(concurrency)
 }
