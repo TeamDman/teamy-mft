@@ -1,0 +1,4 @@
+- Indexed query hot path is in src/cli/command/query/query_cli.rs.
+- Parallelizing per-drive search index loading materially improved query latency for the flower .jar$ trace from ~3.18s to ~1.54s on 2026-03-21.
+- teamy-mft currently resolves to a nucleo API without Injector::extend, even though the sibling workspace nucleo source has that method; verify the actual dependency before assuming newer API surface.
+- Useful validation commands: cargo check, cargo check --features tracy, cargo run --release --features tracy -- query "'flower .jar$" --debug.

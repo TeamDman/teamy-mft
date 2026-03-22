@@ -6,6 +6,7 @@ use color_eyre::owo_colors::OwoColorize;
 use eyre::Context;
 use facet::Facet;
 use figue::{self as args};
+use rayon::prelude::*;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
@@ -129,6 +130,96 @@ fn print_results_columns(results: &[IndexedPathRow], colorize: bool) {
     }
 }
 
+fn should_include_indexed_row(
+    include_deleted: bool,
+    only_deleted: bool,
+    has_deleted_entries: bool,
+) -> bool {
+    if only_deleted {
+        return has_deleted_entries;
+    }
+
+    include_deleted || !has_deleted_entries
+}
+
+fn load_and_queue_drive_search_index(
+    drive_letter: char,
+    sync_dir: &Path,
+    injector: &nucleo::Injector<IndexedPathRow>,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<usize> {
+    let _span = info_span!(
+        "load_drive_search_index",
+        drive = %drive_letter,
+    )
+    .entered();
+    let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
+
+    {
+        let _span = info_span!(
+            "validate_search_index_file",
+            path = %index_path.display(),
+        )
+        .entered();
+        if !index_path.is_file() {
+            eyre::bail!(
+                "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
+                index_path.display(),
+                drive_letter
+            );
+        }
+    }
+
+    let mapped = {
+        let _span = info_span!(
+            "map_search_index_file",
+            path = %index_path.display(),
+        )
+        .entered();
+        MappedSearchIndex::open(&index_path).wrap_err_with(|| {
+            format!(
+                "Failed loading search index for drive {} from {}",
+                drive_letter,
+                index_path.display()
+            )
+        })?
+    };
+
+    let rows: Vec<SearchIndexPathRow> = {
+        let _span = info_span!("decode_search_index_rows").entered();
+        mapped.rows().wrap_err_with(|| {
+            format!(
+                "Failed parsing search index rows for drive {} from {}",
+                drive_letter,
+                index_path.display()
+            )
+        })?
+    };
+
+    let items: Vec<IndexedPathRow> = {
+        let _span = info_span!("filter_and_queue_index_rows", source_rows = rows.len()).entered();
+        rows.into_iter()
+            .filter(|row| {
+                should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries)
+            })
+            .map(|row| IndexedPathRow {
+                path: row.path,
+                has_deleted_entries: row.has_deleted_entries,
+            })
+            .collect()
+    };
+
+    let queued_rows = items.len();
+    for item in items {
+        injector.push(item, |item, cols| {
+            cols[0] = item.path.clone().into();
+        });
+    }
+
+    Ok(queued_rows)
+}
+
 impl QueryArgs {
     fn should_use_columns(&self, stdout_is_terminal: bool) -> bool {
         match self.density {
@@ -159,74 +250,24 @@ impl QueryArgs {
         {
             let _span = info_span!("load_search_indexes", drives = mft_files.len()).entered();
             let injector = nucleo.injector();
-            for (drive_letter, _) in mft_files {
-                let _span = info_span!(
-                    "load_drive_search_index",
-                    drive = %drive_letter,
-                )
-                .entered();
-                let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-                {
-                    let _span = info_span!(
-                        "validate_search_index_file",
-                        path = %index_path.display(),
+            let include_deleted = self.include_deleted;
+            let only_deleted = self.only_deleted;
+            let load_results: Vec<eyre::Result<usize>> = mft_files
+                .into_par_iter()
+                .map(|(drive_letter, _)| {
+                    let injector = injector.clone();
+                    load_and_queue_drive_search_index(
+                        drive_letter,
+                        sync_dir,
+                        &injector,
+                        include_deleted,
+                        only_deleted,
                     )
-                    .entered();
-                    if !index_path.is_file() {
-                        eyre::bail!(
-                            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-                            index_path.display(),
-                            drive_letter
-                        );
-                    }
-                }
+                })
+                .collect();
 
-                let mapped = {
-                    let _span = info_span!(
-                        "map_search_index_file",
-                        path = %index_path.display(),
-                    )
-                    .entered();
-                    MappedSearchIndex::open(&index_path).wrap_err_with(|| {
-                        format!(
-                            "Failed loading search index for drive {} from {}",
-                            drive_letter,
-                            index_path.display()
-                        )
-                    })?
-                };
-
-                let rows: Vec<SearchIndexPathRow> = {
-                    let _span = info_span!("decode_search_index_rows").entered();
-                    mapped.rows().wrap_err_with(|| {
-                        format!(
-                            "Failed parsing search index rows for drive {} from {}",
-                            drive_letter,
-                            index_path.display()
-                        )
-                    })?
-                };
-
-                {
-                    let _span = info_span!("filter_and_queue_index_rows", source_rows = rows.len()).entered();
-                    for row in rows {
-                        if self.only_deleted && !row.has_deleted_entries {
-                            continue;
-                        }
-                        if !self.only_deleted && !self.include_deleted && row.has_deleted_entries {
-                            continue;
-                        }
-
-                        let item = IndexedPathRow {
-                            path: row.path,
-                            has_deleted_entries: row.has_deleted_entries,
-                        };
-                        injector.push(item, |x, cols| {
-                            cols[0] = x.path.clone().into();
-                        });
-                        loaded_rows += 1;
-                    }
-                }
+            for result in load_results {
+                loaded_rows += result?;
             }
         }
 
