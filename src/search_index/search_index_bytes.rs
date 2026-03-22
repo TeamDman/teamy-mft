@@ -374,10 +374,17 @@ impl<'a> SearchIndexBytes<'a> {
                     format!("Invalid UTF-8 display segment payload at segment {segment_index}")
                 })?;
             }
-            let normalized = std::str::from_utf8(&self.bytes[display_end..normalized_end])
-                .wrap_err_with(|| {
+            let normalized_bytes = &self.bytes[display_end..normalized_end];
+            let normalized = if mode.should_validate() {
+                std::str::from_utf8(normalized_bytes).wrap_err_with(|| {
                     format!("Invalid UTF-8 normalized segment payload at segment {segment_index}")
-                })?;
+                })?
+            } else {
+                // SAFETY: trusted query parsing is only used for search indexes
+                // written by this binary, which serializes normalized path
+                // segments from valid Rust `str` values.
+                unsafe { std::str::from_utf8_unchecked(normalized_bytes) }
+            };
             segments.push(SearchIndexPathSegmentView {
                 display_bytes,
                 normalized,
