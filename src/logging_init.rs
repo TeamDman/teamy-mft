@@ -35,7 +35,6 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
         .from_env()?;
     let subscriber = subscriber.with(env_filter_layer);
 
-    #[cfg(all(feature = "tracy", not(test)))]
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_file(cfg!(debug_assertions))
         .with_line_number(cfg!(debug_assertions))
@@ -44,14 +43,6 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
         .pretty()
         .with_timer(tracing_subscriber::fmt::time::uptime());
 
-    #[cfg(not(all(feature = "tracy", not(test))))]
-    let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_file(cfg!(debug_assertions))
-        .with_line_number(cfg!(debug_assertions))
-        .with_target(true)
-        .with_writer(std::io::stderr)
-        .pretty()
-        .without_time();
     let subscriber = subscriber.with(stderr_layer);
 
     let json_log_path = match global_args.log_file.as_ref() {

@@ -14,7 +14,9 @@ use std::sync::Arc;
 use tracing::info_span;
 use zerotrie::ZeroTriePerfectHash;
 
-const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4;
+const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4 + 4 + 4;
+const SEARCH_INDEX_SEGMENT_LEN_PREFIX: usize = 4 + 4;
+const SEARCH_INDEX_EXTENSION_SUFFIX_LEN_PREFIX: usize = 4;
 const SEARCH_INDEX_NODE_LEN: usize = 4 + 4;
 const SEARCH_INDEX_TERMINAL_LEN: usize = 4 + 1;
 const SEARCH_INDEX_POSTING_RANGE_LEN: usize = 4 + 4;
@@ -38,6 +40,22 @@ pub struct SearchIndexPathSegmentView<'a> {
     pub normalized: &'a str,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SearchIndexExtensionSuffixView<'a> {
+    pub normalized_suffix: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SearchIndexBodyPrefix<'a> {
+    cursor: usize,
+    segment_count: usize,
+    extension_count: usize,
+    path_node_count: usize,
+    posting_row_id_count: usize,
+    extension_posting_row_id_count: usize,
+    trie_bytes: &'a [u8],
+}
+
 impl<'a> SearchIndexPathSegmentView<'a> {
     #[must_use]
     pub fn display_bytes(&self) -> &'a [u8] {
@@ -55,12 +73,16 @@ pub struct ParsedSearchIndex<'a> {
     bytes: &'a [u8],
     trie_bytes: &'a [u8],
     segments: Arc<[SearchIndexPathSegmentView<'a>]>,
+    extension_suffixes: Arc<[SearchIndexExtensionSuffixView<'a>]>,
     path_node_offset: usize,
     terminal_offset: usize,
     terminal_count: usize,
     posting_range_offset: usize,
     posting_row_id_offset: usize,
     posting_row_id_count: usize,
+    extension_posting_range_offset: usize,
+    extension_posting_row_id_offset: usize,
+    extension_posting_row_id_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -223,17 +245,6 @@ impl<'a> SearchIndexBytes<'a> {
     }
 
     fn parse_body(&self, mode: ParseMode) -> eyre::Result<ParsedSearchIndex<'a>> {
-        let header = {
-            let _span = info_span!("parse_search_index_header").entered();
-            self.header()?
-        };
-        let terminal_count = usize::try_from(header.node_count).wrap_err_with(|| {
-            format!(
-                "Search index terminal count {} does not fit into usize",
-                header.node_count
-            )
-        })?;
-
         if self.bytes.len() < SEARCH_INDEX_HEADER_LEN + SEARCH_INDEX_BODY_PREFIX_LEN {
             bail!(
                 "Invalid search index body: expected at least {} bytes after header, got {}",
@@ -242,29 +253,43 @@ impl<'a> SearchIndexBytes<'a> {
             );
         }
 
-        let (mut cursor, segment_count, path_node_count, posting_row_id_count, trie_bytes) = {
+        let terminal_count = {
+            let _span = info_span!("parse_search_index_header").entered();
+            terminal_count_from_header(self.header()?)?
+        };
+
+        let body_prefix = {
             let _span = info_span!("parse_search_index_body_prefix").entered();
             self.parse_body_prefix()?
         };
+        let mut cursor = body_prefix.cursor;
         let segments = {
             let _span = info_span!("parse_search_index_segments").entered();
-            self.parse_segments(&mut cursor, segment_count, mode)?
+            self.parse_segments(&mut cursor, body_prefix.segment_count, mode)?
+        };
+        let extension_suffixes = {
+            let _span = info_span!("parse_search_index_extensions").entered();
+            self.parse_extension_suffixes(&mut cursor, body_prefix.extension_count, mode)?
         };
 
         let layout = {
             let _span = info_span!("compute_search_index_layout").entered();
             compute_search_index_layout(
                 cursor,
-                segment_count,
-                path_node_count,
+                body_prefix.segment_count,
+                body_prefix.extension_count,
+                body_prefix.path_node_count,
                 terminal_count,
-                posting_row_id_count,
+                body_prefix.posting_row_id_count,
+                body_prefix.extension_posting_row_id_count,
             )?
         };
         let path_node_offset = layout.path_node;
         let terminal_offset = layout.terminal;
         let posting_range_offset = layout.posting_range;
         let posting_row_id_offset = layout.posting_row_id;
+        let extension_posting_range_offset = layout.extension_posting_range;
+        let extension_posting_row_id_offset = layout.extension_posting_row_id;
         let end = layout.end;
         if end != self.bytes.len() {
             bail!(
@@ -275,51 +300,34 @@ impl<'a> SearchIndexBytes<'a> {
         }
 
         if mode.should_validate() {
-            info_span!("validate_search_index_path_nodes").in_scope(|| {
-                validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
-                Ok::<(), eyre::Report>(())
-            })?;
-            info_span!("validate_search_index_terminals").in_scope(|| {
-                validate_terminal_rows(
-                    self.bytes,
-                    terminal_offset,
-                    terminal_count,
-                    path_node_count,
-                )?;
-                Ok::<(), eyre::Report>(())
-            })?;
-            info_span!("validate_search_index_postings").in_scope(|| {
-                validate_postings(
-                    self.bytes,
-                    posting_range_offset,
-                    posting_row_id_offset,
-                    segment_count,
-                    posting_row_id_count,
-                    terminal_count,
-                )?;
-                Ok::<(), eyre::Report>(())
-            })?;
+            validate_parsed_tables(self.bytes, &body_prefix, terminal_count, &segments, &layout)?;
         }
 
         Ok(ParsedSearchIndex {
             bytes: self.bytes,
-            trie_bytes,
+            trie_bytes: body_prefix.trie_bytes,
             segments,
+            extension_suffixes,
             path_node_offset,
             terminal_offset,
             terminal_count,
             posting_range_offset,
             posting_row_id_offset,
-            posting_row_id_count,
+            posting_row_id_count: body_prefix.posting_row_id_count,
+            extension_posting_range_offset,
+            extension_posting_row_id_offset,
+            extension_posting_row_id_count: body_prefix.extension_posting_row_id_count,
         })
     }
 
-    fn parse_body_prefix(&self) -> eyre::Result<(usize, usize, usize, usize, &'a [u8])> {
+    fn parse_body_prefix(&self) -> eyre::Result<SearchIndexBodyPrefix<'a>> {
         let mut cursor = SEARCH_INDEX_HEADER_LEN;
         let segment_count = read_u32(self.bytes, &mut cursor) as usize;
+        let extension_count = read_u32(self.bytes, &mut cursor) as usize;
         let path_node_count = read_u32(self.bytes, &mut cursor) as usize;
         let trie_len = read_u32(self.bytes, &mut cursor) as usize;
         let posting_row_id_count = read_u32(self.bytes, &mut cursor) as usize;
+        let extension_posting_row_id_count = read_u32(self.bytes, &mut cursor) as usize;
 
         let trie_end = cursor + trie_len;
         if trie_end > self.bytes.len() {
@@ -333,13 +341,15 @@ impl<'a> SearchIndexBytes<'a> {
         let trie_bytes = &self.bytes[cursor..trie_end];
         cursor = trie_end;
 
-        Ok((
+        Ok(SearchIndexBodyPrefix {
             cursor,
             segment_count,
+            extension_count,
             path_node_count,
             posting_row_id_count,
+            extension_posting_row_id_count,
             trie_bytes,
-        ))
+        })
     }
 
     fn parse_segments(
@@ -350,7 +360,7 @@ impl<'a> SearchIndexBytes<'a> {
     ) -> eyre::Result<Arc<[SearchIndexPathSegmentView<'a>]>> {
         let mut segments = Vec::with_capacity(segment_count);
         for segment_index in 0..segment_count {
-            if self.bytes.len() < *cursor + 8 {
+            if self.bytes.len() < *cursor + SEARCH_INDEX_SEGMENT_LEN_PREFIX {
                 bail!(
                     "Corrupt search index: truncated segment header at segment {}",
                     segment_index
@@ -394,6 +404,115 @@ impl<'a> SearchIndexBytes<'a> {
 
         Ok(Arc::<[SearchIndexPathSegmentView<'a>]>::from(segments))
     }
+
+    fn parse_extension_suffixes(
+        &self,
+        cursor: &mut usize,
+        extension_count: usize,
+        mode: ParseMode,
+    ) -> eyre::Result<Arc<[SearchIndexExtensionSuffixView<'a>]>> {
+        let mut extension_suffixes = Vec::with_capacity(extension_count);
+        for extension_index in 0..extension_count {
+            if self.bytes.len() < *cursor + SEARCH_INDEX_EXTENSION_SUFFIX_LEN_PREFIX {
+                bail!(
+                    "Corrupt search index: truncated extension suffix header at index {}",
+                    extension_index
+                );
+            }
+
+            let normalized_len = read_u32(self.bytes, cursor) as usize;
+            let normalized_end = *cursor + normalized_len;
+            if normalized_end > self.bytes.len() {
+                bail!(
+                    "Corrupt search index: truncated extension suffix payload at index {}",
+                    extension_index
+                );
+            }
+
+            let normalized_bytes = &self.bytes[*cursor..normalized_end];
+            let normalized_suffix = if mode.should_validate() {
+                std::str::from_utf8(normalized_bytes).wrap_err_with(|| {
+                    format!(
+                        "Invalid UTF-8 normalized extension suffix payload at index {extension_index}"
+                    )
+                })?
+            } else {
+                // SAFETY: trusted query parsing is only used for search indexes
+                // written by this binary, which serializes normalized suffixes
+                // from valid Rust `str` values.
+                unsafe { std::str::from_utf8_unchecked(normalized_bytes) }
+            };
+
+            extension_suffixes.push(SearchIndexExtensionSuffixView { normalized_suffix });
+            *cursor = normalized_end;
+        }
+
+        Ok(Arc::<[SearchIndexExtensionSuffixView<'a>]>::from(
+            extension_suffixes,
+        ))
+    }
+}
+
+fn terminal_count_from_header(header: SearchIndexHeader) -> eyre::Result<usize> {
+    usize::try_from(header.node_count).wrap_err_with(|| {
+        format!(
+            "Search index terminal count {} does not fit into usize",
+            header.node_count
+        )
+    })
+}
+
+fn validate_parsed_tables(
+    bytes: &[u8],
+    body_prefix: &SearchIndexBodyPrefix<'_>,
+    terminal_count: usize,
+    segments: &[SearchIndexPathSegmentView<'_>],
+    layout: &SearchIndexLayout,
+) -> eyre::Result<()> {
+    info_span!("validate_search_index_path_nodes").in_scope(|| {
+        validate_path_nodes(
+            bytes,
+            layout.path_node,
+            body_prefix.path_node_count,
+            segments,
+        )?;
+        Ok::<(), eyre::Report>(())
+    })?;
+    info_span!("validate_search_index_terminals").in_scope(|| {
+        validate_terminal_rows(
+            bytes,
+            layout.terminal,
+            terminal_count,
+            body_prefix.path_node_count,
+        )?;
+        Ok::<(), eyre::Report>(())
+    })?;
+    info_span!("validate_search_index_postings").in_scope(|| {
+        validate_posting_table(
+            bytes,
+            layout.posting_range,
+            layout.posting_row_id,
+            body_prefix.segment_count,
+            body_prefix.posting_row_id_count,
+            terminal_count,
+            "segment",
+        )?;
+        Ok::<(), eyre::Report>(())
+    })?;
+    info_span!("validate_search_index_extension_postings").in_scope(|| {
+        validate_posting_table(
+            bytes,
+            layout.extension_posting_range,
+            layout.extension_posting_row_id,
+            body_prefix.extension_count,
+            body_prefix.extension_posting_row_id_count,
+            terminal_count,
+            "extension suffix",
+        )?;
+        Ok::<(), eyre::Report>(())
+    })?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -470,23 +589,64 @@ impl<'a> ParsedSearchIndex<'a> {
             );
         }
 
-        let range_offset = self.posting_range_offset + segment_id * SEARCH_INDEX_POSTING_RANGE_LEN;
+        self.posting_iter(
+            self.posting_range_offset,
+            self.posting_row_id_offset,
+            self.posting_row_id_count,
+            segment_id,
+            "segment",
+        )
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the extension posting range is malformed.
+    pub fn extension_postings(
+        &self,
+        normalized_suffix: &str,
+    ) -> eyre::Result<Option<SearchIndexPostingIter<'a>>> {
+        let Ok(extension_index) = self
+            .extension_suffixes
+            .binary_search_by_key(&normalized_suffix, |entry| entry.normalized_suffix)
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.posting_iter(
+            self.extension_posting_range_offset,
+            self.extension_posting_row_id_offset,
+            self.extension_posting_row_id_count,
+            extension_index,
+            "extension suffix",
+        )?))
+    }
+
+    fn posting_iter(
+        &self,
+        range_table_offset: usize,
+        posting_row_id_offset: usize,
+        posting_row_id_count: usize,
+        entry_index: usize,
+        entry_kind: &str,
+    ) -> eyre::Result<SearchIndexPostingIter<'a>> {
+        let range_offset = range_table_offset + entry_index * SEARCH_INDEX_POSTING_RANGE_LEN;
         let posting_start = read_u32_at(self.bytes, range_offset) as usize;
         let posting_len = read_u32_at(self.bytes, range_offset + 4) as usize;
         let posting_end = posting_start + posting_len;
-        if posting_end > self.posting_row_id_count {
+        if posting_end > posting_row_id_count {
             bail!(
-                "Corrupt search index: segment {} posting range {}..{} exceeds posting table length {}",
-                segment_id,
+                "Corrupt search index: {} {} posting range {}..{} exceeds posting table length {}",
+                entry_kind,
+                entry_index,
                 posting_start,
                 posting_end,
-                self.posting_row_id_count
+                posting_row_id_count
             );
         }
 
         Ok(SearchIndexPostingIter {
             bytes: self.bytes,
-            next_offset: self.posting_row_id_offset + posting_start * SEARCH_INDEX_POSTING_ROW_LEN,
+            next_offset: posting_row_id_offset + posting_start * SEARCH_INDEX_POSTING_ROW_LEN,
             remaining_rows: posting_len,
         })
     }
@@ -581,9 +741,9 @@ impl SearchIndexBytesMut {
     /// # Errors
     ///
     /// Returns an error if any row cannot be buffered for later serialization.
-    pub fn extend_rows<'a>(
+    pub fn extend_rows<'b>(
         &mut self,
-        rows: impl IntoIterator<Item = &'a SearchIndexPathRow>,
+        rows: impl IntoIterator<Item = &'b SearchIndexPathRow>,
     ) -> eyre::Result<()> {
         for row in rows {
             self.push_row(row)?;
@@ -667,16 +827,36 @@ struct SearchIndexLayout {
     terminal: usize,
     posting_range: usize,
     posting_row_id: usize,
+    extension_posting_range: usize,
+    extension_posting_row_id: usize,
     end: usize,
+}
+
+#[derive(Debug)]
+struct SearchIndexSerializationTables {
+    segment_entries: Vec<(String, String)>,
+    postings_by_segment: Vec<Vec<u32>>,
+    extension_postings_by_suffix: BTreeMap<String, Vec<u32>>,
+    trie_bytes: Vec<u8>,
+    path_nodes: Vec<SearchIndexNodeRecord>,
+    terminals: Vec<(u32, bool)>,
 }
 
 fn serialize_search_index(
     header: SearchIndexHeader,
     rows: &[SearchIndexPathRow],
 ) -> eyre::Result<Vec<u8>> {
+    let tables = collect_search_index_tables(rows)?;
+    serialize_search_index_tables(header, tables, rows.len())
+}
+
+fn collect_search_index_tables(
+    rows: &[SearchIndexPathRow],
+) -> eyre::Result<SearchIndexSerializationTables> {
     let mut segment_ids_by_display = HashMap::<String, u32>::new();
     let mut segment_entries = Vec::<(String, String)>::new();
     let mut postings_by_segment = Vec::<Vec<u32>>::new();
+    let mut extension_postings_by_suffix = BTreeMap::<String, Vec<u32>>::new();
     let mut normalized_trie_entries = BTreeMap::<Vec<u8>, usize>::new();
     let mut path_nodes = Vec::<SearchIndexNodeRecord>::new();
     let mut terminals = Vec::<(u32, bool)>::with_capacity(rows.len());
@@ -719,26 +899,71 @@ fn serialize_search_index(
         }
 
         if parent_node_index == NO_PARENT_NODE {
-            bail!("Cannot encode empty path into search index")
+            bail!("Cannot encode empty path into search index");
         }
 
         row_segment_ids.sort_unstable();
         row_segment_ids.dedup();
-        for segment_id in row_segment_ids {
+        for &segment_id in &row_segment_ids {
             postings_by_segment[segment_id as usize].push(row_index);
+
+            let normalized = &segment_entries[segment_id as usize].1;
+            if let Some(normalized_suffix) = normalized_extension_suffix(normalized) {
+                extension_postings_by_suffix
+                    .entry(normalized_suffix.to_owned())
+                    .or_default()
+                    .push(row_index);
+            }
         }
 
         terminals.push((parent_node_index, row.has_deleted_entries));
     }
 
+    for row_ids in extension_postings_by_suffix.values_mut() {
+        row_ids.sort_unstable();
+        row_ids.dedup();
+    }
+
     let trie: ZeroTriePerfectHash<Vec<u8>> = normalized_trie_entries.into_iter().collect();
-    let trie_bytes = trie.into_store();
+    Ok(SearchIndexSerializationTables {
+        segment_entries,
+        postings_by_segment,
+        extension_postings_by_suffix,
+        trie_bytes: trie.into_store(),
+        path_nodes,
+        terminals,
+    })
+}
+
+fn serialize_search_index_tables(
+    header: SearchIndexHeader,
+    tables: SearchIndexSerializationTables,
+    row_count: usize,
+) -> eyre::Result<Vec<u8>> {
+    let SearchIndexSerializationTables {
+        segment_entries,
+        postings_by_segment,
+        extension_postings_by_suffix,
+        trie_bytes,
+        path_nodes,
+        terminals,
+    } = tables;
+
     let segment_count: u32 = segment_entries.len().try_into().wrap_err_with(|| {
         format!(
             "Too many unique path segments to encode ({})",
             segment_entries.len()
         )
     })?;
+    let extension_count: u32 = extension_postings_by_suffix
+        .len()
+        .try_into()
+        .wrap_err_with(|| {
+            format!(
+                "Too many unique extension suffixes to encode ({})",
+                extension_postings_by_suffix.len()
+            )
+        })?;
     let path_node_count: u32 = path_nodes
         .len()
         .try_into()
@@ -755,19 +980,33 @@ fn serialize_search_index(
         .sum::<usize>()
         .try_into()
         .wrap_err("Too many segment posting row ids to encode")?;
+    let extension_posting_row_id_count: u32 = extension_postings_by_suffix
+        .values()
+        .map(std::vec::Vec::len)
+        .sum::<usize>()
+        .try_into()
+        .wrap_err("Too many extension posting row ids to encode")?;
 
-    let mut bytes = Vec::with_capacity(SEARCH_INDEX_HEADER_LEN + rows.len() * 16);
+    let mut bytes = Vec::with_capacity(SEARCH_INDEX_HEADER_LEN + row_count * 16);
     header.extend_vec(&mut bytes);
     bytes.extend_from_slice(&segment_count.to_le_bytes());
+    bytes.extend_from_slice(&extension_count.to_le_bytes());
     bytes.extend_from_slice(&path_node_count.to_le_bytes());
     bytes.extend_from_slice(&trie_len.to_le_bytes());
     bytes.extend_from_slice(&posting_row_id_count.to_le_bytes());
+    bytes.extend_from_slice(&extension_posting_row_id_count.to_le_bytes());
     bytes.extend_from_slice(&trie_bytes);
 
     serialize_segment_entries(&mut bytes, &segment_entries)?;
+    serialize_extension_suffix_entries(&mut bytes, &extension_postings_by_suffix)?;
     serialize_path_nodes(&mut bytes, &path_nodes);
     serialize_terminals(&mut bytes, &terminals);
     serialize_postings(&mut bytes, &postings_by_segment, posting_row_id_count)?;
+    serialize_extension_postings(
+        &mut bytes,
+        &extension_postings_by_suffix,
+        extension_posting_row_id_count,
+    )?;
 
     Ok(bytes)
 }
@@ -775,9 +1014,11 @@ fn serialize_search_index(
 fn compute_search_index_layout(
     cursor: usize,
     segment_count: usize,
+    extension_count: usize,
     path_node_count: usize,
     terminal_count: usize,
     posting_row_id_count: usize,
+    extension_posting_row_id_count: usize,
 ) -> eyre::Result<SearchIndexLayout> {
     let path_node_bytes_len = path_node_count
         .checked_mul(SEARCH_INDEX_NODE_LEN)
@@ -791,18 +1032,31 @@ fn compute_search_index_layout(
     let posting_row_id_bytes_len = posting_row_id_count
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
         .ok_or_else(|| eyre::eyre!("Search index posting row-id table length overflow"))?;
+    let extension_posting_range_bytes_len = extension_count
+        .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
+        .ok_or_else(|| eyre::eyre!("Search index extension posting-range table length overflow"))?;
+    let extension_posting_row_id_bytes_len = extension_posting_row_id_count
+        .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
+        .ok_or_else(|| {
+            eyre::eyre!("Search index extension posting row-id table length overflow")
+        })?;
 
     let path_node_offset = cursor;
     let terminal_offset = path_node_offset + path_node_bytes_len;
     let posting_range_offset = terminal_offset + terminal_bytes_len;
     let posting_row_id_offset = posting_range_offset + posting_range_bytes_len;
-    let end_offset = posting_row_id_offset + posting_row_id_bytes_len;
+    let extension_posting_range_offset = posting_row_id_offset + posting_row_id_bytes_len;
+    let extension_posting_row_id_offset =
+        extension_posting_range_offset + extension_posting_range_bytes_len;
+    let end_offset = extension_posting_row_id_offset + extension_posting_row_id_bytes_len;
 
     Ok(SearchIndexLayout {
         path_node: path_node_offset,
         terminal: terminal_offset,
         posting_range: posting_range_offset,
         posting_row_id: posting_row_id_offset,
+        extension_posting_range: extension_posting_range_offset,
+        extension_posting_row_id: extension_posting_row_id_offset,
         end: end_offset,
     })
 }
@@ -858,23 +1112,25 @@ fn validate_terminal_rows(
     Ok(())
 }
 
-fn validate_postings(
+fn validate_posting_table(
     bytes: &[u8],
     posting_range_offset: usize,
     posting_row_id_offset: usize,
-    segment_count: usize,
+    entry_count: usize,
     posting_row_id_count: usize,
     terminal_count: usize,
+    entry_kind: &str,
 ) -> eyre::Result<()> {
-    for segment_id in 0..segment_count {
-        let range_offset = posting_range_offset + segment_id * SEARCH_INDEX_POSTING_RANGE_LEN;
+    for entry_index in 0..entry_count {
+        let range_offset = posting_range_offset + entry_index * SEARCH_INDEX_POSTING_RANGE_LEN;
         let posting_start = read_u32_at(bytes, range_offset) as usize;
         let posting_len = read_u32_at(bytes, range_offset + 4) as usize;
         let posting_end = posting_start + posting_len;
         if posting_end > posting_row_id_count {
             bail!(
-                "Corrupt search index: segment {} posting range {}..{} exceeds posting table length {}",
-                segment_id,
+                "Corrupt search index: {} {} posting range {}..{} exceeds posting table length {}",
+                entry_kind,
+                entry_index,
                 posting_start,
                 posting_end,
                 posting_row_id_count
@@ -887,8 +1143,9 @@ fn validate_postings(
             let row_id = read_u32_at(bytes, row_id_offset) as usize;
             if row_id >= terminal_count {
                 bail!(
-                    "Corrupt search index: segment {} posting references missing terminal row {}",
-                    segment_id,
+                    "Corrupt search index: {} {} posting references missing terminal row {}",
+                    entry_kind,
+                    entry_index,
                     row_id
                 );
             }
@@ -896,6 +1153,11 @@ fn validate_postings(
     }
 
     Ok(())
+}
+
+fn normalized_extension_suffix(segment: &str) -> Option<&str> {
+    let dot_index = segment.rfind('.')?;
+    (dot_index + 1 < segment.len()).then_some(&segment[dot_index..])
 }
 
 fn serialize_segment_entries(
@@ -921,6 +1183,26 @@ fn serialize_segment_entries(
         bytes.extend_from_slice(&display_len.to_le_bytes());
         bytes.extend_from_slice(&normalized_len.to_le_bytes());
         bytes.extend_from_slice(display_bytes);
+        bytes.extend_from_slice(normalized_bytes);
+    }
+
+    Ok(())
+}
+
+fn serialize_extension_suffix_entries(
+    bytes: &mut Vec<u8>,
+    extension_postings_by_suffix: &BTreeMap<String, Vec<u32>>,
+) -> eyre::Result<()> {
+    for normalized_suffix in extension_postings_by_suffix.keys() {
+        let normalized_bytes = normalized_suffix.as_bytes();
+        let normalized_len: u32 = normalized_bytes.len().try_into().wrap_err_with(|| {
+            format!(
+                "Extension suffix text too long to encode ({} bytes)",
+                normalized_bytes.len()
+            )
+        })?;
+
+        bytes.extend_from_slice(&normalized_len.to_le_bytes());
         bytes.extend_from_slice(normalized_bytes);
     }
 
@@ -957,6 +1239,38 @@ fn serialize_postings(
         let posting_len: u32 = postings.len().try_into().wrap_err_with(|| {
             format!(
                 "Too many postings for one segment to encode ({})",
+                postings.len()
+            )
+        })?;
+
+        bytes.extend_from_slice(&posting_start.to_le_bytes());
+        bytes.extend_from_slice(&posting_len.to_le_bytes());
+        posting_row_ids.extend(postings.iter().copied());
+    }
+
+    for row_id in posting_row_ids {
+        bytes.extend_from_slice(&row_id.to_le_bytes());
+    }
+
+    Ok(())
+}
+
+fn serialize_extension_postings(
+    bytes: &mut Vec<u8>,
+    extension_postings_by_suffix: &BTreeMap<String, Vec<u32>>,
+    extension_posting_row_id_count: u32,
+) -> eyre::Result<()> {
+    let mut posting_row_ids = Vec::with_capacity(extension_posting_row_id_count as usize);
+    for postings in extension_postings_by_suffix.values() {
+        let posting_start: u32 = posting_row_ids.len().try_into().wrap_err_with(|| {
+            format!(
+                "Too many extension posting row ids to encode ({})",
+                posting_row_ids.len()
+            )
+        })?;
+        let posting_len: u32 = postings.len().try_into().wrap_err_with(|| {
+            format!(
+                "Too many postings for one extension suffix to encode ({})",
                 postings.len()
             )
         })?;
@@ -1094,9 +1408,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_small_index_bytes_v4() -> eyre::Result<()> {
-        // This is synthetic test data serialized entirely in memory. The test
-        // never reads or writes the path on disk.
+    fn snapshot_small_index_bytes_v5_roundtrips() -> eyre::Result<()> {
         let rows = vec![SearchIndexPathRow {
             path: String::from(VIRTUAL_SNAPSHOT_TEST_PATH),
             has_deleted_entries: false,
@@ -1108,27 +1420,8 @@ mod tests {
         )?
         .into_inner()?;
 
-        assert_eq!(
-            bytes,
-            vec![
-                84, 77, 70, 84, 73, 68, 88, 0, 4, 0, 0, 0, 67, 7, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
-                0, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 51, 0, 0, 0, 3, 0, 0, 0, 195, 95, 97, 113, 38,
-                43, 95, 116, 101, 97, 109, 121, 95, 109, 102, 116, 95, 118, 105, 114, 116, 117, 97,
-                108, 95, 115, 110, 97, 112, 115, 104, 111, 116, 95, 102, 105, 120, 116, 117, 114,
-                101, 95, 95, 129, 46, 116, 120, 116, 130, 58, 128, 2, 0, 0, 0, 2, 0, 0, 0, 81, 58,
-                113, 58, 38, 0, 0, 0, 38, 0, 0, 0, 95, 95, 84, 69, 65, 77, 89, 95, 77, 70, 84, 95,
-                86, 73, 82, 84, 85, 65, 76, 95, 83, 78, 65, 80, 83, 72, 79, 84, 95, 70, 73, 88, 84,
-                85, 82, 69, 95, 95, 95, 95, 116, 101, 97, 109, 121, 95, 109, 102, 116, 95, 118,
-                105, 114, 116, 117, 97, 108, 95, 115, 110, 97, 112, 115, 104, 111, 116, 95, 102,
-                105, 120, 116, 117, 114, 101, 95, 95, 5, 0, 0, 0, 5, 0, 0, 0, 97, 46, 116, 120,
-                116, 97, 46, 116, 120, 116, 0, 0, 0, 0, 255, 255, 255, 255, 1, 0, 0, 0, 0, 0, 0, 0,
-                2, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0,
-                0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ]
-        );
-
         let search_index_bytes = SearchIndexBytes::new(&bytes);
-        assert_eq!(search_index_bytes.version()?, 4);
+        assert_eq!(search_index_bytes.version()?, SEARCH_INDEX_VERSION);
 
         let parsed_rows = search_index_bytes
             .row_views()?
@@ -1144,7 +1437,13 @@ mod tests {
         );
         assert!(search_index_bytes.trie()?.get("a.txt").is_some());
 
-        assert_eq!(search_index_bytes.header()?.version, SEARCH_INDEX_VERSION);
+        let parsed = search_index_bytes.parse_trusted_for_query()?;
+        assert_eq!(
+            parsed
+                .extension_postings(".txt")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![0])
+        );
 
         Ok(())
     }
@@ -1176,6 +1475,14 @@ mod tests {
         assert_eq!(validated.segments().len(), trusted.segments().len());
         assert_eq!(
             validated
+                .extension_postings(".jar")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            trusted
+                .extension_postings(".jar")?
+                .map(|iter| iter.collect::<Vec<_>>())
+        );
+        assert_eq!(
+            validated
                 .row_views()
                 .map(|row| row.map(|view| view.path()))
                 .collect::<eyre::Result<Vec<_>>>()?,
@@ -1183,6 +1490,52 @@ mod tests {
                 .row_views()
                 .map(|row| row.map(|view| view.path()))
                 .collect::<eyre::Result<Vec<_>>>()?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn extension_postings_group_segments_by_normalized_suffix() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\notes.txt"),
+                has_deleted_entries: false,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let parsed = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
+
+        assert_eq!(
+            parsed
+                .extension_postings(".jar")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            parsed
+                .extension_postings(".txt")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![2])
+        );
+        assert_eq!(
+            parsed
+                .extension_postings(".zip")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            None
         );
 
         Ok(())

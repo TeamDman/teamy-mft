@@ -20,6 +20,16 @@ impl QueryNeedle {
     }
 
     #[must_use]
+    pub fn normalized_str(&self) -> &str {
+        match self {
+            // SAFETY: `AsciiLower` is constructed only from ASCII bytes,
+            // which are always valid UTF-8.
+            Self::AsciiLower(needle) => unsafe { std::str::from_utf8_unchecked(needle) },
+            Self::UnicodeLower(needle) => needle,
+        }
+    }
+
+    #[must_use]
     pub fn matches_contains(&self, haystack: &str) -> bool {
         self.matches_contains_preprocessed(haystack, None)
     }

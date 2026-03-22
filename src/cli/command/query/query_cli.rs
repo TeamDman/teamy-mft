@@ -149,6 +149,13 @@ fn matching_row_indices_for_rule(
     parsed_index: &ParsedSearchIndex<'_>,
     rule: &QueryRule,
 ) -> eyre::Result<Vec<u32>> {
+    if let Some(normalized_suffix) = rule.normalized_extension_suffix() {
+        return Ok(match parsed_index.extension_postings(normalized_suffix)? {
+            Some(iter) => iter.collect(),
+            None => Vec::new(),
+        });
+    }
+
     let matching_segment_ids = {
         let _span = info_span!("match_query_rule_against_segments").entered();
         let mut matching_segment_ids = Vec::new();

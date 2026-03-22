@@ -44,4 +44,15 @@ impl QueryRule {
     pub fn matches_normalized(&self, normalized_haystack: &str) -> bool {
         self.matches_preprocessed(normalized_haystack, Some(normalized_haystack))
     }
+
+    #[must_use]
+    pub fn normalized_extension_suffix(&self) -> Option<&str> {
+        match self {
+            Self::EndsWithCaseInsensitive(needle) => {
+                let suffix = needle.normalized_str();
+                (suffix.starts_with('.') && suffix.len() > 1).then_some(suffix)
+            }
+            Self::ContainsCaseInsensitive(_) => None,
+        }
+    }
 }
