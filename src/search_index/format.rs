@@ -45,4 +45,13 @@ impl SearchIndexHeader {
         writer.write_all(&self.node_count.to_le_bytes())?;
         Ok(())
     }
+
+    pub fn extend_vec(&self, bytes: &mut Vec<u8>) {
+        bytes.extend_from_slice(SEARCH_INDEX_MAGIC);
+        bytes.extend_from_slice(&self.version.to_le_bytes());
+        bytes.extend_from_slice(&self.flags.to_le_bytes());
+        bytes.extend_from_slice(&self.drive_letter.to_le_bytes());
+        bytes.extend_from_slice(&self.source_mft_len_bytes.to_le_bytes());
+        bytes.extend_from_slice(&self.node_count.to_le_bytes());
+    }
 }

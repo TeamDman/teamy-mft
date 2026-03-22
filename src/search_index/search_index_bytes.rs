@@ -208,7 +208,8 @@ impl<'a> Iterator for SearchIndexRowIter<'a> {
             )));
         }
 
-        let normalized_path = match std::str::from_utf8(&self.bytes[path_end..normalized_path_end]) {
+        let normalized_path = match std::str::from_utf8(&self.bytes[path_end..normalized_path_end])
+        {
             Ok(path) => path,
             Err(error) => {
                 return Some(Err(error).wrap_err_with(|| {
@@ -231,9 +232,7 @@ impl SearchIndexBytesMut {
     #[must_use]
     pub fn new(header: SearchIndexHeader) -> Self {
         let mut bytes = Vec::with_capacity(SEARCH_INDEX_HEADER_LEN);
-        header
-            .write_to(&mut bytes)
-            .expect("Vec<u8> writes should not fail");
+        header.extend_vec(&mut bytes);
 
         Self { header, bytes }
     }
@@ -252,12 +251,13 @@ impl SearchIndexBytesMut {
 
         let normalized_path = row.path.to_lowercase();
         let normalized_path_bytes = normalized_path.as_bytes();
-        let normalized_path_len: u32 = normalized_path_bytes.len().try_into().wrap_err_with(|| {
-            format!(
-                "Normalized path too long to encode in index row ({} bytes)",
-                normalized_path_bytes.len()
-            )
-        })?;
+        let normalized_path_len: u32 =
+            normalized_path_bytes.len().try_into().wrap_err_with(|| {
+                format!(
+                    "Normalized path too long to encode in index row ({} bytes)",
+                    normalized_path_bytes.len()
+                )
+            })?;
 
         self.bytes.extend_from_slice(&path_len.to_le_bytes());
         self.bytes
