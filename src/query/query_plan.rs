@@ -299,10 +299,25 @@ mod tests {
     }
 
     #[test]
-    fn suffix_rules_apply_to_individual_segments() {
+    fn suffix_rules_apply_only_to_terminal_segments() {
         assert_eq!(
-            matching_paths(&[".txt$"], &["a/b/c.txt", "a/b/c.zip"]),
+            matching_paths(&[".txt$"], &["a/b/c.txt", "a/b/c.zip", "a/.txt/c.zip"]),
             vec!["a/b/c.txt"]
+        );
+    }
+
+    #[test]
+    fn suffix_rules_do_not_match_non_terminal_segments() {
+        assert_eq!(
+            matching_paths(
+                &[".git$"],
+                &[
+                    "repo/project.git",
+                    "repo/.git/objects/pack/pack-a.rev",
+                    "repo/.git/refs/remotes/origin/main"
+                ]
+            ),
+            vec!["repo/project.git"]
         );
     }
 

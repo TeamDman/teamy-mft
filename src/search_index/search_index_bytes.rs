@@ -979,6 +979,7 @@ fn collect_search_index_tables(
         let row_index = u32::try_from(terminals.len())
             .wrap_err_with(|| format!("Too many terminal rows to encode ({})", terminals.len()))?;
         let mut parent_node_index = NO_PARENT_NODE;
+        let mut terminal_segment_id = None;
         let mut row_segment_ids = Vec::new();
         for segment in path_segments(&row.path) {
             let segment_id = if let Some(existing_id) = segment_ids_by_display.get(segment) {
@@ -1007,6 +1008,7 @@ fn collect_search_index_tables(
             };
 
             row_segment_ids.push(segment_id);
+            terminal_segment_id = Some(segment_id);
 
             let node_index = u32::try_from(path_nodes.len()).wrap_err_with(|| {
                 format!("Too many path nodes to encode ({})", path_nodes.len())
@@ -1026,8 +1028,10 @@ fn collect_search_index_tables(
         row_segment_ids.dedup();
         for &segment_id in &row_segment_ids {
             postings_by_segment[segment_id as usize].push(row_index);
+        }
 
-            let normalized = &segment_entries[segment_id as usize].1;
+        if let Some(terminal_segment_id) = terminal_segment_id {
+            let normalized = &segment_entries[terminal_segment_id as usize].1;
             if let Some(normalized_suffix) = normalized_extension_suffix(normalized) {
                 extension_postings_by_suffix
                     .entry(normalized_suffix.to_owned())
@@ -1622,7 +1626,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_small_index_bytes_v6_roundtrips() -> eyre::Result<()> {
+    fn snapshot_small_index_bytes_v7_roundtrips() -> eyre::Result<()> {
         let rows = vec![SearchIndexPathRow {
             path: String::from(VIRTUAL_SNAPSHOT_TEST_PATH),
             has_deleted_entries: false,
@@ -1750,6 +1754,40 @@ mod tests {
                 .extension_postings(".zip")?
                 .map(|iter| iter.collect::<Vec<_>>()),
             None
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn extension_postings_match_only_terminal_segments() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\project.git"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main"),
+                has_deleted_entries: false,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let parsed = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
+
+        assert_eq!(
+            parsed
+                .extension_postings(".git")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![0])
         );
 
         Ok(())

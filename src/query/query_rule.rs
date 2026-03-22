@@ -47,6 +47,11 @@ impl QueryRule {
     }
 
     #[must_use]
+    pub fn matches_only_terminal_segment(&self) -> bool {
+        matches!(self, Self::EndsWithCaseInsensitive(_))
+    }
+
+    #[must_use]
     pub fn normalized_extension_suffix(&self) -> Option<&str> {
         match self {
             Self::EndsWithCaseInsensitive(needle) => {

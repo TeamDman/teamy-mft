@@ -41,13 +41,25 @@ impl QueryGroup {
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         self.rules.iter().all(|rule| {
             if let Some(normalized_haystack) = normalized_haystack {
-                path_segments(haystack)
-                    .zip(path_segments(normalized_haystack))
-                    .any(|(segment, normalized_segment)| {
-                        rule.matches_preprocessed(segment, Some(normalized_segment))
-                    })
+                if rule.matches_only_terminal_segment() {
+                    terminal_path_segment(haystack)
+                        .zip(terminal_path_segment(normalized_haystack))
+                        .is_some_and(|(segment, normalized_segment)| {
+                            rule.matches_preprocessed(segment, Some(normalized_segment))
+                        })
+                } else {
+                    path_segments(haystack)
+                        .zip(path_segments(normalized_haystack))
+                        .any(|(segment, normalized_segment)| {
+                            rule.matches_preprocessed(segment, Some(normalized_segment))
+                        })
+                }
             } else {
-                path_segments(haystack).any(|segment| rule.matches(segment))
+                if rule.matches_only_terminal_segment() {
+                    terminal_path_segment(haystack).is_some_and(|segment| rule.matches(segment))
+                } else {
+                    path_segments(haystack).any(|segment| rule.matches(segment))
+                }
             }
         })
     }
@@ -84,6 +96,10 @@ impl QueryGroup {
 fn path_segments(path: &str) -> impl Iterator<Item = &str> {
     path.split(['/', '\\'])
         .filter(|segment| !segment.is_empty())
+}
+
+fn terminal_path_segment(path: &str) -> Option<&str> {
+    path_segments(path).last()
 }
 
 fn intersect_sorted(left: &[u32], right: &[u32]) -> Vec<u32> {

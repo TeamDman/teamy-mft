@@ -156,6 +156,10 @@ fn matching_row_indices_for_rule(
         });
     }
 
+    if rule.matches_only_terminal_segment() {
+        return terminal_matching_row_indices_for_rule(parsed_index, rule);
+    }
+
     let matching_segment_ids = matching_segment_ids_for_rule(parsed_index, rule)?;
 
     let mut row_indices = {
@@ -175,6 +179,33 @@ fn matching_row_indices_for_rule(
     });
 
     Ok(row_indices)
+}
+
+fn terminal_matching_row_indices_for_rule(
+    parsed_index: &ParsedSearchIndex<'_>,
+    rule: &QueryRule,
+) -> eyre::Result<Vec<u32>> {
+    info_span!("match_query_rule_against_terminal_segments").in_scope(|| {
+        let mut row_indices = Vec::new();
+
+        for (row_index, row) in parsed_index.row_views().enumerate() {
+            let row = row?;
+            let Some(terminal_segment) = row.segment_views().next() else {
+                continue;
+            };
+
+            if !rule.matches_normalized(terminal_segment.normalized) {
+                continue;
+            }
+
+            let row_index = u32::try_from(row_index).wrap_err_with(|| {
+                format!("Row index {row_index} does not fit into u32 for query results")
+            })?;
+            row_indices.push(row_index);
+        }
+
+        Ok(row_indices)
+    })
 }
 
 fn matching_segment_ids_for_rule(
@@ -519,6 +550,37 @@ mod tests {
             plan.matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed, rule))?,
             vec![0]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn suffix_rules_match_only_terminal_segments_in_indexed_queries() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\project.git"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main"),
+                has_deleted_entries: false,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let parsed = SearchIndexBytes::new(bytes).parse_trusted_for_query()?;
+        let rule = QueryRule::parse(".git$").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
 
         Ok(())
     }
