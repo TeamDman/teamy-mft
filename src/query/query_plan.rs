@@ -1,4 +1,5 @@
 use crate::query::QueryGroup;
+use crate::query::QueryRule;
 
 #[derive(Debug, Clone)]
 pub struct QueryPlan {
@@ -55,6 +56,25 @@ impl QueryPlan {
         self.groups
             .iter()
             .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
+    }
+
+    /// # Errors
+    ///
+    /// Returns any error produced while looking up candidate rows for the
+    /// rules in this plan.
+    pub fn matching_row_indices<F>(&self, row_indices_for_rule: &F) -> eyre::Result<Vec<u32>>
+    where
+        F: Fn(&QueryRule) -> eyre::Result<Vec<u32>>,
+    {
+        let mut matches = Vec::new();
+
+        for group in &self.groups {
+            matches.extend(group.matching_row_indices(row_indices_for_rule)?);
+        }
+
+        matches.sort_unstable();
+        matches.dedup();
+        Ok(matches)
     }
 }
 
@@ -215,6 +235,27 @@ mod tests {
             ),
             vec!["flower.jar", "trees.zip"]
         );
+    }
+
+    #[test]
+    fn postings_candidate_rows_follow_or_of_ands_semantics() {
+        let plan = QueryPlan::parse_inputs(&[String::from("alpha beta"), String::from("gamma")])
+            .expect("query should parse");
+
+        let candidates = plan
+            .matching_row_indices(&|rule| {
+                Ok(match format!("{rule:?}").as_str() {
+                    "ContainsCaseInsensitive(AsciiLower([97, 108, 112, 104, 97]))" => {
+                        vec![0, 1, 3]
+                    }
+                    "ContainsCaseInsensitive(AsciiLower([98, 101, 116, 97]))" => vec![1, 2, 3],
+                    "ContainsCaseInsensitive(AsciiLower([103, 97, 109, 109, 97]))" => vec![5],
+                    other => panic!("unexpected rule: {other}"),
+                })
+            })
+            .expect("candidate lookup should succeed");
+
+        assert_eq!(candidates, vec![1, 3, 5]);
     }
 
     #[test]

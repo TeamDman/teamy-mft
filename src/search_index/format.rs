@@ -1,7 +1,7 @@
 use std::io::Write;
 
 pub const SEARCH_INDEX_MAGIC: &[u8; 8] = b"TMFTIDX\0";
-pub const SEARCH_INDEX_VERSION: u16 = 3;
+pub const SEARCH_INDEX_VERSION: u16 = 4;
 pub const SEARCH_INDEX_HEADER_LEN: usize = 8 + 2 + 2 + 1 + 8 + 8;
 
 #[derive(Debug, Clone, Eq, PartialEq)]

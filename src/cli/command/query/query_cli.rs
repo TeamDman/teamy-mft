@@ -1,6 +1,9 @@
 use crate::query::IndexedPathRow;
 use crate::query::QueryPlan;
+use crate::query::QueryRule;
 use crate::search_index::load::MappedSearchIndex;
+use crate::search_index::search_index_bytes::ParsedSearchIndex;
+use crate::search_index::search_index_bytes::SearchIndexBytes;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use color_eyre::owo_colors::OwoColorize;
@@ -142,6 +145,28 @@ fn should_include_indexed_row(
     include_deleted || !has_deleted_entries
 }
 
+fn matching_row_indices_for_rule(
+    parsed_index: &ParsedSearchIndex<'_>,
+    rule: &QueryRule,
+) -> eyre::Result<Vec<u32>> {
+    let mut row_indices = Vec::new();
+
+    for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
+        if !rule.matches_preprocessed(segment.display, Some(segment.normalized)) {
+            continue;
+        }
+
+        let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
+            format!("Segment id {segment_id} does not fit into u32 for postings lookup")
+        })?;
+        row_indices.extend(parsed_index.postings(segment_id)?);
+    }
+
+    row_indices.sort_unstable();
+    row_indices.dedup();
+    Ok(row_indices)
+}
+
 fn load_and_query_drive_search_index(
     drive_letter: char,
     sync_dir: &Path,
@@ -186,34 +211,53 @@ fn load_and_query_drive_search_index(
         })?
     };
 
-    let (loaded_rows, matched_rows) = {
-        let _span = info_span!("filter_and_match_index_rows").entered();
-        let mut loaded_rows = 0usize;
-        let mut matched_rows = Vec::new();
-
-        for row in mapped.row_views().wrap_err_with(|| {
-            format!(
-                "Failed preparing search index rows for drive {} from {}",
-                drive_letter,
-                index_path.display()
-            )
-        })? {
-            let row = row.wrap_err_with(|| {
+    let parsed_index = {
+        let _span = info_span!("parse_search_index_for_query").entered();
+        SearchIndexBytes::new(mapped.bytes())
+            .parse()
+            .wrap_err_with(|| {
                 format!(
-                    "Failed parsing search index rows for drive {} from {}",
+                    "Failed preparing search index rows for drive {} from {}",
                     drive_letter,
                     index_path.display()
                 )
-            })?;
-            loaded_rows += 1;
+            })?
+    };
+
+    let loaded_rows = parsed_index.row_count();
+    let matched_row_indices = {
+        let _span = info_span!("match_search_index_postings").entered();
+        query_plan
+            .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
+            .wrap_err_with(|| {
+                format!(
+                    "Failed matching search index rows for drive {} from {}",
+                    drive_letter,
+                    index_path.display()
+                )
+            })?
+    };
+    let matched_rows = {
+        let _span = info_span!(
+            "materialize_matched_index_rows",
+            candidate_count = matched_row_indices.len(),
+        )
+        .entered();
+        let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
+
+        for row_index in matched_row_indices {
+            let row = parsed_index
+                .row_view(row_index as usize)
+                .wrap_err_with(|| {
+                    format!(
+                        "Failed materializing search index row {} for drive {} from {}",
+                        row_index,
+                        drive_letter,
+                        index_path.display()
+                    )
+                })?;
 
             if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
-                continue;
-            }
-            if !query_plan.matches_segments_preprocessed(&|| {
-                row.segment_views()
-                    .map(|segment| (segment.display, segment.normalized))
-            }) {
                 continue;
             }
 
@@ -223,7 +267,7 @@ fn load_and_query_drive_search_index(
             });
         }
 
-        (loaded_rows, matched_rows)
+        matched_rows
     };
 
     Ok(DriveQueryResult {
