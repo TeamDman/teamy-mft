@@ -13,8 +13,14 @@ impl QueryPlan {
     ///
     /// # Errors
     ///
-    /// Returns an error if no non-empty query groups are present after parsing.
+    /// Returns an error if no non-empty query groups are present after parsing,
+    /// or if any raw query input contains Windows-invalid path characters that
+    /// are not part of the recognized query syntax.
     pub fn parse_inputs(query_inputs: &[String]) -> eyre::Result<Self> {
+        for query_input in query_inputs {
+            validate_query_input(query_input)?;
+        }
+
         let groups = query_inputs
             .iter()
             .flat_map(|query_input| query_input.split('|'))
@@ -34,11 +40,79 @@ impl QueryPlan {
     }
 
     #[must_use]
+    pub fn matches_segments_preprocessed<'a, I, F>(&self, make_segments: &F) -> bool
+    where
+        I: Iterator<Item = (&'a str, &'a str)>,
+        F: Fn() -> I,
+    {
+        self.groups
+            .iter()
+            .any(|group| group.matches_segments_preprocessed(make_segments))
+    }
+
+    #[must_use]
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         self.groups
             .iter()
             .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
     }
+}
+
+fn validate_query_input(query_input: &str) -> eyre::Result<()> {
+    let chars = query_input.chars().collect::<Vec<_>>();
+
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if ch.is_control() {
+            eyre::bail!(
+                "query contains unsupported control character {:?} in {:?}",
+                ch,
+                query_input
+            );
+        }
+
+        match ch {
+            '<' | '>' | '?' | '*' => {
+                eyre::bail!(
+                    "query contains Windows-invalid path character {:?} in {:?}",
+                    ch,
+                    query_input
+                );
+            }
+            ':' if !is_drive_designator(&chars, index) => {
+                eyre::bail!(
+                    "query contains unsupported ':' outside a drive designator in {:?}",
+                    query_input
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn is_drive_designator(chars: &[char], colon_index: usize) -> bool {
+    if colon_index == 0 || !chars[colon_index - 1].is_ascii_alphabetic() {
+        return false;
+    }
+
+    let is_left_boundary = match colon_index
+        .checked_sub(2)
+        .and_then(|index| chars.get(index))
+    {
+        None => true,
+        Some(ch) => is_query_boundary(*ch),
+    };
+    let is_right_boundary = match chars.get(colon_index + 1) {
+        None => true,
+        Some(ch) => is_query_boundary(*ch),
+    };
+
+    is_left_boundary && is_right_boundary
+}
+
+fn is_query_boundary(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '|' | '/' | '\\' | '\'' | '"')
 }
 
 #[cfg(test)]
@@ -156,5 +230,66 @@ mod tests {
 
         assert!(plan.matches_preprocessed("Flower.JAR", Some("flower.jar")));
         assert!(!plan.matches_preprocessed("Flower.ZIP", Some("flower.zip")));
+    }
+
+    #[test]
+    fn rules_match_against_individual_path_segments() {
+        assert_eq!(
+            matching_paths(
+                &["a b c"],
+                &[
+                    "a b c.txt",
+                    "abc.txt",
+                    "bca.txt",
+                    "a/b/d/c.txt",
+                    "a/d/e.txt"
+                ]
+            ),
+            vec!["a b c.txt", "abc.txt", "bca.txt", "a/b/d/c.txt"]
+        );
+    }
+
+    #[test]
+    fn rule_does_not_match_across_path_separators() {
+        assert_eq!(
+            matching_paths(&["alpha/beta"], &["alpha/beta.txt", "alpha-beta.txt"]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn suffix_rules_apply_to_individual_segments() {
+        assert_eq!(
+            matching_paths(&[".txt$"], &["a/b/c.txt", "a/b/c.zip"]),
+            vec!["a/b/c.txt"]
+        );
+    }
+
+    #[test]
+    fn windows_invalid_query_characters_are_rejected_eagerly() {
+        let query_inputs = vec!["flower?.jar".to_owned()];
+        let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Windows-invalid path character '?'")
+        );
+    }
+
+    #[test]
+    fn colon_is_rejected_outside_a_drive_designator() {
+        let query_inputs = vec!["flower:jar".to_owned()];
+        let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported ':' outside a drive designator")
+        );
+    }
+
+    #[test]
+    fn drive_designators_are_allowed_in_queries() {
+        let query_inputs = vec!["C:\\src .txt$".to_owned()];
+        QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
     }
 }

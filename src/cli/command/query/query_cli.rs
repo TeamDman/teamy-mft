@@ -210,12 +210,15 @@ fn load_and_query_drive_search_index(
             if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
                 continue;
             }
-            if !query_plan.matches_preprocessed(row.path, row.normalized_path) {
+            if !query_plan.matches_segments_preprocessed(&|| {
+                row.segment_views()
+                    .map(|segment| (segment.display, segment.normalized))
+            }) {
                 continue;
             }
 
             matched_rows.push(IndexedPathRow {
-                path: row.path.to_owned(),
+                path: row.path(),
                 has_deleted_entries: row.has_deleted_entries,
             });
         }

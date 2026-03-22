@@ -120,17 +120,33 @@ mod tests {
         let views = mapped.row_views()?.collect::<eyre::Result<Vec<_>>>()?;
 
         assert_eq!(views.len(), 2);
-        assert_eq!(views[0].path, "C:\\alpha.txt");
-        assert_eq!(views[0].normalized_path, Some("c:\\alpha.txt"));
+        assert_eq!(views[0].path(), "C:\\alpha.txt");
+        assert_eq!(
+            views[0]
+                .segment_views()
+                .map(|segment| segment.normalized)
+                .collect::<Vec<_>>(),
+            vec!["alpha.txt", "c:"]
+        );
         assert!(!views[0].has_deleted_entries);
-        assert_eq!(views[1].path, "C:\\beta.LOG");
-        assert_eq!(views[1].normalized_path, Some("c:\\beta.log"));
+        assert_eq!(views[1].path(), "C:\\beta.LOG");
+        assert_eq!(
+            views[1]
+                .segment_views()
+                .map(|segment| segment.normalized)
+                .collect::<Vec<_>>(),
+            vec!["beta.log", "c:"]
+        );
         assert!(views[1].has_deleted_entries);
 
         let bytes = mapped.bytes();
         let bytes_start = bytes.as_ptr() as usize;
         let bytes_end = bytes_start + bytes.len();
-        let first_ptr = views[0].path.as_ptr() as usize;
+        let first_segment = views[0]
+            .segment_views()
+            .next()
+            .expect("row should contain at least one path segment");
+        let first_ptr = first_segment.display.as_ptr() as usize;
         assert!((bytes_start..bytes_end).contains(&first_ptr));
 
         Ok(())
