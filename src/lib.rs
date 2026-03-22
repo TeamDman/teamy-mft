@@ -31,7 +31,7 @@ const VERSION: &str = concat!(
 /// Panics if the CLI schema is invalid (should never happen with correct code).
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    
+
     #[cfg(windows)]
     {
         // This can fail when stdout/stderr are redirected, so keep startup permissive.
@@ -60,7 +60,7 @@ pub fn main() -> eyre::Result<()> {
     if let Some(pid) = cli.global_args.console_pid {
         console_attach(pid)?;
     }
-    
+
     cli.invoke()?;
     Ok(())
 }

@@ -8,10 +8,10 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use teamy_uom_extensions::HumanInformationExt;
+use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::debug_span;
 use tracing::info_span;
-use tracing::debug;
 use tracing::trace;
 use uom::si::information::byte;
 use uom::si::usize::Information;

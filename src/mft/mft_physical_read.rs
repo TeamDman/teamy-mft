@@ -118,7 +118,8 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalMftReadResu
             bytes_per_cluster = boot_sector.bytes_per_cluster(),
         )
         .entered();
-        decoded_runs.into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()))
+        decoded_runs
+            .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()))
     };
     if logical_read_plan.segments.is_empty() {
         eyre::bail!("Logical plan empty (no runs)");

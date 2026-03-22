@@ -1,4 +1,3 @@
-use tracing::trace;
 use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::path_resolve;
@@ -16,6 +15,7 @@ use tracing::debug;
 use tracing::debug_span;
 use tracing::info_span;
 use tracing::instrument;
+use tracing::trace;
 use uom::si::f64::Ratio;
 use uom::si::f64::Time;
 use uom::si::frequency::hertz;
