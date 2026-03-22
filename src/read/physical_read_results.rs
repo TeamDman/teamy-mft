@@ -173,7 +173,7 @@ impl PhysicalReadResults {
             )
             .entered();
             file.set_len(logical_plan.total_logical_size().get::<byte>() as u64)?;
-        }
+        };
 
         let mut writer = std::io::BufWriter::new(file);
         {
@@ -185,7 +185,7 @@ impl PhysicalReadResults {
             )
             .entered();
             self.write(logical_plan, &mut writer)?;
-        }
+        };
 
         {
             let _span = info_span!(
@@ -194,7 +194,7 @@ impl PhysicalReadResults {
             )
             .entered();
             writer.flush()?;
-        }
+        };
         Ok(())
     }
 

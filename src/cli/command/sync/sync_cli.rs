@@ -69,6 +69,10 @@ impl SyncCommand {
     /// # Errors
     ///
     /// Returns an error if the sync fails, likely caused by IO problems.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This command coordinates multiple sync paths and error-handling branches."
+    )]
     pub async fn invoke(
         &self,
         drive_infos: Vec<DriveSyncInfo>,
@@ -178,7 +182,7 @@ impl SyncCommand {
                                         .entered();
                                         drop(mft_file);
                                         drop(physical_mft);
-                                    }
+                                    };
                                     Ok(())
                                 })
                                 .await

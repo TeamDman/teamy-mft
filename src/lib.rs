@@ -38,7 +38,7 @@ pub fn main() -> eyre::Result<()> {
         let _ = teamy_windows::console::enable_ansi_support();
 
         teamy_windows::string::warn_if_utf8_not_enabled();
-    }
+    };
 
     let cli: Cli = figue::Driver::new(
         figue::builder::<Cli>()
