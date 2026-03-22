@@ -11,6 +11,7 @@ pub mod sync_dir;
 
 use crate::cli::Cli;
 use teamy_windows::console::console_attach;
+use tracing::debug;
 
 /// Version string combining package version and git revision.
 const VERSION: &str = concat!(
@@ -62,5 +63,9 @@ pub fn main() -> eyre::Result<()> {
     }
 
     cli.invoke()?;
+
+    debug!("Goodbye!");
+    #[cfg(feature = "tracy")]
+    debug!("Tracy may take a while to finish sending the profile, during this time the clock will stop in tracy-capture.");
     Ok(())
 }
