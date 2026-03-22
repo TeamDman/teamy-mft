@@ -8,6 +8,8 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use teamy_uom_extensions::HumanInformationExt;
+#[cfg(feature = "tracy")]
+use tracing::debug_span;
 use tracing::info_span;
 use tracing::debug;
 use tracing::trace;
@@ -115,8 +117,7 @@ impl PhysicalReadResults {
     ) -> eyre::Result<()> {
         for step in self.iter(logical_plan) {
             let step = step?;
-            writer.seek(SeekFrom::Start(step.logical_offset.get::<byte>() as u64))?;
-            writer.write_all(step.bytes)?;
+            write_step(writer, &step)?;
         }
 
         Ok(())
@@ -155,13 +156,45 @@ impl PhysicalReadResults {
         )
         .entered();
         debug!("Writing MFT output to {:?}", output_path);
-        let file = std::fs::File::create(output_path)?;
-        file.set_len(logical_plan.total_logical_size().get::<byte>() as u64)?;
+
+        let file = {
+            let _span = info_span!(
+                "create_mft_output_file",
+                output_path = %output_path.display(),
+            )
+            .entered();
+            std::fs::File::create(output_path)?
+        };
+        {
+            let _span = info_span!(
+                "preallocate_mft_output_file",
+                output_path = %output_path.display(),
+                logical_size_bytes = logical_plan.total_logical_size().get::<byte>(),
+            )
+            .entered();
+            file.set_len(logical_plan.total_logical_size().get::<byte>() as u64)?;
+        }
 
         let mut writer = std::io::BufWriter::new(file);
-        self.write(logical_plan, &mut writer)?;
+        {
+            let _span = info_span!(
+                "write_logical_mft_contents",
+                logical_size_bytes = logical_plan.total_logical_size().get::<byte>(),
+                logical_segments = logical_plan.segments.len(),
+                physical_segments = self.entries.len(),
+            )
+            .entered();
+            self.write(logical_plan, &mut writer)?;
+        }
 
-        writer.flush()?;
+        {
+            let _span = info_span!(
+                "flush_mft_output_writer",
+                output_path = %output_path.display(),
+            )
+            .entered();
+            writer.flush()?;
+        }
         Ok(())
     }
 
@@ -178,6 +211,18 @@ impl PhysicalReadResults {
         self.write(logical_plan, &mut cursor)?;
         Ok(bytes)
     }
+}
+
+fn write_step<W: Seek + Write>(
+    writer: &mut W,
+    step: &PhysicalReadResultsIterValue<'_>,
+) -> eyre::Result<()> {
+    #[cfg(feature = "tracy")]
+    let _span = debug_span!("write_logical_mft_step").entered();
+
+    writer.seek(SeekFrom::Start(step.logical_offset.get::<byte>() as u64))?;
+    writer.write_all(step.bytes)?;
+    Ok(())
 }
 
 impl<'a> Iterator for PhysicalReadResultsIter<'a> {

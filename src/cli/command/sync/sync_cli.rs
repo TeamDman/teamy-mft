@@ -84,7 +84,17 @@ impl SyncCommand {
                 tokio::pin!(mft_data);
                 let _guard = info_span!("collect mft sync results").entered();
                 while let Some(result) = mft_data.next().await {
-                    result?;
+                    let (drive_info, physical_mft) = result?;
+                    {
+                        let _guard = info_span!(
+                            "drop_physical_mft_read_result",
+                            drive = %drive_info.drive_letter,
+                            physical_segments = physical_mft.physical_read_results.entries.len(),
+                            logical_segments = physical_mft.logical_read_plan.segments.len(),
+                        )
+                        .entered();
+                        drop(physical_mft);
+                    }
                 }
                 Ok(())
             }
@@ -148,7 +158,7 @@ impl SyncCommand {
                                     return Ok(());
                                 }
 
-                                tokio::task::spawn_blocking(move || {
+                                tokio::task::spawn_blocking(move || -> eyre::Result<()> {
                                     let _guard = info_span!(
                                         "build_in_memory_search_index_for_drive",
                                         drive = %drive_info.drive_letter,
@@ -156,7 +166,20 @@ impl SyncCommand {
                                     )
                                     .entered();
                                     let mft_file = physical_mft.to_mft_file()?;
-                                    SyncIndexArgs.invoke_for_mft_file(&drive_info, &mft_file)
+                                    SyncIndexArgs.invoke_for_mft_file(&drive_info, &mft_file)?;
+                                    {
+                                        let _guard = info_span!(
+                                            "drop_in_memory_index_inputs",
+                                            drive = %drive_info.drive_letter,
+                                            physical_segments = physical_mft.physical_read_results.entries.len(),
+                                            logical_segments = physical_mft.logical_read_plan.segments.len(),
+                                            mft_entries = mft_file.record_count(),
+                                        )
+                                        .entered();
+                                        drop(mft_file);
+                                        drop(physical_mft);
+                                    }
+                                    Ok(())
                                 })
                                 .await
                                 .map_err(|error| {

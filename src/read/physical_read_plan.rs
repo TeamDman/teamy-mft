@@ -4,6 +4,7 @@ use crate::read::physical_reader::PhysicalReader;
 use std::collections::BTreeSet;
 use tracing::info_span;
 use tracing::instrument;
+use tracing::warn;
 use uom::ConstZero;
 use uom::si::information::byte;
 use uom::si::usize::Information;
@@ -23,7 +24,7 @@ pub enum ZeroLengthPushBehaviour {
     NoOp,
 }
 
-const MAX_IN_FLIGHT_IO: usize = 32;
+const DEFAULT_MAX_IN_FLIGHT_IO: usize = 32;
 impl IntoIterator for PhysicalReadPlan {
     type Item = PhysicalReadRequest;
     type IntoIter = std::collections::btree_set::IntoIter<PhysicalReadRequest>;
@@ -165,6 +166,7 @@ impl PhysicalReadPlan {
         if self.is_empty() {
             return Ok(PhysicalReadResults::new());
         }
+        let max_in_flight = max_in_flight_io();
         let request_count = self.requests.len();
         let total_size = self.total_size().get::<byte>();
         let reader = {
@@ -172,12 +174,39 @@ impl PhysicalReadPlan {
                 "create_physical_reader",
                 request_count,
                 total_physical_bytes = total_size,
-                max_in_flight = MAX_IN_FLIGHT_IO,
+                max_in_flight,
             )
             .entered();
-            PhysicalReader::try_new(filename, self.requests, MAX_IN_FLIGHT_IO)?
+            PhysicalReader::try_new(filename, self.requests, max_in_flight)?
         };
         reader.read_all()
+    }
+}
+
+fn max_in_flight_io() -> usize {
+    let Ok(value) = std::env::var("TEAMY_MFT_MAX_IN_FLIGHT_IO") else {
+        return DEFAULT_MAX_IN_FLIGHT_IO;
+    };
+
+    match value.parse::<usize>() {
+        Ok(0) => {
+            warn!(
+                env_value = %value,
+                default = DEFAULT_MAX_IN_FLIGHT_IO,
+                "Ignoring TEAMY_MFT_MAX_IN_FLIGHT_IO=0; using default"
+            );
+            DEFAULT_MAX_IN_FLIGHT_IO
+        }
+        Ok(parsed) => parsed,
+        Err(error) => {
+            warn!(
+                env_value = %value,
+                %error,
+                default = DEFAULT_MAX_IN_FLIGHT_IO,
+                "Ignoring invalid TEAMY_MFT_MAX_IN_FLIGHT_IO; using default"
+            );
+            DEFAULT_MAX_IN_FLIGHT_IO
+        }
     }
 }
 
