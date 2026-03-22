@@ -1,6 +1,5 @@
 use crate::query::IndexedPathRow;
 use crate::query::QueryPlan;
-use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::load::MappedSearchIndex;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
@@ -187,30 +186,41 @@ fn load_and_query_drive_search_index(
         })?
     };
 
-    let rows: Vec<SearchIndexPathRow> = {
-        let _span = info_span!("decode_search_index_rows").entered();
-        mapped.rows().wrap_err_with(|| {
+    let (loaded_rows, matched_rows) = {
+        let _span = info_span!("filter_and_match_index_rows").entered();
+        let mut loaded_rows = 0usize;
+        let mut matched_rows = Vec::new();
+
+        for row in mapped.row_views().wrap_err_with(|| {
             format!(
-                "Failed parsing search index rows for drive {} from {}",
+                "Failed preparing search index rows for drive {} from {}",
                 drive_letter,
                 index_path.display()
             )
-        })?
-    };
+        })? {
+            let row = row.wrap_err_with(|| {
+                format!(
+                    "Failed parsing search index rows for drive {} from {}",
+                    drive_letter,
+                    index_path.display()
+                )
+            })?;
+            loaded_rows += 1;
 
-    let loaded_rows = rows.len();
-    let matched_rows: Vec<IndexedPathRow> = {
-        let _span = info_span!("filter_and_match_index_rows", source_rows = rows.len()).entered();
-        rows.into_iter()
-            .filter(|row| {
-                should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries)
-                    && query_plan.matches(&row.path)
-            })
-            .map(|row| IndexedPathRow {
-                path: row.path,
+            if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
+                continue;
+            }
+            if !query_plan.matches(row.path) {
+                continue;
+            }
+
+            matched_rows.push(IndexedPathRow {
+                path: row.path.to_owned(),
                 has_deleted_entries: row.has_deleted_entries,
-            })
-            .collect()
+            });
+        }
+
+        (loaded_rows, matched_rows)
     };
 
     Ok(DriveQueryResult {
