@@ -222,7 +222,7 @@ fn load_and_query_drive_search_index(
     let parsed_index = {
         let _span = info_span!("parse_search_index_for_query").entered();
         SearchIndexBytes::new(mapped.bytes())
-            .parse()
+            .parse_trusted_for_query()
             .wrap_err_with(|| {
                 format!(
                     "Failed preparing search index rows for drive {} from {}",

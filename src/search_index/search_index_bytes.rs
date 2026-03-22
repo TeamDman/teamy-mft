@@ -132,7 +132,17 @@ impl<'a> SearchIndexBytes<'a> {
     /// Returns an error if the index body is truncated, malformed, or contains
     /// invalid UTF-8 payloads.
     pub fn parse(&self) -> eyre::Result<ParsedSearchIndex<'a>> {
-        self.parse_body()
+        self.parse_body(ParseMode::Validated)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the index header/body prefix or segment payloads are
+    /// truncated or malformed. This skips the expensive full-table structural
+    /// validation passes and is intended for trusted query-time reads of
+    /// search indexes written by this binary.
+    pub fn parse_trusted_for_query(&self) -> eyre::Result<ParsedSearchIndex<'a>> {
+        self.parse_body(ParseMode::Trusted)
     }
 
     /// # Errors
@@ -181,7 +191,7 @@ impl<'a> SearchIndexBytes<'a> {
     /// Returns an error if the index body is truncated, malformed, or contains
     /// invalid UTF-8 payloads.
     pub fn row_views(&self) -> eyre::Result<SearchIndexRowIter<'a>> {
-        Ok(self.parse_body()?.row_views())
+        Ok(self.parse_body(ParseMode::Validated)?.row_views())
     }
 
     /// # Errors
@@ -189,17 +199,17 @@ impl<'a> SearchIndexBytes<'a> {
     /// Returns an error if the index body cannot be parsed or `row_index` is
     /// out of bounds.
     pub fn row_view(&self, row_index: usize) -> eyre::Result<SearchIndexPathRowView<'a>> {
-        self.parse_body()?.row_view(row_index)
+        self.parse_body(ParseMode::Validated)?.row_view(row_index)
     }
 
     /// # Errors
     ///
     /// Returns an error if the index body cannot be parsed.
     pub fn trie(&self) -> eyre::Result<&'a ZeroTriePerfectHash<[u8]>> {
-        Ok(self.parse_body()?.trie())
+        Ok(self.parse_body(ParseMode::Validated)?.trie())
     }
 
-    fn parse_body(&self) -> eyre::Result<ParsedSearchIndex<'a>> {
+    fn parse_body(&self, mode: ParseMode) -> eyre::Result<ParsedSearchIndex<'a>> {
         let header = {
             let _span = info_span!("parse_search_index_header").entered();
             self.header()?
@@ -251,24 +261,31 @@ impl<'a> SearchIndexBytes<'a> {
             );
         }
 
-        {
-            let _span = info_span!("validate_search_index_path_nodes").entered();
-            validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
-        }
-        {
-            let _span = info_span!("validate_search_index_terminals").entered();
-            validate_terminal_rows(self.bytes, terminal_offset, terminal_count, path_node_count)?;
-        }
-        {
-            let _span = info_span!("validate_search_index_postings").entered();
-            validate_postings(
-                self.bytes,
-                posting_range_offset,
-                posting_row_id_offset,
-                segment_count,
-                posting_row_id_count,
-                terminal_count,
-            )?;
+        if mode.should_validate() {
+            {
+                let _span = info_span!("validate_search_index_path_nodes").entered();
+                validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
+            }
+            {
+                let _span = info_span!("validate_search_index_terminals").entered();
+                validate_terminal_rows(
+                    self.bytes,
+                    terminal_offset,
+                    terminal_count,
+                    path_node_count,
+                )?;
+            }
+            {
+                let _span = info_span!("validate_search_index_postings").entered();
+                validate_postings(
+                    self.bytes,
+                    posting_range_offset,
+                    posting_row_id_offset,
+                    segment_count,
+                    posting_row_id_count,
+                    terminal_count,
+                )?;
+            }
         }
 
         Ok(ParsedSearchIndex {
@@ -353,6 +370,18 @@ impl<'a> SearchIndexBytes<'a> {
         }
 
         Ok(Arc::<[SearchIndexPathSegmentView<'a>]>::from(segments))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ParseMode {
+    Validated,
+    Trusted,
+}
+
+impl ParseMode {
+    fn should_validate(self) -> bool {
+        matches!(self, Self::Validated)
     }
 }
 
@@ -1093,6 +1122,45 @@ mod tests {
         assert!(search_index_bytes.trie()?.get("a.txt").is_some());
 
         assert_eq!(search_index_bytes.header()?.version, SEARCH_INDEX_VERSION);
+
+        Ok(())
+    }
+
+    #[test]
+    fn trusted_query_parse_matches_validated_parse_for_well_formed_index() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.zip"),
+                has_deleted_entries: true,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let search_index_bytes = SearchIndexBytes::new(&bytes);
+
+        let validated = search_index_bytes.parse()?;
+        let trusted = search_index_bytes.parse_trusted_for_query()?;
+
+        assert_eq!(validated.row_count(), trusted.row_count());
+        assert_eq!(validated.segments().len(), trusted.segments().len());
+        assert_eq!(
+            validated
+                .row_views()
+                .map(|row| row.map(|view| view.path()))
+                .collect::<eyre::Result<Vec<_>>>()?,
+            trusted
+                .row_views()
+                .map(|row| row.map(|view| view.path()))
+                .collect::<eyre::Result<Vec<_>>>()?
+        );
 
         Ok(())
     }
