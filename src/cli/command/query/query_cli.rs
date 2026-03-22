@@ -210,7 +210,7 @@ fn load_and_query_drive_search_index(
             if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
                 continue;
             }
-            if !query_plan.matches(row.path) {
+            if !query_plan.matches_preprocessed(row.path, row.normalized_path) {
                 continue;
             }
 

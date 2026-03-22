@@ -4,6 +4,7 @@ use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collect
 use crate::mft::mft_file::MftFile;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
+use crate::search_index::search_index_bytes::SearchIndexBytesMut;
 use arbitrary::Arbitrary;
 use eyre::Context;
 use eyre::bail;
@@ -139,12 +140,15 @@ impl SyncIndexArgs {
         mft_file: &MftFile,
         rows: &[SearchIndexPathRow],
     ) -> eyre::Result<()> {
-        SearchIndexHeader::new(
-            info.drive_letter,
-            mft_file.size().get::<byte>() as u64,
-            rows.len() as u64,
-        )
-        .write_to_path(&info.index_output_path, rows)
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(
+                info.drive_letter,
+                mft_file.size().get::<byte>() as u64,
+                rows.len() as u64,
+            ),
+            rows,
+        )?
+        .write_to_path(&info.index_output_path)
         .wrap_err_with(|| {
             format!(
                 "Failed writing index output for drive {} to {}",

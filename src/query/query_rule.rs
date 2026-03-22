@@ -26,9 +26,18 @@ impl QueryRule {
 
     #[must_use]
     pub fn matches(&self, haystack: &str) -> bool {
+        self.matches_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         match self {
-            Self::ContainsCaseInsensitive(needle) => needle.matches_contains(haystack),
-            Self::EndsWithCaseInsensitive(needle) => needle.matches_suffix(haystack),
+            Self::ContainsCaseInsensitive(needle) => {
+                needle.matches_contains_preprocessed(haystack, normalized_haystack)
+            }
+            Self::EndsWithCaseInsensitive(needle) => {
+                needle.matches_suffix_preprocessed(haystack, normalized_haystack)
+            }
         }
     }
 }

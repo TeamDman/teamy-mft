@@ -9,29 +9,31 @@ Replace the current Nucleo-based fuzzy query path with a purpose-built fast firs
 4. Completed: the sync pipeline was cleaned up to use `Vec<DriveSyncInfo>` worklists instead of `BTreeMap<char, ...>` in the main flow, reducing incidental complexity while the query work was landing.
 5. Completed: baseline validation is green again; `./check-all.ps1` passes after the refactors.
 6. Completed: the search-index loader now exposes borrowed `SearchIndexPathRowView` values from the memory map, and the query path allocates owned `IndexedPathRow` values only for matches.
-7. In progress: the on-disk search-index format is still the original row-oriented layout, so zero-copy scanning is improved, but normalized storage and `zerotrie` integration have not landed yet.
+7. Completed: the search-index format is now versioned, and newly written index rows store both the display path and a normalized lowercase path so query evaluation can avoid per-row lowercase work.
+8. Completed: the query path now consumes pre-normalized row views from the current index format, and stale legacy indexes are rejected with an explicit prompt to rerun `sync index` for the affected drives.
+9. In progress: the index remains row-oriented, so normalized storage has landed, but dictionary-oriented compaction and `zerotrie` integration have not landed yet.
 
 **Steps**
 1. Completed Phase 1: narrowed the product boundary in the query layer so the indexed fast path is explicitly a rough first pass supporting only `contains_case_insensitive` and `ends_with_case_insensitive`.
 2. Completed Phase 1: defined the internal rule model in `src/query/`, with parsing and normalization logic that produces OR-of-ANDs query plans from both repeated positional inputs and `|` syntax.
 3. Completed Phase 1: removed Nucleo from the execution design and replaced matcher setup, injection, tick loops, and snapshot reads with direct rule evaluation over indexed records.
 4. Partially completed Phase 1: adopted the request-object style structurally by splitting query logic into dedicated types and modules, but the explicit `IntoFuture` request-object orchestration has not been introduced yet.
-5. Partially completed Phase 2: improved zero-copy reads by iterating borrowed row views from the memory map in `src/search_index/load.rs`, while keeping the old owned `rows()` path as a compatibility wrapper.
-6. Remaining Phase 2: redesign the on-disk `.mft_search_index` format so metadata, offsets, normalization, and string storage are arranged intentionally for zero-copy query evaluation rather than the original row-oriented serialization.
+5. Completed Phase 2: improved zero-copy reads by iterating borrowed row views from the memory map in `src/search_index/load.rs`, while keeping the old owned `rows()` path as a compatibility wrapper.
+6. Completed Phase 2: redesigned the on-disk `.mft_search_index` format into a versioned layout that stores both display paths and normalized lowercase paths for newly written rows, and uses the version only to reject stale indexes and force rebuilds rather than carrying legacy read paths indefinitely.
 7. Remaining Phase 2: introduce `zerotrie` where it materially improves the immutable string representation, likely as part of normalized string dictionaries or segment tables rather than as a blanket replacement for all query logic.
-8. Remaining Phase 2: decide the exact indexed granularity and normalization strategy for the new format so `contains_case_insensitive` and `ends_with_case_insensitive` can operate without repeated lowercase conversions or unnecessary string materialization.
+8. Remaining Phase 2: move beyond the current row-oriented serialization into a more compact dictionary- or segment-oriented format so normalization and repeated substrings are not stored redundantly per row.
 9. Remaining Phase 3: rework the execution pipeline around smaller owned request stages or task stages so load, decode, filter, and materialization are more explicitly modeled and instrumented.
 10. Remaining Phase 3: add instrumentation that distinguishes index open time, row-view iteration time, rule evaluation time, candidate materialization time, and output time so the next Tracy captures show where the remaining latency lives.
 11. Remaining Phase 4: verify behavior and latency against representative contains and suffix queries, compare with the previous implementation, and remove any leftover compatibility paths once the new storage format is in place.
 
 **Relevant files**
-- `g:/Programming/Repos/teamy-mft/src/cli/command/query/query_cli.rs` — current indexed query entry point; now consumes `QueryPlan` and borrowed row views, and materializes owned rows only for matches.
+- `g:/Programming/Repos/teamy-mft/src/cli/command/query/query_cli.rs` — current indexed query entry point; now consumes `QueryPlan`, uses normalized row views when available, and materializes owned rows only for matches.
 - `g:/Programming/Repos/teamy-mft/src/query/query_plan.rs` — owns the OR-of-ANDs query normalization and is the current center of the parser semantics.
 - `g:/Programming/Repos/teamy-mft/src/query/query_group.rs` — defines one AND-group within a query plan.
 - `g:/Programming/Repos/teamy-mft/src/query/query_rule.rs` — defines the supported rule kinds for the new fast query engine.
 - `g:/Programming/Repos/teamy-mft/src/query/query_needle.rs` — owns the case-insensitive matching primitives used by the fast rule engine.
-- `g:/Programming/Repos/teamy-mft/src/search_index/load.rs` — now exposes zero-copy row views over the mapped index and still provides the old owned-row compatibility path.
-- `g:/Programming/Repos/teamy-mft/src/search_index/format.rs` — current row-oriented disk format; main redesign target for zero-copy representation and normalized storage.
+- `g:/Programming/Repos/teamy-mft/src/search_index/load.rs` — now exposes zero-copy row views over the current mapped index format and rejects stale index versions with a rebuild prompt instead of maintaining legacy parsing code.
+- `g:/Programming/Repos/teamy-mft/src/search_index/format.rs` — current versioned disk format; now stores normalized lowercase paths per row, but still remains row-oriented and is the next compaction target.
 - `g:/Programming/Repos/teamy-mft/notes/search-index.md` — existing long-term indexing ideas; should be updated to reflect the new immediate focus on two-rule matching and zero-copy storage.
 - `g:/Programming/Repos/teamy-mft/notes/parallel work.md` — still relevant for task decomposition and scheduling once the matcher is removed.
 - `d:/Repos/Azure/Cloud-Terrastodon/crates/azure/src/resource_groups.rs` — request-object and `IntoFuture` style reference.

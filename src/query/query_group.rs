@@ -21,6 +21,13 @@ impl QueryGroup {
 
     #[must_use]
     pub fn matches(&self, haystack: &str) -> bool {
-        self.rules.iter().all(|rule| rule.matches(haystack))
+        self.matches_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
+        self.rules
+            .iter()
+            .all(|rule| rule.matches_preprocessed(haystack, normalized_haystack))
     }
 }

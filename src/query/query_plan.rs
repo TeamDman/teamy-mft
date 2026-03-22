@@ -30,7 +30,14 @@ impl QueryPlan {
 
     #[must_use]
     pub fn matches(&self, haystack: &str) -> bool {
-        self.groups.iter().any(|group| group.matches(haystack))
+        self.matches_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
+        self.groups
+            .iter()
+            .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
     }
 }
 
@@ -140,5 +147,14 @@ mod tests {
     fn empty_inputs_are_rejected() {
         let query_inputs = vec!["   ".to_owned(), "|".to_owned()];
         assert!(QueryPlan::parse_inputs(&query_inputs).is_err());
+    }
+
+    #[test]
+    fn preprocessed_normalized_haystack_matches_the_same_result() {
+        let query_inputs = vec!["FLOWER .jar$".to_owned()];
+        let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
+
+        assert!(plan.matches_preprocessed("Flower.JAR", Some("flower.jar")));
+        assert!(!plan.matches_preprocessed("Flower.ZIP", Some("flower.zip")));
     }
 }

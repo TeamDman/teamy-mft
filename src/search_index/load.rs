@@ -1,7 +1,8 @@
-use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
+use crate::search_index::search_index_bytes::SearchIndexBytes;
+use crate::search_index::search_index_bytes::SearchIndexRowIter;
 use eyre::Context;
 use eyre::bail;
 use memmap2::Mmap;
@@ -12,87 +13,6 @@ use std::path::Path;
 pub struct MappedSearchIndex {
     mmap: Mmap,
     pub header: SearchIndexHeader,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SearchIndexPathRowView<'a> {
-    pub path: &'a str,
-    pub has_deleted_entries: bool,
-}
-
-impl SearchIndexPathRowView<'_> {
-    #[must_use]
-    pub fn to_owned(self) -> SearchIndexPathRow {
-        SearchIndexPathRow {
-            path: self.path.to_owned(),
-            has_deleted_entries: self.has_deleted_entries,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SearchIndexRowIter<'a> {
-    bytes: &'a [u8],
-    cursor: usize,
-    remaining_rows: usize,
-    row_index: usize,
-}
-
-impl<'a> Iterator for SearchIndexRowIter<'a> {
-    type Item = eyre::Result<SearchIndexPathRowView<'a>>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining_rows == 0 {
-            return None;
-        }
-
-        let row_index = self.row_index;
-        self.row_index += 1;
-        self.remaining_rows -= 1;
-
-        if self.bytes.len() < self.cursor + 4 + 1 {
-            return Some(Err(eyre::eyre!(
-                "Corrupt search index: truncated row header at row {}",
-                row_index
-            )));
-        }
-
-        let len_start = self.cursor;
-        self.cursor += 4;
-        let path_len = u32::from_le_bytes([
-            self.bytes[len_start],
-            self.bytes[len_start + 1],
-            self.bytes[len_start + 2],
-            self.bytes[len_start + 3],
-        ]) as usize;
-
-        let has_deleted_entries = self.bytes[self.cursor] != 0;
-        self.cursor += 1;
-
-        let path_end = self.cursor + path_len;
-        if self.bytes.len() < path_end {
-            return Some(Err(eyre::eyre!(
-                "Corrupt search index: truncated path payload at row {}",
-                row_index
-            )));
-        }
-
-        let path = match std::str::from_utf8(&self.bytes[self.cursor..path_end]) {
-            Ok(path) => path,
-            Err(error) => {
-                return Some(
-                    Err(error)
-                        .wrap_err_with(|| format!("Invalid UTF-8 path payload at row {row_index}")),
-                );
-            }
-        };
-        self.cursor = path_end;
-
-        Some(Ok(SearchIndexPathRowView {
-            path,
-            has_deleted_entries,
-        }))
-    }
 }
 
 impl MappedSearchIndex {
@@ -113,16 +33,19 @@ impl MappedSearchIndex {
             format!("Failed memory-mapping search index file {}", path.display())
         })?;
 
-        let header = SearchIndexHeader::parse(&mmap).wrap_err_with(|| {
+        let search_index_bytes = SearchIndexBytes::new(&mmap);
+        let header = search_index_bytes.header().wrap_err_with(|| {
             format!("Failed parsing search index header from {}", path.display())
         })?;
 
         if header.version != SEARCH_INDEX_VERSION {
+            let drive_letter = char::from(header.drive_letter);
             bail!(
-                "Unsupported search index version {} in {} (expected {})",
+                "Unsupported search index version {} in {}. Run `teamy-mft sync index --drive-pattern {}` to rebuild the stale index for drive {}.",
                 header.version,
                 path.display(),
-                SEARCH_INDEX_VERSION
+                drive_letter,
+                drive_letter
             );
         }
 
@@ -140,19 +63,7 @@ impl MappedSearchIndex {
     ///
     /// Returns an error if the stored node count does not fit in `usize`.
     pub fn row_views(&self) -> eyre::Result<SearchIndexRowIter<'_>> {
-        let node_count = usize::try_from(self.header.node_count).wrap_err_with(|| {
-            format!(
-                "Search index node count {} does not fit into usize",
-                self.header.node_count
-            )
-        })?;
-
-        Ok(SearchIndexRowIter {
-            bytes: &self.mmap,
-            cursor: SEARCH_INDEX_HEADER_LEN,
-            remaining_rows: node_count,
-            row_index: 0,
-        })
+        SearchIndexBytes::new(&self.mmap).row_views()
     }
 
     /// Parse all path rows from the mapped search index.
@@ -181,8 +92,11 @@ impl MappedSearchIndex {
 #[cfg(test)]
 mod tests {
     use super::MappedSearchIndex;
+    use crate::search_index::format::SEARCH_INDEX_MAGIC;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use std::fs;
 
     #[test]
     fn row_views_reads_paths_without_materializing_all_rows() -> eyre::Result<()> {
@@ -199,15 +113,18 @@ mod tests {
             },
         ];
 
-        SearchIndexHeader::new('C', 123, rows.len() as u64).write_to_path(&index_path, &rows)?;
+        SearchIndexBytesMut::from_rows(SearchIndexHeader::new('C', 123, rows.len() as u64), &rows)?
+            .write_to_path(&index_path)?;
 
         let mapped = MappedSearchIndex::open(&index_path)?;
         let views = mapped.row_views()?.collect::<eyre::Result<Vec<_>>>()?;
 
         assert_eq!(views.len(), 2);
         assert_eq!(views[0].path, "C:\\alpha.txt");
+        assert_eq!(views[0].normalized_path, Some("c:\\alpha.txt"));
         assert!(!views[0].has_deleted_entries);
         assert_eq!(views[1].path, "C:\\beta.LOG");
+        assert_eq!(views[1].normalized_path, Some("c:\\beta.log"));
         assert!(views[1].has_deleted_entries);
 
         let bytes = mapped.bytes();
@@ -215,6 +132,37 @@ mod tests {
         let bytes_end = bytes_start + bytes.len();
         let first_ptr = views[0].path.as_ptr() as usize;
         assert!((bytes_start..bytes_end).contains(&first_ptr));
+
+        Ok(())
+    }
+
+    #[test]
+    fn opening_legacy_v1_indexes_prompts_a_sync_rebuild() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let index_path = temp_dir.path().join("C.mft_search_index");
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(SEARCH_INDEX_MAGIC);
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.push(b'C');
+        bytes.extend_from_slice(&123u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+
+        let path = b"C:\\legacy.txt";
+        bytes.extend_from_slice(&(path.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(path);
+
+        assert!(!bytes.is_empty());
+        fs::write(&index_path, bytes)?;
+
+        let error =
+            MappedSearchIndex::open(&index_path).expect_err("legacy index should be rejected");
+        let message = error.to_string();
+
+        assert!(message.contains("Unsupported search index version 1"));
+        assert!(message.contains("teamy-mft sync index --drive-pattern C"));
 
         Ok(())
     }
