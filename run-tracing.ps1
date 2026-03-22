@@ -14,7 +14,7 @@ if (-not (Get-Command tracy-profiler.exe -ErrorAction SilentlyContinue)) {
 }
 
 if (-not $QueryArgs -or $QueryArgs.Count -eq 0) {
-	$QueryArgs = @("'flower .jar$")
+	$QueryArgs = @("query", "'flower .jar$")
 }
 
 Write-Host "Logging performance information to $slug"
