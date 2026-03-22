@@ -2,7 +2,6 @@ use crate::read::logical_read_plan::LogicalFileSegment;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
 use humansize::BINARY;
-use tracing::trace;
 use std::collections::BTreeSet;
 use std::io::Cursor;
 use std::io::Seek;
@@ -10,6 +9,7 @@ use std::io::SeekFrom;
 use std::io::Write;
 use teamy_uom_extensions::HumanInformationExt;
 use tracing::debug;
+use tracing::trace;
 use uom::si::information::byte;
 use uom::si::usize::Information;
 

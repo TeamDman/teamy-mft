@@ -1,3 +1,5 @@
+use crate::query::IndexedPathRow;
+use crate::query::QueryPlan;
 use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::load::MappedSearchIndex;
 use crate::sync_dir::try_get_sync_dir;
@@ -10,7 +12,6 @@ use rayon::prelude::*;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::debug;
 use tracing::info;
@@ -20,9 +21,9 @@ use tracing::instrument;
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 #[facet(rename_all = "kebab-case")]
 pub struct QueryArgs {
-    /// Substring to search for (case-insensitive) in resolved paths (first positional)
-    #[facet(args::positional)]
-    pub query: String,
+    /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
+    #[facet(args::positional, default)]
+    pub query: Vec<String>,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
     pub drive_letter_pattern: DriveLetterPattern,
@@ -51,10 +52,10 @@ pub enum QueryDensity {
     Columns,
 }
 
-#[derive(Debug, Clone)]
-struct IndexedPathRow {
-    path: String,
-    has_deleted_entries: bool,
+#[derive(Debug, Default)]
+struct DriveQueryResult {
+    loaded_rows: usize,
+    matched_rows: Vec<IndexedPathRow>,
 }
 
 fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
@@ -142,13 +143,13 @@ fn should_include_indexed_row(
     include_deleted || !has_deleted_entries
 }
 
-fn load_and_queue_drive_search_index(
+fn load_and_query_drive_search_index(
     drive_letter: char,
     sync_dir: &Path,
-    injector: &nucleo::Injector<IndexedPathRow>,
+    query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-) -> eyre::Result<usize> {
+) -> eyre::Result<DriveQueryResult> {
     let _span = info_span!(
         "load_drive_search_index",
         drive = %drive_letter,
@@ -197,11 +198,13 @@ fn load_and_queue_drive_search_index(
         })?
     };
 
-    let items: Vec<IndexedPathRow> = {
-        let _span = info_span!("filter_and_queue_index_rows", source_rows = rows.len()).entered();
+    let loaded_rows = rows.len();
+    let matched_rows: Vec<IndexedPathRow> = {
+        let _span = info_span!("filter_and_match_index_rows", source_rows = rows.len()).entered();
         rows.into_iter()
             .filter(|row| {
                 should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries)
+                    && query_plan.matches(&row.path)
             })
             .map(|row| IndexedPathRow {
                 path: row.path,
@@ -210,14 +213,10 @@ fn load_and_queue_drive_search_index(
             .collect()
     };
 
-    let queued_rows = items.len();
-    for item in items {
-        injector.push(item, |item, cols| {
-            cols[0] = item.path.clone().into();
-        });
-    }
-
-    Ok(queued_rows)
+    Ok(DriveQueryResult {
+        loaded_rows,
+        matched_rows,
+    })
 }
 
 impl QueryArgs {
@@ -230,36 +229,24 @@ impl QueryArgs {
     }
 
     fn invoke_indexed(self, mft_files: Vec<(char, PathBuf)>, sync_dir: &Path) -> eyre::Result<()> {
-        let mut nucleo = {
-            let _span = info_span!("create_indexed_nucleo_matcher").entered();
-            nucleo::Nucleo::<IndexedPathRow>::new(nucleo::Config::DEFAULT, Arc::new(|| {}), None, 1)
+        let query_plan = {
+            let _span = info_span!("parse_query_rules", query = ?self.query).entered();
+            QueryPlan::parse_inputs(&self.query)?
         };
 
-        {
-            let _span = info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
-            nucleo.pattern.reparse(
-                0,
-                &self.query,
-                nucleo::pattern::CaseMatching::Smart,
-                nucleo::pattern::Normalization::Smart,
-                false,
-            );
-        }
-
         let mut loaded_rows = 0usize;
+        let mut results = Vec::new();
         {
             let _span = info_span!("load_search_indexes", drives = mft_files.len()).entered();
-            let injector = nucleo.injector();
             let include_deleted = self.include_deleted;
             let only_deleted = self.only_deleted;
-            let load_results: Vec<eyre::Result<usize>> = mft_files
+            let load_results: Vec<eyre::Result<DriveQueryResult>> = mft_files
                 .into_par_iter()
                 .map(|(drive_letter, _)| {
-                    let injector = injector.clone();
-                    load_and_queue_drive_search_index(
+                    load_and_query_drive_search_index(
                         drive_letter,
                         sync_dir,
-                        &injector,
+                        &query_plan,
                         include_deleted,
                         only_deleted,
                     )
@@ -267,37 +254,32 @@ impl QueryArgs {
                 .collect();
 
             for result in load_results {
-                loaded_rows += result?;
+                let result = result?;
+                loaded_rows += result.loaded_rows;
+                results.extend(result.matched_rows);
             }
         }
 
-        loop {
-            let status = nucleo.tick(100);
-            if !status.running {
-                break;
-            }
-        }
-
-        let snapshot = nucleo.snapshot();
         info!(
             loaded_rows = loaded_rows,
-            matched = snapshot.matched_item_count(),
-            total = snapshot.item_count(),
+            matched = results.len(),
+            total = loaded_rows,
             "Indexed query completed"
         );
 
         let stdout_is_terminal = std::io::stdout().is_terminal();
         let colorize = stdout_is_terminal && (self.include_deleted || self.only_deleted);
-        let results: Vec<IndexedPathRow> = snapshot
-            .matched_items(..)
-            .take(self.limit)
-            .map(|item| item.data.clone())
-            .collect();
+        let result_limit = if self.limit == 0 {
+            results.len()
+        } else {
+            self.limit.min(results.len())
+        };
+        let display_results = &results[..result_limit];
 
         if self.should_use_columns(stdout_is_terminal) {
-            print_results_columns(&results, colorize);
+            print_results_columns(display_results, colorize);
         } else {
-            print_results_lines(&results, colorize);
+            print_results_lines(display_results, colorize);
         }
 
         std::process::exit(0);
@@ -309,10 +291,10 @@ impl QueryArgs {
     ///
     /// Returns an error if the query is empty, sync directory cannot be retrieved,
     /// drive letters cannot be resolved, or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = %self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
+    #[instrument(level = "info", skip_all, fields(query = ?self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
-        if self.query.trim().is_empty() {
+        if self.query.iter().all(|query| query.trim().is_empty()) {
             eyre::bail!("query string required")
         }
         let sync_dir = {

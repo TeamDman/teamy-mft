@@ -4,6 +4,7 @@ pub mod logging_init;
 pub mod mft;
 pub mod ntfs;
 pub mod paths;
+pub mod query;
 pub mod read;
 pub mod search_index;
 pub mod sync_dir;

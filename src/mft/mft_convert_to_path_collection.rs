@@ -44,7 +44,7 @@ pub fn convert_mft_file_to_path_collection(
             mft_entries = mft_file.record_count().separate_with_commas(),
         )
         .entered();
-        fast_entry::collect_filenames(&mft_file)
+        fast_entry::collect_filenames(mft_file)
     };
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = mft_file.size().over(scan_elapsed);

@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::cli::command::sync::IfExistsOutputBehaviour;
 use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::cli::command::sync::drive_sync_info::resolve_drive_infos;
@@ -13,7 +11,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use teamy_windows::storage::DriveLetterPattern;
 use tokio_stream::StreamExt;
-use tracing::Instrument;
 use tracing::info_span;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
@@ -69,38 +66,21 @@ pub enum SyncCommand {
 }
 
 impl SyncCommand {
-    /// Validate the sync can proceed before any command-specific work begins.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if preflight validation fails.
-    pub fn invoke_preflight(
-        &self,
-        drive_infos: BTreeMap<char, DriveSyncInfo>,
-        if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<BTreeMap<char, DriveSyncInfo>> {
-        match self {
-            Self::Mft(SyncMftArgs) => SyncMftArgs.invoke_preflight(drive_infos, if_exists),
-            Self::Index(SyncIndexArgs) => SyncIndexArgs.invoke_preflight(drive_infos, if_exists),
-            Self::Both => SyncMftArgs.invoke_preflight(drive_infos, if_exists),
-        }
-    }
-
     /// # Errors
     ///
     /// Returns an error if the sync fails, likely caused by IO problems.
     pub async fn invoke(
         &self,
-        drive_infos: BTreeMap<char, DriveSyncInfo>,
+        drive_infos: Vec<DriveSyncInfo>,
         if_exists: &IfExistsOutputBehaviour,
     ) -> eyre::Result<()> {
         match self {
             Self::Mft(SyncMftArgs) => {
-                let drive_infos = SyncMftArgs.invoke_preflight(drive_infos, if_exists)?;
-                let mft_data = SyncMftArgs
-                    .invoke(drive_infos)
-                    .instrument(info_span!("dispatch mft sync work"))
-                    .await?;
+                let drive_infos = SyncMftArgs::invoke_preflight(drive_infos, if_exists)?;
+                let mft_data = {
+                    let _guard = info_span!("dispatch mft sync work").entered();
+                    SyncMftArgs::invoke(drive_infos)?
+                };
                 tokio::pin!(mft_data);
                 let _guard = info_span!("collect mft sync results").entered();
                 while let Some(result) = mft_data.next().await {
@@ -109,25 +89,28 @@ impl SyncCommand {
                 Ok(())
             }
             Self::Index(SyncIndexArgs) => {
-                let drive_infos = SyncIndexArgs.invoke_preflight(drive_infos, if_exists)?;
-                SyncIndexArgs.invoke(drive_infos).await
+                let drive_infos = SyncIndexArgs::invoke_preflight(drive_infos, if_exists)?;
+                SyncIndexArgs.invoke(drive_infos)
             }
             Self::Both => {
                 // The two stages have different skip/overwrite/abort filtering rules, so
                 // they must each run their own preflight over the same initial drive set.
                 let mft_drive_infos =
-                    SyncMftArgs.invoke_preflight(drive_infos.clone(), if_exists)?;
-                let index_drive_infos = SyncIndexArgs.invoke_preflight(drive_infos, if_exists)?;
+                    SyncMftArgs::invoke_preflight(drive_infos.clone(), if_exists)?;
+                let index_drive_infos = SyncIndexArgs::invoke_preflight(drive_infos, if_exists)?;
 
                 // Drives present in both sets can build the index directly from the fresh
                 // in-memory `PhysicalMftReadResult` produced by the MFT stage, avoiding a
                 // write-then-read roundtrip through the cached `.mft` file.
-                let mft_drive_letters = mft_drive_infos.keys().copied().collect::<BTreeSet<_>>();
+                let mft_drive_letters = mft_drive_infos
+                    .iter()
+                    .map(|info| info.drive_letter)
+                    .collect::<BTreeSet<_>>();
                 let in_memory_index_drive_letters = Arc::new(
                     index_drive_infos
-                        .keys()
+                        .iter()
+                        .map(|info| info.drive_letter)
                         .filter(|drive_letter| mft_drive_letters.contains(drive_letter))
-                        .copied()
                         .collect::<BTreeSet<_>>(),
                 );
 
@@ -137,13 +120,13 @@ impl SyncCommand {
                 // to be built from the cached `.mft` on disk.
                 let fallback_index_drive_infos = index_drive_infos
                     .into_iter()
-                    .filter(|(drive_letter, _)| !mft_drive_letters.contains(drive_letter))
-                    .collect::<BTreeMap<_, _>>();
+                    .filter(|info| !mft_drive_letters.contains(&info.drive_letter))
+                    .collect::<Vec<_>>();
 
-                let mft_data = SyncMftArgs
-                    .invoke(mft_drive_infos)
-                    .instrument(info_span!("dispatch mft sync work"))
-                    .await?;
+                let mft_data = {
+                    let _guard = info_span!("dispatch mft sync work").entered();
+                    SyncMftArgs::invoke(mft_drive_infos)?
+                };
 
                 let in_memory_index_drive_letters_for_stream =
                     Arc::clone(&in_memory_index_drive_letters);
@@ -184,7 +167,7 @@ impl SyncCommand {
                         return Ok(());
                     }
 
-                    SyncIndexArgs.invoke(fallback_index_drive_infos).await
+                    SyncIndexArgs.invoke(fallback_index_drive_infos)
                 };
 
                 tokio::try_join!(in_memory_indexing, disk_indexing)?;

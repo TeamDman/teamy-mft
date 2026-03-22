@@ -1,10 +1,10 @@
 use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use eyre::bail;
-use tracing::trace;
 use std::any::type_name;
 use std::ptr::null_mut;
 use tracing::debug;
+use tracing::trace;
 use tracing::warn;
 use uom::si::information::byte;
 use windows::Win32::Foundation::ERROR_IO_PENDING;

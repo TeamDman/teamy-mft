@@ -6,12 +6,10 @@ use arbitrary::Arbitrary;
 use async_stream::try_stream;
 use eyre::Context;
 use eyre::bail;
-use eyre::ensure;
 use facet::Facet;
 use futures::StreamExt as _;
 use futures::stream;
 use itertools::Itertools;
-use std::collections::BTreeMap;
 use teamy_windows::elevation::enable_backup_privileges;
 use teamy_windows::elevation::ensure_elevated;
 use tokio_stream::Stream;
@@ -29,17 +27,15 @@ impl SyncMftArgs {
     ///
     /// Returns an error if `if_exists` is `Abort` and any MFT output already exists.
     pub fn invoke_preflight(
-        &self,
-        drive_infos: BTreeMap<char, DriveSyncInfo>,
+        drive_infos: Vec<DriveSyncInfo>,
         if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<BTreeMap<char, DriveSyncInfo>> {
-        let mut rtn = BTreeMap::default();
-        for (drive_letter, info) in drive_infos {
+    ) -> eyre::Result<Vec<DriveSyncInfo>> {
+        let mut rtn = Vec::with_capacity(drive_infos.len());
+        for info in drive_infos {
             let mft_exists = info.mft_output_path.exists();
             match (mft_exists, if_exists) {
                 (false, _) | (true, IfExistsOutputBehaviour::Overwrite) => {
-                    let prev = rtn.insert(drive_letter, info);
-                    ensure!(prev.is_none());
+                    rtn.push(info);
                 }
                 (true, IfExistsOutputBehaviour::Skip) => {
                     debug!(
@@ -67,9 +63,8 @@ impl SyncMftArgs {
     ///
     /// Returns an error if the sync directory cannot be retrieved, elevation fails,
     /// or if reading/writing MFT data fails.
-    pub async fn invoke(
-        &self,
-        drive_infos: BTreeMap<char, DriveSyncInfo>,
+    pub fn invoke(
+        drive_infos: Vec<DriveSyncInfo>,
     ) -> eyre::Result<impl Stream<Item = eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)>>>
     {
         ensure_elevated()?;
@@ -78,15 +73,12 @@ impl SyncMftArgs {
         info!(
             "Found {} drives to sync MFT files for: {}",
             drive_infos.len(),
-            drive_infos
-                .iter()
-                .map(|(_, info)| info.drive_letter)
-                .join(", ")
+            drive_infos.iter().map(|info| info.drive_letter).join(", ")
         );
 
         Ok(try_stream! {
             let _span = info_span!("sync MFTs from disks to files").entered();
-            let physical_mft_stream = read_physical_mft_stream_with_info(drive_infos.into_values());
+            let physical_mft_stream = read_physical_mft_stream_with_info(drive_infos);
             tokio::pin!(physical_mft_stream);
             while let Some(mft) = physical_mft_stream.next().await {
                 let (drive_info, mft_result) = mft?;

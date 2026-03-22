@@ -83,7 +83,7 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalMftReadResu
         ),
         mft_record_size,
     )
-    .wrap_err_with(|| format!("Failed reading record"))?;
+    .wrap_err("Failed reading record")?;
 
     // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).
     let decoded_runs = MftRecordAttributeRunListOwned::from_mft_record(&dollar_mft_record);

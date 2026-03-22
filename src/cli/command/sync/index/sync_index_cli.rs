@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::cli::command::sync::IfExistsOutputBehaviour;
 use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collection;
@@ -9,7 +7,6 @@ use crate::search_index::format::SearchIndexPathRow;
 use arbitrary::Arbitrary;
 use eyre::Context;
 use eyre::bail;
-use eyre::ensure;
 use facet::Facet;
 use itertools::Itertools;
 use tracing::debug;
@@ -26,17 +23,15 @@ impl SyncIndexArgs {
     ///
     /// Returns an error if `if_exists` is `Abort` and any index output already exists.
     pub fn invoke_preflight(
-        &self,
-        drive_infos: BTreeMap<char, DriveSyncInfo>,
+        drive_infos: Vec<DriveSyncInfo>,
         if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<BTreeMap<char, DriveSyncInfo>> {
-        let mut rtn = BTreeMap::default();
-        for (drive_letter, info) in drive_infos {
+    ) -> eyre::Result<Vec<DriveSyncInfo>> {
+        let mut rtn = Vec::with_capacity(drive_infos.len());
+        for info in drive_infos {
             let index_exists = info.index_output_path.exists();
             match (index_exists, if_exists) {
                 (false, _) | (true, IfExistsOutputBehaviour::Overwrite) => {
-                    let prev = rtn.insert(drive_letter, info);
-                    ensure!(prev.is_none());
+                    rtn.push(info);
                 }
                 (true, IfExistsOutputBehaviour::Skip) => {
                     debug!(
@@ -64,16 +59,13 @@ impl SyncIndexArgs {
     ///
     /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
     /// resolved, or index files cannot be read, built, or written.
-    pub async fn invoke(&self, drive_infos: BTreeMap<char, DriveSyncInfo>) -> eyre::Result<()> {
+    pub fn invoke(&self, drive_infos: Vec<DriveSyncInfo>) -> eyre::Result<()> {
         info!(
             "Building search indexes for drives: {}",
-            drive_infos
-                .iter()
-                .map(|(_, info)| info.drive_letter)
-                .join(", ")
+            drive_infos.iter().map(|info| info.drive_letter).join(", ")
         );
 
-        for (_, info) in drive_infos {
+        for info in drive_infos {
             self.invoke_for_mft_path(&info)?;
         }
 
@@ -92,8 +84,8 @@ impl SyncIndexArgs {
         info: &DriveSyncInfo,
         mft_file: &MftFile,
     ) -> eyre::Result<()> {
-        let rows = self.build_rows_for_mft_file(info, mft_file)?;
-        self.write_index_output(info, mft_file, &rows)
+        let rows = Self::build_rows_for_mft_file(info, mft_file)?;
+        Self::write_index_output(info, mft_file, &rows)
     }
 
     fn invoke_for_mft_path(&self, info: &DriveSyncInfo) -> eyre::Result<()> {
@@ -117,7 +109,6 @@ impl SyncIndexArgs {
     }
 
     fn build_rows_for_mft_file(
-        &self,
         info: &DriveSyncInfo,
         mft_file: &MftFile,
     ) -> eyre::Result<Vec<SearchIndexPathRow>> {
@@ -144,7 +135,6 @@ impl SyncIndexArgs {
     }
 
     fn write_index_output(
-        &self,
         info: &DriveSyncInfo,
         mft_file: &MftFile,
         rows: &[SearchIndexPathRow],
