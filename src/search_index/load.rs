@@ -146,7 +146,7 @@ mod tests {
             .segment_views()
             .next()
             .expect("row should contain at least one path segment");
-        let first_ptr = first_segment.display.as_ptr() as usize;
+        let first_ptr = first_segment.display_bytes().as_ptr() as usize;
         assert!((bytes_start..bytes_end).contains(&first_ptr));
 
         Ok(())

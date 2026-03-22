@@ -39,4 +39,9 @@ impl QueryRule {
             }
         }
     }
+
+    #[must_use]
+    pub fn matches_normalized(&self, normalized_haystack: &str) -> bool {
+        self.matches_preprocessed(normalized_haystack, Some(normalized_haystack))
+    }
 }

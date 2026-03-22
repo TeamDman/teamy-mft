@@ -154,7 +154,7 @@ fn matching_row_indices_for_rule(
         let mut matching_segment_ids = Vec::new();
 
         for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
-            if !rule.matches_preprocessed(segment.display, Some(segment.normalized)) {
+            if !rule.matches_normalized(segment.normalized) {
                 continue;
             }
 
@@ -178,11 +178,10 @@ fn matching_row_indices_for_rule(
         row_indices
     };
 
-    {
-        let _span = info_span!("normalize_matching_row_indices").entered();
+    info_span!("normalize_matching_row_indices").in_scope(|| {
         row_indices.sort_unstable();
         row_indices.dedup();
-    }
+    });
 
     Ok(row_indices)
 }

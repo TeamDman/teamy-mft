@@ -5,6 +5,7 @@ use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
 use eyre::Context;
 use eyre::bail;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Write;
@@ -33,8 +34,20 @@ pub struct SearchIndexBytesMut {
 
 #[derive(Debug, Clone, Copy)]
 pub struct SearchIndexPathSegmentView<'a> {
-    pub display: &'a str,
+    display_bytes: &'a [u8],
     pub normalized: &'a str,
+}
+
+impl<'a> SearchIndexPathSegmentView<'a> {
+    #[must_use]
+    pub fn display_bytes(&self) -> &'a [u8] {
+        self.display_bytes
+    }
+
+    #[must_use]
+    pub fn display_lossy(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.display_bytes)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -60,20 +73,20 @@ pub struct SearchIndexPathRowView<'a> {
 impl SearchIndexPathRowView<'_> {
     #[must_use]
     pub fn path(&self) -> String {
-        let mut segments = self
-            .segment_views()
-            .map(|segment| segment.display)
-            .collect::<Vec<_>>();
+        let mut segments = self.segment_views().collect::<Vec<_>>();
         segments.reverse();
 
-        let path_len = segments.iter().map(|segment| segment.len()).sum::<usize>()
+        let path_len = segments
+            .iter()
+            .map(|segment| segment.display_bytes.len())
+            .sum::<usize>()
             + segments.len().saturating_sub(1);
         let mut path = String::with_capacity(path_len);
         for (index, segment) in segments.into_iter().enumerate() {
             if index > 0 {
                 path.push('\\');
             }
-            path.push_str(segment);
+            path.push_str(&segment.display_lossy());
         }
         path
     }
@@ -235,7 +248,7 @@ impl<'a> SearchIndexBytes<'a> {
         };
         let segments = {
             let _span = info_span!("parse_search_index_segments").entered();
-            self.parse_segments(&mut cursor, segment_count)?
+            self.parse_segments(&mut cursor, segment_count, mode)?
         };
 
         let layout = {
@@ -262,21 +275,20 @@ impl<'a> SearchIndexBytes<'a> {
         }
 
         if mode.should_validate() {
-            {
-                let _span = info_span!("validate_search_index_path_nodes").entered();
+            info_span!("validate_search_index_path_nodes").in_scope(|| {
                 validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
-            }
-            {
-                let _span = info_span!("validate_search_index_terminals").entered();
+                Ok::<(), eyre::Report>(())
+            })?;
+            info_span!("validate_search_index_terminals").in_scope(|| {
                 validate_terminal_rows(
                     self.bytes,
                     terminal_offset,
                     terminal_count,
                     path_node_count,
                 )?;
-            }
-            {
-                let _span = info_span!("validate_search_index_postings").entered();
+                Ok::<(), eyre::Report>(())
+            })?;
+            info_span!("validate_search_index_postings").in_scope(|| {
                 validate_postings(
                     self.bytes,
                     posting_range_offset,
@@ -285,7 +297,8 @@ impl<'a> SearchIndexBytes<'a> {
                     posting_row_id_count,
                     terminal_count,
                 )?;
-            }
+                Ok::<(), eyre::Report>(())
+            })?;
         }
 
         Ok(ParsedSearchIndex {
@@ -333,6 +346,7 @@ impl<'a> SearchIndexBytes<'a> {
         &self,
         cursor: &mut usize,
         segment_count: usize,
+        mode: ParseMode,
     ) -> eyre::Result<Arc<[SearchIndexPathSegmentView<'a>]>> {
         let mut segments = Vec::with_capacity(segment_count);
         for segment_index in 0..segment_count {
@@ -354,16 +368,18 @@ impl<'a> SearchIndexBytes<'a> {
                 );
             }
 
-            let display =
-                std::str::from_utf8(&self.bytes[*cursor..display_end]).wrap_err_with(|| {
+            let display_bytes = &self.bytes[*cursor..display_end];
+            if mode.should_validate() {
+                std::str::from_utf8(display_bytes).wrap_err_with(|| {
                     format!("Invalid UTF-8 display segment payload at segment {segment_index}")
                 })?;
+            }
             let normalized = std::str::from_utf8(&self.bytes[display_end..normalized_end])
                 .wrap_err_with(|| {
                     format!("Invalid UTF-8 normalized segment payload at segment {segment_index}")
                 })?;
             segments.push(SearchIndexPathSegmentView {
-                display,
+                display_bytes,
                 normalized,
             });
             *cursor = normalized_end;
