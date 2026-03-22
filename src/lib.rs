@@ -66,6 +66,8 @@ pub fn main() -> eyre::Result<()> {
 
     debug!("Goodbye!");
     #[cfg(feature = "tracy")]
-    debug!("Tracy may take a while to finish sending the profile, during this time the clock will stop in tracy-capture.");
+    debug!(
+        "Tracy may take a while to finish sending the profile, during this time the clock will stop in tracy-capture."
+    );
     Ok(())
 }
