@@ -267,7 +267,6 @@ pub fn resolve_paths_all_parallel(
                         }
                     }
                     if acc.len() > 1 {
-                        #[cfg(feature = "tracy")]
                         let _span = debug_span!("dedup_entry_paths").entered();
                         let mut dedup = rustc_hash::FxHashMap::<PathBuf, ResolvedPath>::default();
                         for candidate in acc {

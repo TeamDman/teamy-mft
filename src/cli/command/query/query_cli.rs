@@ -144,61 +144,88 @@ impl QueryArgs {
             nucleo::Nucleo::<IndexedPathRow>::new(nucleo::Config::DEFAULT, Arc::new(|| {}), None, 1)
         };
 
-        let _span = info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
-        nucleo.pattern.reparse(
-            0,
-            &self.query,
-            nucleo::pattern::CaseMatching::Smart,
-            nucleo::pattern::Normalization::Smart,
-            false,
-        );
+        {
+            let _span = info_span!("configure_indexed_nucleo_pattern", query = %self.query).entered();
+            nucleo.pattern.reparse(
+                0,
+                &self.query,
+                nucleo::pattern::CaseMatching::Smart,
+                nucleo::pattern::Normalization::Smart,
+                false,
+            );
+        }
 
         let mut loaded_rows = 0usize;
         {
             let _span = info_span!("load_search_indexes", drives = mft_files.len()).entered();
             let injector = nucleo.injector();
             for (drive_letter, _) in mft_files {
+                let _span = info_span!(
+                    "load_drive_search_index",
+                    drive = %drive_letter,
+                )
+                .entered();
                 let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-                if !index_path.is_file() {
-                    eyre::bail!(
-                        "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-                        index_path.display(),
-                        drive_letter
-                    );
+                {
+                    let _span = info_span!(
+                        "validate_search_index_file",
+                        path = %index_path.display(),
+                    )
+                    .entered();
+                    if !index_path.is_file() {
+                        eyre::bail!(
+                            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
+                            index_path.display(),
+                            drive_letter
+                        );
+                    }
                 }
 
-                let mapped = MappedSearchIndex::open(&index_path).wrap_err_with(|| {
-                    format!(
-                        "Failed loading search index for drive {} from {}",
-                        drive_letter,
-                        index_path.display()
+                let mapped = {
+                    let _span = info_span!(
+                        "map_search_index_file",
+                        path = %index_path.display(),
                     )
-                })?;
+                    .entered();
+                    MappedSearchIndex::open(&index_path).wrap_err_with(|| {
+                        format!(
+                            "Failed loading search index for drive {} from {}",
+                            drive_letter,
+                            index_path.display()
+                        )
+                    })?
+                };
 
-                let rows: Vec<SearchIndexPathRow> = mapped.rows().wrap_err_with(|| {
-                    format!(
-                        "Failed parsing search index rows for drive {} from {}",
-                        drive_letter,
-                        index_path.display()
-                    )
-                })?;
+                let rows: Vec<SearchIndexPathRow> = {
+                    let _span = info_span!("decode_search_index_rows").entered();
+                    mapped.rows().wrap_err_with(|| {
+                        format!(
+                            "Failed parsing search index rows for drive {} from {}",
+                            drive_letter,
+                            index_path.display()
+                        )
+                    })?
+                };
 
-                for row in rows {
-                    if self.only_deleted && !row.has_deleted_entries {
-                        continue;
+                {
+                    let _span = info_span!("filter_and_queue_index_rows", source_rows = rows.len()).entered();
+                    for row in rows {
+                        if self.only_deleted && !row.has_deleted_entries {
+                            continue;
+                        }
+                        if !self.only_deleted && !self.include_deleted && row.has_deleted_entries {
+                            continue;
+                        }
+
+                        let item = IndexedPathRow {
+                            path: row.path,
+                            has_deleted_entries: row.has_deleted_entries,
+                        };
+                        injector.push(item, |x, cols| {
+                            cols[0] = x.path.clone().into();
+                        });
+                        loaded_rows += 1;
                     }
-                    if !self.only_deleted && !self.include_deleted && row.has_deleted_entries {
-                        continue;
-                    }
-
-                    let item = IndexedPathRow {
-                        path: row.path,
-                        has_deleted_entries: row.has_deleted_entries,
-                    };
-                    injector.push(item, |x, cols| {
-                        cols[0] = x.path.clone().into();
-                    });
-                    loaded_rows += 1;
                 }
             }
         }
