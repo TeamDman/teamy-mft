@@ -120,7 +120,7 @@ if (-not (Get-Command tracy-profiler.exe -ErrorAction SilentlyContinue)) {
 }
 
 if (-not $QueryArgs -or $QueryArgs.Count -eq 0) {
-	$QueryArgs = @("query", "'flower .jar$")
+	$QueryArgs = @("query", "flower .jar$")
 }
 
 $isSyncCommand = $QueryArgs.Count -gt 0 -and $QueryArgs[0] -eq "sync"

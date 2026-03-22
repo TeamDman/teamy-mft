@@ -26,10 +26,10 @@ Replace the current Nucleo-based fuzzy query path with a purpose-built fast firs
 7. Completed Phase 2: introduced `zerotrie` in the immutable data area as the serialized normalized segment dictionary.
 8. Completed Phase 2: removed the row-oriented full-path serialization in favor of compact segment reuse and deferred path reconstruction for matched rows.
 9. Remaining Phase 3: rework the execution pipeline around smaller owned request stages or task stages so load, decode, filter, and materialization are more explicitly modeled and instrumented.
-10. Remaining Phase 3: add instrumentation that distinguishes index open time, row-view iteration time, rule evaluation time, candidate materialization time, and output time so the next Tracy captures show where the remaining latency lives.
+10. In progress Phase 3: add instrumentation that distinguishes index open time, search-index header/body-prefix decode, segment decode, validation, rule-to-segment scan time, posting collection time, candidate materialization time, and output time so the next Tracy captures show where the remaining latency lives.
 11. Remaining Phase 4: verify behavior and latency against representative contains and suffix queries, compare with the previous implementation, and remove any leftover compatibility paths once the new storage format is in place.
 12. Completed Phase 4: added a deterministic small-index snapshot-style regression test that writes real `.mft_search_index` bytes and fails format-parser changes unless `SEARCH_INDEX_VERSION` is intentionally incremented.
-13. Remaining Phase 4: build query-oriented acceleration structures on top of the new segment dictionary, most likely postings keyed by segment ids before considering more specialized suffix acceleration.
+13. Remaining Phase 4: replace the current full segment scan per rule with direct query-to-segment candidate lookup, starting with suffix-oriented acceleration for common extension queries and then adding a broader contains-oriented candidate index.
 
 **Relevant files**
 - `g:/Programming/Repos/teamy-mft/src/cli/command/query/query_cli.rs` — current indexed query entry point; now consumes segment iterators from the mapped index and materializes owned rows only for matches.
@@ -69,3 +69,4 @@ Replace the current Nucleo-based fuzzy query path with a purpose-built fast firs
 1. `contains_case_insensitive` is usually harder to accelerate with trie structures than `ends_with_case_insensitive`, so the disk format may need a hybrid design: compact byte-backed storage for sequential scans plus trie-backed dictionaries for repeated string components.
 2. The new rule engine now scans normalized path segments instead of full normalized paths, so the next storage optimization is more likely postings or segment-level indexes than additional full-path compaction.
 3. If backwards compatibility of `.mft_search_index` matters, plan an explicit format version bump and migration story instead of trying to keep the old row layout partially alive.
+4. The current Tracy captures show that parallel per-drive loading is no longer the main issue; the dominant remaining work is per-query search-index parsing and per-rule full segment scans within each drive, so the next material win is algorithmic candidate reduction rather than more coarse-grained parallelism.

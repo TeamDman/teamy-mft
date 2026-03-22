@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use tracing::info_span;
 use zerotrie::ZeroTriePerfectHash;
 
 const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4;
@@ -199,7 +200,10 @@ impl<'a> SearchIndexBytes<'a> {
     }
 
     fn parse_body(&self) -> eyre::Result<ParsedSearchIndex<'a>> {
-        let header = self.header()?;
+        let header = {
+            let _span = info_span!("parse_search_index_header").entered();
+            self.header()?
+        };
         let terminal_count = usize::try_from(header.node_count).wrap_err_with(|| {
             format!(
                 "Search index terminal count {} does not fit into usize",
@@ -215,17 +219,25 @@ impl<'a> SearchIndexBytes<'a> {
             );
         }
 
-        let (mut cursor, segment_count, path_node_count, posting_row_id_count, trie_bytes) =
-            self.parse_body_prefix()?;
-        let segments = self.parse_segments(&mut cursor, segment_count)?;
+        let (mut cursor, segment_count, path_node_count, posting_row_id_count, trie_bytes) = {
+            let _span = info_span!("parse_search_index_body_prefix").entered();
+            self.parse_body_prefix()?
+        };
+        let segments = {
+            let _span = info_span!("parse_search_index_segments").entered();
+            self.parse_segments(&mut cursor, segment_count)?
+        };
 
-        let layout = compute_search_index_layout(
-            cursor,
-            segment_count,
-            path_node_count,
-            terminal_count,
-            posting_row_id_count,
-        )?;
+        let layout = {
+            let _span = info_span!("compute_search_index_layout").entered();
+            compute_search_index_layout(
+                cursor,
+                segment_count,
+                path_node_count,
+                terminal_count,
+                posting_row_id_count,
+            )?
+        };
         let path_node_offset = layout.path_node;
         let terminal_offset = layout.terminal;
         let posting_range_offset = layout.posting_range;
@@ -239,16 +251,25 @@ impl<'a> SearchIndexBytes<'a> {
             );
         }
 
-        validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
-        validate_terminal_rows(self.bytes, terminal_offset, terminal_count, path_node_count)?;
-        validate_postings(
-            self.bytes,
-            posting_range_offset,
-            posting_row_id_offset,
-            segment_count,
-            posting_row_id_count,
-            terminal_count,
-        )?;
+        {
+            let _span = info_span!("validate_search_index_path_nodes").entered();
+            validate_path_nodes(self.bytes, path_node_offset, path_node_count, &segments)?;
+        }
+        {
+            let _span = info_span!("validate_search_index_terminals").entered();
+            validate_terminal_rows(self.bytes, terminal_offset, terminal_count, path_node_count)?;
+        }
+        {
+            let _span = info_span!("validate_search_index_postings").entered();
+            validate_postings(
+                self.bytes,
+                posting_range_offset,
+                posting_row_id_offset,
+                segment_count,
+                posting_row_id_count,
+                terminal_count,
+            )?;
+        }
 
         Ok(ParsedSearchIndex {
             bytes: self.bytes,

@@ -91,7 +91,7 @@ fn validate_query_input(query_input: &str) -> eyre::Result<()> {
         }
 
         match ch {
-            '<' | '>' | '?' | '*' => {
+            '"' | '<' | '>' | '?' | '*' => {
                 eyre::bail!(
                     "query contains Windows-invalid path character {:?} in {:?}",
                     ch,
@@ -132,7 +132,7 @@ fn is_drive_designator(chars: &[char], colon_index: usize) -> bool {
 }
 
 fn is_query_boundary(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '|' | '/' | '\\' | '\'' | '"')
+    ch.is_whitespace() || matches!(ch, '|' | '/' | '\\' | '\'')
 }
 
 #[cfg(test)]
@@ -216,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn leading_quote_marker_is_ignored_within_terms() {
+    fn apostrophe_is_treated_as_a_literal_query_character() {
         assert_eq!(
             matching_paths(
-                &["'flower .jar$", "trees"],
-                &["FLOWER.jar", "trees.zip", "jarflower.txt"]
+                &["o'connor .txt$", "trees"],
+                &["O'Connor.txt", "oconnor.txt", "trees.zip"]
             ),
-            vec!["FLOWER.jar", "trees.zip"]
+            vec!["O'Connor.txt", "trees.zip"]
         );
     }
 
@@ -314,6 +314,17 @@ mod tests {
             error
                 .to_string()
                 .contains("Windows-invalid path character '?'")
+        );
+    }
+
+    #[test]
+    fn double_quote_is_rejected_eagerly() {
+        let query_inputs = vec!["flower\".jar".to_owned()];
+        let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("Windows-invalid path character '\"'")
         );
     }
 

@@ -149,21 +149,41 @@ fn matching_row_indices_for_rule(
     parsed_index: &ParsedSearchIndex<'_>,
     rule: &QueryRule,
 ) -> eyre::Result<Vec<u32>> {
-    let mut row_indices = Vec::new();
+    let matching_segment_ids = {
+        let _span = info_span!("match_query_rule_against_segments").entered();
+        let mut matching_segment_ids = Vec::new();
 
-    for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
-        if !rule.matches_preprocessed(segment.display, Some(segment.normalized)) {
-            continue;
+        for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
+            if !rule.matches_preprocessed(segment.display, Some(segment.normalized)) {
+                continue;
+            }
+
+            let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
+                format!("Segment id {segment_id} does not fit into u32 for postings lookup")
+            })?;
+            matching_segment_ids.push(segment_id);
         }
 
-        let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
-            format!("Segment id {segment_id} does not fit into u32 for postings lookup")
-        })?;
-        row_indices.extend(parsed_index.postings(segment_id)?);
+        matching_segment_ids
+    };
+
+    let mut row_indices = {
+        let _span = info_span!("collect_matching_segment_postings").entered();
+        let mut row_indices = Vec::new();
+
+        for segment_id in matching_segment_ids {
+            row_indices.extend(parsed_index.postings(segment_id)?);
+        }
+
+        row_indices
+    };
+
+    {
+        let _span = info_span!("normalize_matching_row_indices").entered();
+        row_indices.sort_unstable();
+        row_indices.dedup();
     }
 
-    row_indices.sort_unstable();
-    row_indices.dedup();
     Ok(row_indices)
 }
 
@@ -174,19 +194,11 @@ fn load_and_query_drive_search_index(
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<DriveQueryResult> {
-    let _span = info_span!(
-        "load_drive_search_index",
-        drive = %drive_letter,
-    )
-    .entered();
+    let _span = info_span!("load_drive_search_index").entered();
     let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
 
     {
-        let _span = info_span!(
-            "validate_search_index_file",
-            path = %index_path.display(),
-        )
-        .entered();
+        let _span = info_span!("validate_search_index_file").entered();
         if !index_path.is_file() {
             eyre::bail!(
                 "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
@@ -197,11 +209,7 @@ fn load_and_query_drive_search_index(
     }
 
     let mapped = {
-        let _span = info_span!(
-            "map_search_index_file",
-            path = %index_path.display(),
-        )
-        .entered();
+        let _span = info_span!("map_search_index_file").entered();
         MappedSearchIndex::open(&index_path).wrap_err_with(|| {
             format!(
                 "Failed loading search index for drive {} from {}",
@@ -238,11 +246,7 @@ fn load_and_query_drive_search_index(
             })?
     };
     let matched_rows = {
-        let _span = info_span!(
-            "materialize_matched_index_rows",
-            candidate_count = matched_row_indices.len(),
-        )
-        .entered();
+        let _span = info_span!("materialize_matched_index_rows").entered();
         let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
 
         for row_index in matched_row_indices {

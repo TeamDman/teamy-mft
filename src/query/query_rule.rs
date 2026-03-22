@@ -9,18 +9,17 @@ pub enum QueryRule {
 impl QueryRule {
     #[must_use]
     pub fn parse(raw_term: &str) -> Option<Self> {
-        let term = raw_term.trim_matches(['\'', '"']);
-        if term.is_empty() {
+        if raw_term.is_empty() {
             return None;
         }
 
-        if let Some(suffix) = term.strip_suffix('$') {
+        if let Some(suffix) = raw_term.strip_suffix('$') {
             if suffix.is_empty() {
                 return None;
             }
             Some(Self::EndsWithCaseInsensitive(QueryNeedle::new(suffix)))
         } else {
-            Some(Self::ContainsCaseInsensitive(QueryNeedle::new(term)))
+            Some(Self::ContainsCaseInsensitive(QueryNeedle::new(raw_term)))
         }
     }
 
