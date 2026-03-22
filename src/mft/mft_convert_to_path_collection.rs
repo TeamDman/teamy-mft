@@ -13,6 +13,7 @@ use teamy_uom_extensions::InformationOverExt;
 use thousands::Separable;
 use tracing::debug;
 use tracing::debug_span;
+use tracing::info_span;
 use tracing::instrument;
 use uom::si::f64::Ratio;
 use uom::si::f64::Time;
@@ -32,6 +33,13 @@ pub fn convert_mft_file_to_path_collection(
     drive_letter: &str,
     mft_file: &MftFile,
 ) -> Result<MftEntryPathCollection> {
+    let _span = info_span!(
+        "convert_mft_file_to_path_collection",
+        drive_letter = %drive_letter,
+        mft_size = %mft_file.size().format_human(BINARY),
+        mft_entries = %mft_file.record_count().separate_with_commas(),
+    )
+    .entered();
     let start = std::time::Instant::now();
 
     // collect filename attributes (parallel)

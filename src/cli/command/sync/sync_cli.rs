@@ -133,8 +133,11 @@ impl SyncCommand {
                 let in_memory_indexing = async move {
                     // Consume completed MFT reads as they arrive and fan index construction out
                     // concurrently so slow drives do not block faster ones.
-                    let _guard =
-                        info_span!("collect mft sync and in-memory index results").entered();
+                    let _guard = info_span!(
+                        "collect mft sync and in_memory index results",
+                        drive_count = in_memory_index_drive_letters_for_stream.len(),
+                    )
+                    .entered();
                     mft_data
                         .try_for_each_concurrent(None, move |(drive_info, physical_mft)| {
                             let in_memory_index_drive_letters =
@@ -146,6 +149,12 @@ impl SyncCommand {
                                 }
 
                                 tokio::task::spawn_blocking(move || {
+                                    let _guard = info_span!(
+                                        "build_in_memory_search_index_for_drive",
+                                        drive = %drive_info.drive_letter,
+                                        index_path = %drive_info.index_output_path.display(),
+                                    )
+                                    .entered();
                                     let mft_file = physical_mft.to_mft_file()?;
                                     SyncIndexArgs.invoke_for_mft_file(&drive_info, &mft_file)
                                 })
@@ -167,6 +176,11 @@ impl SyncCommand {
                         return Ok(());
                     }
 
+                    let _guard = info_span!(
+                        "build_disk_backed_search_indexes",
+                        drive_count = fallback_index_drive_infos.len(),
+                    )
+                    .entered();
                     SyncIndexArgs.invoke(fallback_index_drive_infos)
                 };
 

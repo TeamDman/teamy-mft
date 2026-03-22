@@ -12,6 +12,7 @@ use facet::Facet;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
+use tracing::info_span;
 use uom::si::information::byte;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
@@ -67,6 +68,13 @@ impl SyncIndexArgs {
         );
 
         for info in drive_infos {
+            let _span = info_span!(
+                "sync_index_for_drive",
+                drive = %info.drive_letter,
+                mft_path = %info.mft_output_path.display(),
+                index_path = %info.index_output_path.display(),
+            )
+            .entered();
             self.invoke_for_mft_path(&info)?;
         }
 
@@ -85,8 +93,25 @@ impl SyncIndexArgs {
         info: &DriveSyncInfo,
         mft_file: &MftFile,
     ) -> eyre::Result<()> {
-        let rows = Self::build_rows_for_mft_file(info, mft_file)?;
-        Self::write_index_output(info, mft_file, &rows)
+        let rows = {
+            let _span = info_span!(
+                "build_search_index_rows",
+                drive = %info.drive_letter,
+                mft_size = %mft_file.size().get::<byte>(),
+            )
+            .entered();
+            Self::build_rows_for_mft_file(info, mft_file)?
+        };
+        {
+            let _span = info_span!(
+                "write_search_index_output",
+                drive = %info.drive_letter,
+                row_count = rows.len(),
+                output_path = %info.index_output_path.display(),
+            )
+            .entered();
+            Self::write_index_output(info, mft_file, &rows)
+        }
     }
 
     fn invoke_for_mft_path(&self, info: &DriveSyncInfo) -> eyre::Result<()> {
@@ -98,13 +123,21 @@ impl SyncIndexArgs {
             );
         }
 
-        let mft_file = MftFile::from_path(&info.mft_output_path).wrap_err_with(|| {
-            format!(
-                "Failed parsing MFT snapshot for drive {} from {}",
-                info.drive_letter,
-                info.mft_output_path.display()
+        let mft_file = {
+            let _span = info_span!(
+                "load_cached_mft_for_index",
+                drive = %info.drive_letter,
+                mft_path = %info.mft_output_path.display(),
             )
-        })?;
+            .entered();
+            MftFile::from_path(&info.mft_output_path).wrap_err_with(|| {
+                format!(
+                    "Failed parsing MFT snapshot for drive {} from {}",
+                    info.drive_letter,
+                    info.mft_output_path.display()
+                )
+            })?
+        };
 
         self.invoke_for_mft_file(info, &mft_file)
     }

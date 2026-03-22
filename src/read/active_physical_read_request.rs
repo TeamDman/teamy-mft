@@ -3,7 +3,6 @@ use crate::read::physical_read_results::PhysicalReadResultEntry;
 use eyre::bail;
 use std::any::type_name;
 use std::ptr::null_mut;
-use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 use uom::si::information::byte;
@@ -143,7 +142,7 @@ impl ActivePhysicalReadRequest {
         let mut bytes_transferred: u32 = 0;
         let mut completion_key: usize = 0;
         let mut lp_overlapped: *mut OVERLAPPED = null_mut();
-        debug!("Waiting for IOCP read completion");
+        trace!("Waiting for IOCP read completion");
         // SAFETY: The raw pointers remain valid for the duration of the
         // call and are initialized before the call returns.
         let res = unsafe {
