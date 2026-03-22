@@ -35,6 +35,27 @@ function Get-TracyCaptureProcesses {
 		Where-Object { $_ -ne $null }
 }
 
+function Wait-ForTracyCaptureReady {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$CapturePath,
+		[Parameter(Mandatory = $true)]
+		[TimeSpan]$Timeout
+	)
+
+	$deadline = (Get-Date).Add($Timeout)
+	do {
+		$processes = @(Get-TracyCaptureProcesses -CapturePath $CapturePath)
+		if ($processes.Count -gt 0) {
+			return $processes
+		}
+
+		Start-Sleep -Milliseconds 250
+	} while ((Get-Date) -lt $deadline)
+
+	throw "Timed out waiting $(Format-Elapsed $Timeout) for tracy-capture to start for $CapturePath"
+}
+
 function Stop-TracyCaptureGracefully {
 	param(
 		[Parameter(Mandatory = $true)]
@@ -102,6 +123,7 @@ $commandElapsed = $null
 $cleanupElapsed = $null
 $profilerElapsed = $null
 $captureFlushDelay = [TimeSpan]::FromSeconds(1)
+$captureStartupTimeout = [TimeSpan]::FromSeconds(10)
 
 $captureDir = Join-Path $PSScriptRoot "tracy"
 if (-not (Test-Path $captureDir)) {
@@ -140,6 +162,11 @@ if ($wt) {
 $captureLaunchStopwatch.Stop()
 $captureLaunchElapsed = $captureLaunchStopwatch.Elapsed
 Write-Host "Capture launch time: $(Format-Elapsed $captureLaunchElapsed)"
+Write-Host "Waiting for tracy-capture process to appear (timeout $(Format-Elapsed $captureStartupTimeout))"
+$captureProcesses = @(Wait-ForTracyCaptureReady -CapturePath $capturePath -Timeout $captureStartupTimeout)
+Write-Host "tracy-capture ready (pid: $($captureProcesses.Id -join ', '))"
+Write-Host "Waiting 00:01.000 for tracy-capture to get ready"
+Start-Sleep -Seconds 1
 
 try {
 	if ($isSyncCommand) {

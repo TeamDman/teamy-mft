@@ -156,23 +156,7 @@ fn matching_row_indices_for_rule(
         });
     }
 
-    let matching_segment_ids = {
-        let _span = info_span!("match_query_rule_against_segments").entered();
-        let mut matching_segment_ids = Vec::new();
-
-        for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
-            if !rule.matches_normalized(segment.normalized) {
-                continue;
-            }
-
-            let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
-                format!("Segment id {segment_id} does not fit into u32 for postings lookup")
-            })?;
-            matching_segment_ids.push(segment_id);
-        }
-
-        matching_segment_ids
-    };
+    let matching_segment_ids = matching_segment_ids_for_rule(parsed_index, rule)?;
 
     let mut row_indices = {
         let _span = info_span!("collect_matching_segment_postings").entered();
@@ -191,6 +175,94 @@ fn matching_row_indices_for_rule(
     });
 
     Ok(row_indices)
+}
+
+fn matching_segment_ids_for_rule(
+    parsed_index: &ParsedSearchIndex<'_>,
+    rule: &QueryRule,
+) -> eyre::Result<Vec<u32>> {
+    if let Some(trigrams) = rule.normalized_contains_trigrams() {
+        let candidate_segment_ids = {
+            let _span = info_span!("collect_trigram_segment_candidates").entered();
+            let mut candidate_segment_ids: Option<Vec<u32>> = None;
+
+            for trigram in trigrams {
+                let Some(iter) = parsed_index.trigram_postings(trigram)? else {
+                    return Ok(Vec::new());
+                };
+
+                let mut trigram_segment_ids = iter.collect::<Vec<_>>();
+                trigram_segment_ids.sort_unstable();
+                trigram_segment_ids.dedup();
+
+                candidate_segment_ids = Some(match candidate_segment_ids.take() {
+                    Some(existing_segment_ids) => {
+                        intersect_sorted_ids(&existing_segment_ids, &trigram_segment_ids)
+                    }
+                    None => trigram_segment_ids,
+                });
+
+                if candidate_segment_ids
+                    .as_ref()
+                    .is_some_and(std::vec::Vec::is_empty)
+                {
+                    return Ok(Vec::new());
+                }
+            }
+
+            candidate_segment_ids.unwrap_or_default()
+        };
+
+        return info_span!("filter_trigram_segment_candidates").in_scope(|| {
+            let mut matching_segment_ids = Vec::with_capacity(candidate_segment_ids.len());
+
+            for segment_id in candidate_segment_ids {
+                let segment = parsed_index.segment(segment_id)?;
+                if rule.matches_normalized(segment.normalized) {
+                    matching_segment_ids.push(segment_id);
+                }
+            }
+
+            Ok(matching_segment_ids)
+        });
+    }
+
+    info_span!("match_query_rule_against_segments").in_scope(|| {
+        let mut matching_segment_ids = Vec::new();
+
+        for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
+            if !rule.matches_normalized(segment.normalized) {
+                continue;
+            }
+
+            let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
+                format!("Segment id {segment_id} does not fit into u32 for postings lookup")
+            })?;
+            matching_segment_ids.push(segment_id);
+        }
+
+        Ok(matching_segment_ids)
+    })
+}
+
+fn intersect_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
+    let mut left_index = 0;
+    let mut right_index = 0;
+    let mut intersection = Vec::with_capacity(left.len().min(right.len()));
+
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            std::cmp::Ordering::Less => left_index += 1,
+            std::cmp::Ordering::Greater => right_index += 1,
+            std::cmp::Ordering::Equal => {
+                intersection.push(left[left_index]);
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+
+    intersection
 }
 
 fn load_and_query_drive_search_index(
@@ -349,7 +421,7 @@ impl QueryArgs {
             print_results_lines(display_results, colorize);
         }
 
-        std::process::exit(0);
+        Ok(())
     }
 
     /// Query indexed paths from `.mft_search_index` files.
@@ -379,5 +451,75 @@ impl QueryArgs {
                 .collect()
         };
         self.invoke_indexed(mft_files, &sync_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matching_row_indices_for_rule;
+    use crate::query::QueryPlan;
+    use crate::query::QueryRule;
+    use crate::search_index::format::SearchIndexHeader;
+    use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::SearchIndexBytes;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+
+    fn parse_fixture_index()
+    -> eyre::Result<crate::search_index::search_index_bytes::ParsedSearchIndex<'static>> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\flowchart.txt"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.zip"),
+                has_deleted_entries: false,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        SearchIndexBytes::new(bytes).parse_trusted_for_query()
+    }
+
+    #[test]
+    fn contains_rules_return_rows_from_trigram_candidates() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = QueryRule::parse("ower").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn short_contains_rules_still_match_without_trigrams() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = QueryRule::parse("fl").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_plan_intersects_contains_and_suffix_candidates() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let plan = QueryPlan::parse_inputs(&[String::from("flow .jar$")])?;
+
+        assert_eq!(
+            plan.matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed, rule))?,
+            vec![0]
+        );
+
+        Ok(())
     }
 }

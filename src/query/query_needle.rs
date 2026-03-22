@@ -4,6 +4,8 @@ pub enum QueryNeedle {
     UnicodeLower(String),
 }
 
+pub const QUERY_TRIGRAM_LEN: usize = 3;
+
 impl QueryNeedle {
     #[must_use]
     pub fn new(value: &str) -> Self {
@@ -27,6 +29,26 @@ impl QueryNeedle {
             Self::AsciiLower(needle) => unsafe { std::str::from_utf8_unchecked(needle) },
             Self::UnicodeLower(needle) => needle,
         }
+    }
+
+    #[must_use]
+    pub fn normalized_bytes(&self) -> &[u8] {
+        match self {
+            Self::AsciiLower(needle) => needle,
+            Self::UnicodeLower(needle) => needle.as_bytes(),
+        }
+    }
+
+    #[must_use]
+    pub fn normalized_trigrams(&self) -> Vec<[u8; QUERY_TRIGRAM_LEN]> {
+        let mut trigrams = self
+            .normalized_bytes()
+            .windows(QUERY_TRIGRAM_LEN)
+            .map(|window| [window[0], window[1], window[2]])
+            .collect::<Vec<_>>();
+        trigrams.sort_unstable();
+        trigrams.dedup();
+        trigrams
     }
 
     #[must_use]

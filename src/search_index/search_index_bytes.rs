@@ -14,9 +14,10 @@ use std::sync::Arc;
 use tracing::info_span;
 use zerotrie::ZeroTriePerfectHash;
 
-const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4 + 4 + 4;
+const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4;
 const SEARCH_INDEX_SEGMENT_LEN_PREFIX: usize = 4 + 4;
 const SEARCH_INDEX_EXTENSION_SUFFIX_LEN_PREFIX: usize = 4;
+const SEARCH_INDEX_TRIGRAM_LEN: usize = 3;
 const SEARCH_INDEX_NODE_LEN: usize = 4 + 4;
 const SEARCH_INDEX_TERMINAL_LEN: usize = 4 + 1;
 const SEARCH_INDEX_POSTING_RANGE_LEN: usize = 4 + 4;
@@ -50,9 +51,11 @@ struct SearchIndexBodyPrefix<'a> {
     cursor: usize,
     segment_count: usize,
     extension_count: usize,
+    trigram_count: usize,
     path_node_count: usize,
     posting_row_id_count: usize,
     extension_posting_row_id_count: usize,
+    trigram_posting_segment_id_count: usize,
     trie_bytes: &'a [u8],
 }
 
@@ -74,6 +77,7 @@ pub struct ParsedSearchIndex<'a> {
     trie_bytes: &'a [u8],
     segments: Arc<[SearchIndexPathSegmentView<'a>]>,
     extension_suffixes: Arc<[SearchIndexExtensionSuffixView<'a>]>,
+    trigrams: Arc<[[u8; SEARCH_INDEX_TRIGRAM_LEN]]>,
     path_node_offset: usize,
     terminal_offset: usize,
     terminal_count: usize,
@@ -83,6 +87,9 @@ pub struct ParsedSearchIndex<'a> {
     extension_posting_range_offset: usize,
     extension_posting_row_id_offset: usize,
     extension_posting_row_id_count: usize,
+    trigram_posting_range_offset: usize,
+    trigram_posting_segment_id_offset: usize,
+    trigram_posting_segment_id_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -271,17 +278,25 @@ impl<'a> SearchIndexBytes<'a> {
             let _span = info_span!("parse_search_index_extensions").entered();
             self.parse_extension_suffixes(&mut cursor, body_prefix.extension_count, mode)?
         };
+        let trigrams = {
+            let _span = info_span!("parse_search_index_trigrams").entered();
+            self.parse_trigrams(&mut cursor, body_prefix.trigram_count)?
+        };
 
         let layout = {
             let _span = info_span!("compute_search_index_layout").entered();
             compute_search_index_layout(
                 cursor,
-                body_prefix.segment_count,
-                body_prefix.extension_count,
-                body_prefix.path_node_count,
-                terminal_count,
-                body_prefix.posting_row_id_count,
-                body_prefix.extension_posting_row_id_count,
+                SearchIndexLayoutCounts {
+                    segments: body_prefix.segment_count,
+                    extensions: body_prefix.extension_count,
+                    trigrams: body_prefix.trigram_count,
+                    path_nodes: body_prefix.path_node_count,
+                    terminals: terminal_count,
+                    posting_row_ids: body_prefix.posting_row_id_count,
+                    extension_posting_row_ids: body_prefix.extension_posting_row_id_count,
+                    trigram_posting_segment_ids: body_prefix.trigram_posting_segment_id_count,
+                },
             )?
         };
         let path_node_offset = layout.path_node;
@@ -290,6 +305,8 @@ impl<'a> SearchIndexBytes<'a> {
         let posting_row_id_offset = layout.posting_row_id;
         let extension_posting_range_offset = layout.extension_posting_range;
         let extension_posting_row_id_offset = layout.extension_posting_row_id;
+        let trigram_posting_range_offset = layout.trigram_posting_range;
+        let trigram_posting_segment_id_offset = layout.trigram_posting_segment_id;
         let end = layout.end;
         if end != self.bytes.len() {
             bail!(
@@ -308,6 +325,7 @@ impl<'a> SearchIndexBytes<'a> {
             trie_bytes: body_prefix.trie_bytes,
             segments,
             extension_suffixes,
+            trigrams,
             path_node_offset,
             terminal_offset,
             terminal_count,
@@ -317,6 +335,9 @@ impl<'a> SearchIndexBytes<'a> {
             extension_posting_range_offset,
             extension_posting_row_id_offset,
             extension_posting_row_id_count: body_prefix.extension_posting_row_id_count,
+            trigram_posting_range_offset,
+            trigram_posting_segment_id_offset,
+            trigram_posting_segment_id_count: body_prefix.trigram_posting_segment_id_count,
         })
     }
 
@@ -324,10 +345,12 @@ impl<'a> SearchIndexBytes<'a> {
         let mut cursor = SEARCH_INDEX_HEADER_LEN;
         let segment_count = read_u32(self.bytes, &mut cursor) as usize;
         let extension_count = read_u32(self.bytes, &mut cursor) as usize;
+        let trigram_count = read_u32(self.bytes, &mut cursor) as usize;
         let path_node_count = read_u32(self.bytes, &mut cursor) as usize;
         let trie_len = read_u32(self.bytes, &mut cursor) as usize;
         let posting_row_id_count = read_u32(self.bytes, &mut cursor) as usize;
         let extension_posting_row_id_count = read_u32(self.bytes, &mut cursor) as usize;
+        let trigram_posting_segment_id_count = read_u32(self.bytes, &mut cursor) as usize;
 
         let trie_end = cursor + trie_len;
         if trie_end > self.bytes.len() {
@@ -345,9 +368,11 @@ impl<'a> SearchIndexBytes<'a> {
             cursor,
             segment_count,
             extension_count,
+            trigram_count,
             path_node_count,
             posting_row_id_count,
             extension_posting_row_id_count,
+            trigram_posting_segment_id_count,
             trie_bytes,
         })
     }
@@ -451,6 +476,32 @@ impl<'a> SearchIndexBytes<'a> {
             extension_suffixes,
         ))
     }
+
+    fn parse_trigrams(
+        &self,
+        cursor: &mut usize,
+        trigram_count: usize,
+    ) -> eyre::Result<Arc<[[u8; SEARCH_INDEX_TRIGRAM_LEN]]>> {
+        let mut trigrams = Vec::with_capacity(trigram_count);
+        for trigram_index in 0..trigram_count {
+            if self.bytes.len() < *cursor + SEARCH_INDEX_TRIGRAM_LEN {
+                bail!(
+                    "Corrupt search index: truncated trigram payload at index {}",
+                    trigram_index
+                );
+            }
+
+            let trigram = [
+                self.bytes[*cursor],
+                self.bytes[*cursor + 1],
+                self.bytes[*cursor + 2],
+            ];
+            trigrams.push(trigram);
+            *cursor += SEARCH_INDEX_TRIGRAM_LEN;
+        }
+
+        Ok(Arc::<[[u8; SEARCH_INDEX_TRIGRAM_LEN]]>::from(trigrams))
+    }
 }
 
 fn terminal_count_from_header(header: SearchIndexHeader) -> eyre::Result<usize> {
@@ -511,6 +562,18 @@ fn validate_parsed_tables(
         )?;
         Ok::<(), eyre::Report>(())
     })?;
+    info_span!("validate_search_index_trigram_postings").in_scope(|| {
+        validate_posting_table(
+            bytes,
+            layout.trigram_posting_range,
+            layout.trigram_posting_segment_id,
+            body_prefix.trigram_count,
+            body_prefix.trigram_posting_segment_id_count,
+            body_prefix.segment_count,
+            "trigram",
+        )?;
+        Ok::<(), eyre::Report>(())
+    })?;
 
     Ok(())
 }
@@ -536,6 +599,20 @@ impl<'a> ParsedSearchIndex<'a> {
     #[must_use]
     pub fn segments(&self) -> &[SearchIndexPathSegmentView<'a>] {
         &self.segments
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if `segment_id` is out of bounds.
+    pub fn segment(&self, segment_id: u32) -> eyre::Result<SearchIndexPathSegmentView<'a>> {
+        let segment_id = segment_id as usize;
+        self.segments.get(segment_id).copied().ok_or_else(|| {
+            eyre::eyre!(
+                "Corrupt search index: requested segment {} but index contains {} segments",
+                segment_id,
+                self.segments.len()
+            )
+        })
     }
 
     #[must_use]
@@ -618,6 +695,26 @@ impl<'a> ParsedSearchIndex<'a> {
             self.extension_posting_row_id_count,
             extension_index,
             "extension suffix",
+        )?))
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the trigram posting range is malformed.
+    pub fn trigram_postings(
+        &self,
+        trigram: [u8; SEARCH_INDEX_TRIGRAM_LEN],
+    ) -> eyre::Result<Option<SearchIndexPostingIter<'a>>> {
+        let Ok(trigram_index) = self.trigrams.binary_search(&trigram) else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.posting_iter(
+            self.trigram_posting_range_offset,
+            self.trigram_posting_segment_id_offset,
+            self.trigram_posting_segment_id_count,
+            trigram_index,
+            "trigram",
         )?))
     }
 
@@ -829,7 +926,21 @@ struct SearchIndexLayout {
     posting_row_id: usize,
     extension_posting_range: usize,
     extension_posting_row_id: usize,
+    trigram_posting_range: usize,
+    trigram_posting_segment_id: usize,
     end: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SearchIndexLayoutCounts {
+    segments: usize,
+    extensions: usize,
+    trigrams: usize,
+    path_nodes: usize,
+    terminals: usize,
+    posting_row_ids: usize,
+    extension_posting_row_ids: usize,
+    trigram_posting_segment_ids: usize,
 }
 
 #[derive(Debug)]
@@ -837,6 +948,7 @@ struct SearchIndexSerializationTables {
     segment_entries: Vec<(String, String)>,
     postings_by_segment: Vec<Vec<u32>>,
     extension_postings_by_suffix: BTreeMap<String, Vec<u32>>,
+    trigram_postings_by_trigram: BTreeMap<[u8; SEARCH_INDEX_TRIGRAM_LEN], Vec<u32>>,
     trie_bytes: Vec<u8>,
     path_nodes: Vec<SearchIndexNodeRecord>,
     terminals: Vec<(u32, bool)>,
@@ -857,6 +969,8 @@ fn collect_search_index_tables(
     let mut segment_entries = Vec::<(String, String)>::new();
     let mut postings_by_segment = Vec::<Vec<u32>>::new();
     let mut extension_postings_by_suffix = BTreeMap::<String, Vec<u32>>::new();
+    let mut trigram_postings_by_trigram =
+        BTreeMap::<[u8; SEARCH_INDEX_TRIGRAM_LEN], Vec<u32>>::new();
     let mut normalized_trie_entries = BTreeMap::<Vec<u8>, usize>::new();
     let mut path_nodes = Vec::<SearchIndexNodeRecord>::new();
     let mut terminals = Vec::<(u32, bool)>::with_capacity(rows.len());
@@ -880,6 +994,12 @@ fn collect_search_index_tables(
                 normalized_trie_entries
                     .entry(normalized.as_bytes().to_vec())
                     .or_insert(segment_id as usize);
+                for trigram in normalized_trigrams(&normalized) {
+                    trigram_postings_by_trigram
+                        .entry(trigram)
+                        .or_default()
+                        .push(segment_id);
+                }
                 segment_entries.push((segment.to_owned(), normalized));
                 postings_by_segment.push(Vec::new());
                 segment_ids_by_display.insert(segment.to_owned(), segment_id);
@@ -929,6 +1049,7 @@ fn collect_search_index_tables(
         segment_entries,
         postings_by_segment,
         extension_postings_by_suffix,
+        trigram_postings_by_trigram,
         trie_bytes: trie.into_store(),
         path_nodes,
         terminals,
@@ -944,6 +1065,7 @@ fn serialize_search_index_tables(
         segment_entries,
         postings_by_segment,
         extension_postings_by_suffix,
+        trigram_postings_by_trigram,
         trie_bytes,
         path_nodes,
         terminals,
@@ -962,6 +1084,15 @@ fn serialize_search_index_tables(
             format!(
                 "Too many unique extension suffixes to encode ({})",
                 extension_postings_by_suffix.len()
+            )
+        })?;
+    let trigram_count: u32 = trigram_postings_by_trigram
+        .len()
+        .try_into()
+        .wrap_err_with(|| {
+            format!(
+                "Too many unique trigrams to encode ({})",
+                trigram_postings_by_trigram.len()
             )
         })?;
     let path_node_count: u32 = path_nodes
@@ -986,19 +1117,28 @@ fn serialize_search_index_tables(
         .sum::<usize>()
         .try_into()
         .wrap_err("Too many extension posting row ids to encode")?;
+    let trigram_posting_segment_id_count: u32 = trigram_postings_by_trigram
+        .values()
+        .map(std::vec::Vec::len)
+        .sum::<usize>()
+        .try_into()
+        .wrap_err("Too many trigram posting segment ids to encode")?;
 
     let mut bytes = Vec::with_capacity(SEARCH_INDEX_HEADER_LEN + row_count * 16);
     header.extend_vec(&mut bytes);
     bytes.extend_from_slice(&segment_count.to_le_bytes());
     bytes.extend_from_slice(&extension_count.to_le_bytes());
+    bytes.extend_from_slice(&trigram_count.to_le_bytes());
     bytes.extend_from_slice(&path_node_count.to_le_bytes());
     bytes.extend_from_slice(&trie_len.to_le_bytes());
     bytes.extend_from_slice(&posting_row_id_count.to_le_bytes());
     bytes.extend_from_slice(&extension_posting_row_id_count.to_le_bytes());
+    bytes.extend_from_slice(&trigram_posting_segment_id_count.to_le_bytes());
     bytes.extend_from_slice(&trie_bytes);
 
     serialize_segment_entries(&mut bytes, &segment_entries)?;
     serialize_extension_suffix_entries(&mut bytes, &extension_postings_by_suffix)?;
+    serialize_trigram_entries(&mut bytes, &trigram_postings_by_trigram);
     serialize_path_nodes(&mut bytes, &path_nodes);
     serialize_terminals(&mut bytes, &terminals);
     serialize_postings(&mut bytes, &postings_by_segment, posting_row_id_count)?;
@@ -1007,38 +1147,54 @@ fn serialize_search_index_tables(
         &extension_postings_by_suffix,
         extension_posting_row_id_count,
     )?;
+    serialize_trigram_postings(
+        &mut bytes,
+        &trigram_postings_by_trigram,
+        trigram_posting_segment_id_count,
+    )?;
 
     Ok(bytes)
 }
 
 fn compute_search_index_layout(
     cursor: usize,
-    segment_count: usize,
-    extension_count: usize,
-    path_node_count: usize,
-    terminal_count: usize,
-    posting_row_id_count: usize,
-    extension_posting_row_id_count: usize,
+    counts: SearchIndexLayoutCounts,
 ) -> eyre::Result<SearchIndexLayout> {
-    let path_node_bytes_len = path_node_count
+    let path_node_bytes_len = counts
+        .path_nodes
         .checked_mul(SEARCH_INDEX_NODE_LEN)
         .ok_or_else(|| eyre::eyre!("Search index path-node table length overflow"))?;
-    let terminal_bytes_len = terminal_count
+    let terminal_bytes_len = counts
+        .terminals
         .checked_mul(SEARCH_INDEX_TERMINAL_LEN)
         .ok_or_else(|| eyre::eyre!("Search index terminal table length overflow"))?;
-    let posting_range_bytes_len = segment_count
+    let posting_range_bytes_len = counts
+        .segments
         .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
         .ok_or_else(|| eyre::eyre!("Search index posting-range table length overflow"))?;
-    let posting_row_id_bytes_len = posting_row_id_count
+    let posting_row_id_bytes_len = counts
+        .posting_row_ids
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
         .ok_or_else(|| eyre::eyre!("Search index posting row-id table length overflow"))?;
-    let extension_posting_range_bytes_len = extension_count
+    let extension_posting_range_bytes_len = counts
+        .extensions
         .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
         .ok_or_else(|| eyre::eyre!("Search index extension posting-range table length overflow"))?;
-    let extension_posting_row_id_bytes_len = extension_posting_row_id_count
+    let extension_posting_row_id_bytes_len = counts
+        .extension_posting_row_ids
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
         .ok_or_else(|| {
             eyre::eyre!("Search index extension posting row-id table length overflow")
+        })?;
+    let trigram_posting_range_bytes_len = counts
+        .trigrams
+        .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
+        .ok_or_else(|| eyre::eyre!("Search index trigram posting-range table length overflow"))?;
+    let trigram_posting_segment_id_bytes_len = counts
+        .trigram_posting_segment_ids
+        .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
+        .ok_or_else(|| {
+            eyre::eyre!("Search index trigram posting segment-id table length overflow")
         })?;
 
     let path_node_offset = cursor;
@@ -1048,7 +1204,11 @@ fn compute_search_index_layout(
     let extension_posting_range_offset = posting_row_id_offset + posting_row_id_bytes_len;
     let extension_posting_row_id_offset =
         extension_posting_range_offset + extension_posting_range_bytes_len;
-    let end_offset = extension_posting_row_id_offset + extension_posting_row_id_bytes_len;
+    let trigram_posting_range_offset =
+        extension_posting_row_id_offset + extension_posting_row_id_bytes_len;
+    let trigram_posting_segment_id_offset =
+        trigram_posting_range_offset + trigram_posting_range_bytes_len;
+    let end_offset = trigram_posting_segment_id_offset + trigram_posting_segment_id_bytes_len;
 
     Ok(SearchIndexLayout {
         path_node: path_node_offset,
@@ -1057,6 +1217,8 @@ fn compute_search_index_layout(
         posting_row_id: posting_row_id_offset,
         extension_posting_range: extension_posting_range_offset,
         extension_posting_row_id: extension_posting_row_id_offset,
+        trigram_posting_range: trigram_posting_range_offset,
+        trigram_posting_segment_id: trigram_posting_segment_id_offset,
         end: end_offset,
     })
 }
@@ -1118,7 +1280,7 @@ fn validate_posting_table(
     posting_row_id_offset: usize,
     entry_count: usize,
     posting_row_id_count: usize,
-    terminal_count: usize,
+    max_posting_id_exclusive: usize,
     entry_kind: &str,
 ) -> eyre::Result<()> {
     for entry_index in 0..entry_count {
@@ -1141,9 +1303,9 @@ fn validate_posting_table(
             let row_id_offset =
                 posting_row_id_offset + posting_index * SEARCH_INDEX_POSTING_ROW_LEN;
             let row_id = read_u32_at(bytes, row_id_offset) as usize;
-            if row_id >= terminal_count {
+            if row_id >= max_posting_id_exclusive {
                 bail!(
-                    "Corrupt search index: {} {} posting references missing terminal row {}",
+                    "Corrupt search index: {} {} posting references missing target id {}",
                     entry_kind,
                     entry_index,
                     row_id
@@ -1207,6 +1369,15 @@ fn serialize_extension_suffix_entries(
     }
 
     Ok(())
+}
+
+fn serialize_trigram_entries(
+    bytes: &mut Vec<u8>,
+    trigram_postings_by_trigram: &BTreeMap<[u8; SEARCH_INDEX_TRIGRAM_LEN], Vec<u32>>,
+) {
+    for trigram in trigram_postings_by_trigram.keys() {
+        bytes.extend_from_slice(trigram);
+    }
 }
 
 fn serialize_path_nodes(bytes: &mut Vec<u8>, path_nodes: &[SearchIndexNodeRecord]) {
@@ -1285,6 +1456,49 @@ fn serialize_extension_postings(
     }
 
     Ok(())
+}
+
+fn serialize_trigram_postings(
+    bytes: &mut Vec<u8>,
+    trigram_postings_by_trigram: &BTreeMap<[u8; SEARCH_INDEX_TRIGRAM_LEN], Vec<u32>>,
+    trigram_posting_segment_id_count: u32,
+) -> eyre::Result<()> {
+    let mut posting_segment_ids = Vec::with_capacity(trigram_posting_segment_id_count as usize);
+    for postings in trigram_postings_by_trigram.values() {
+        let posting_start: u32 = posting_segment_ids.len().try_into().wrap_err_with(|| {
+            format!(
+                "Too many trigram posting segment ids to encode ({})",
+                posting_segment_ids.len()
+            )
+        })?;
+        let posting_len: u32 = postings.len().try_into().wrap_err_with(|| {
+            format!(
+                "Too many postings for one trigram to encode ({})",
+                postings.len()
+            )
+        })?;
+
+        bytes.extend_from_slice(&posting_start.to_le_bytes());
+        bytes.extend_from_slice(&posting_len.to_le_bytes());
+        posting_segment_ids.extend(postings.iter().copied());
+    }
+
+    for segment_id in posting_segment_ids {
+        bytes.extend_from_slice(&segment_id.to_le_bytes());
+    }
+
+    Ok(())
+}
+
+fn normalized_trigrams(normalized: &str) -> Vec<[u8; SEARCH_INDEX_TRIGRAM_LEN]> {
+    let mut trigrams = normalized
+        .as_bytes()
+        .windows(SEARCH_INDEX_TRIGRAM_LEN)
+        .map(|window| [window[0], window[1], window[2]])
+        .collect::<Vec<_>>();
+    trigrams.sort_unstable();
+    trigrams.dedup();
+    trigrams
 }
 
 fn path_segments(path: &str) -> impl Iterator<Item = &str> {
@@ -1408,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_small_index_bytes_v5_roundtrips() -> eyre::Result<()> {
+    fn snapshot_small_index_bytes_v6_roundtrips() -> eyre::Result<()> {
         let rows = vec![SearchIndexPathRow {
             path: String::from(VIRTUAL_SNAPSHOT_TEST_PATH),
             has_deleted_entries: false,
@@ -1537,6 +1751,56 @@ mod tests {
                 .map(|iter| iter.collect::<Vec<_>>()),
             None
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn trigram_postings_group_segments_by_normalized_trigram() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\flowchart.txt"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.zip"),
+                has_deleted_entries: false,
+            },
+        ];
+
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let parsed = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
+
+        assert_eq!(
+            parsed
+                .trigram_postings(*b"flo")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![
+                segment_id_for(&parsed, "flower.jar")?,
+                segment_id_for(&parsed, "flowchart.txt")?
+            ])
+        );
+        assert_eq!(
+            parsed
+                .trigram_postings(*b"owe")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![segment_id_for(&parsed, "flower.jar")?])
+        );
+        assert_eq!(
+            parsed
+                .trigram_postings(*b"zip")?
+                .map(|iter| iter.collect::<Vec<_>>()),
+            Some(vec![segment_id_for(&parsed, "trees.zip")?])
+        );
+        assert!(parsed.trigram_postings(*b"xyz")?.is_none());
 
         Ok(())
     }

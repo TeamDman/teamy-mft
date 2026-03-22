@@ -12,6 +12,8 @@ pub mod sync_dir;
 use crate::cli::Cli;
 use teamy_windows::console::console_attach;
 use tracing::debug;
+#[cfg(feature = "tracy")]
+use tracing::info_span;
 
 /// Version string combining package version and git revision.
 const VERSION: &str = concat!(
@@ -20,6 +22,16 @@ const VERSION: &str = concat!(
     env!("GIT_REVISION"),
     ")"
 );
+
+#[cfg(feature = "tracy")]
+fn tracy_capture_padding(phase: &'static str) {
+    info_span!("tracy_capture_padding", phase).in_scope(|| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+}
+
+#[cfg(not(feature = "tracy"))]
+fn tracy_capture_padding(_phase: &'static str) {}
 
 /// Entrypoint for the program to reduce coupling to the name of this crate.
 ///
@@ -62,7 +74,9 @@ pub fn main() -> eyre::Result<()> {
         console_attach(pid)?;
     }
 
+    tracy_capture_padding("before_cli_invoke");
     cli.invoke()?;
+    tracy_capture_padding("after_cli_invoke");
 
     debug!("Goodbye!");
     #[cfg(feature = "tracy")]

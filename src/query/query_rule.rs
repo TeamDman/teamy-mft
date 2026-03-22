@@ -1,4 +1,5 @@
 use crate::query::QueryNeedle;
+use crate::query::query_needle::QUERY_TRIGRAM_LEN;
 
 #[derive(Debug, Clone)]
 pub enum QueryRule {
@@ -53,6 +54,18 @@ impl QueryRule {
                 (suffix.starts_with('.') && suffix.len() > 1).then_some(suffix)
             }
             Self::ContainsCaseInsensitive(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn normalized_contains_trigrams(&self) -> Option<Vec<[u8; QUERY_TRIGRAM_LEN]>> {
+        match self {
+            Self::ContainsCaseInsensitive(needle)
+                if needle.normalized_bytes().len() >= QUERY_TRIGRAM_LEN =>
+            {
+                Some(needle.normalized_trigrams())
+            }
+            Self::ContainsCaseInsensitive(_) | Self::EndsWithCaseInsensitive(_) => None,
         }
     }
 }
