@@ -4,6 +4,7 @@ use crate::read::physical_read_results::PhysicalReadResultEntry;
 use crate::read::physical_read_results::PhysicalReadResults;
 use eyre::Context;
 use std::collections::BTreeSet;
+use tracing::info_span;
 use tracing::instrument;
 use tracing::trace;
 use windows::Win32::Foundation::HANDLE;
@@ -101,6 +102,12 @@ impl PhysicalReader {
     ///
     /// Returns an error if queueing or completion handling fails.
     pub fn read_all(mut self) -> eyre::Result<PhysicalReadResults> {
+        let _span = info_span!(
+            "drain_physical_reader_iocp",
+            request_count = self.remaining.len(),
+            max_in_flight = self.max_in_flight,
+        )
+        .entered();
         trace!(request_count = self.remaining.len(), "Queueing IOCP reads",);
 
         self.enqueue_until_saturation()?;

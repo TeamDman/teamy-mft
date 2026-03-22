@@ -14,6 +14,7 @@ use teamy_uom_extensions::HumanInformationExt;
 use teamy_windows::handle::get_read_only_drive_handle;
 use teamy_windows::string::EasyPCWSTR;
 use tracing::info;
+use tracing::info_span;
 use tracing::instrument;
 use uom::si::information::byte;
 use uom::si::information::mebibyte;
@@ -67,44 +68,86 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalMftReadResu
         .wrap_err("Failed to convert volume path to PCWSTR")?;
 
     // Open blocking handle for boot sector & MFT record parsing
-    let drive_handle: NtfsDriveHandle = get_read_only_drive_handle(drive_letter)
-        .wrap_err("Failed to open handle to drive")?
-        .try_into()
-        .wrap_err("Failed to convert drive handle to NtfsDriveHandle")?;
+    let drive_handle: NtfsDriveHandle = {
+        let _span = info_span!("open_ntfs_drive_handle", drive = %drive_letter).entered();
+        get_read_only_drive_handle(drive_letter)
+            .wrap_err("Failed to open handle to drive")?
+            .try_into()
+            .wrap_err("Failed to convert drive handle to NtfsDriveHandle")?
+    };
 
-    let boot_sector = NtfsBootSector::try_from_handle(&drive_handle)?;
+    let boot_sector = {
+        let _span = info_span!("read_ntfs_boot_sector", drive = %drive_letter).entered();
+        NtfsBootSector::try_from_handle(&drive_handle)?
+    };
     let mft_record_size = MftRecordSize::new(boot_sector.file_record_size())?;
-    let dollar_mft_record = MftRecord::try_from_handle(
-        &drive_handle,
-        MftRecordLocationOnDisk::from_record_number(
-            &boot_sector.mft_location(),
-            MftRecordNumber::DOLLAR_MFT,
-            boot_sector.file_record_size(),
-        ),
-        mft_record_size,
-    )
-    .wrap_err("Failed reading record")?;
+    let dollar_mft_record = {
+        let _span = info_span!(
+            "read_dollar_mft_record",
+            drive = %drive_letter,
+            record_size_bytes = mft_record_size.get::<byte>(),
+        )
+        .entered();
+        MftRecord::try_from_handle(
+            &drive_handle,
+            MftRecordLocationOnDisk::from_record_number(
+                &boot_sector.mft_location(),
+                MftRecordNumber::DOLLAR_MFT,
+                boot_sector.file_record_size(),
+            ),
+            mft_record_size,
+        )
+        .wrap_err("Failed reading record")?
+    };
 
     // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).
-    let decoded_runs = MftRecordAttributeRunListOwned::from_mft_record(&dollar_mft_record);
+    let decoded_runs = {
+        let _span = info_span!("decode_dollar_mft_runlists", drive = %drive_letter).entered();
+        MftRecordAttributeRunListOwned::from_mft_record(&dollar_mft_record)
+    };
     if decoded_runs.is_empty() {
         eyre::bail!("No non-resident $DATA runs found in $MFT record");
     }
     drop(drive_handle);
 
     // Build sparse-aware logical plan
-    let logical_read_plan = decoded_runs
-        .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()));
+    let logical_read_plan = {
+        let _span = info_span!(
+            "build_logical_mft_read_plan",
+            drive = %drive_letter,
+            bytes_per_cluster = boot_sector.bytes_per_cluster(),
+        )
+        .entered();
+        decoded_runs.into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()))
+    };
     if logical_read_plan.segments.is_empty() {
         eyre::bail!("Logical plan empty (no runs)");
     }
 
     // Derive physical read plan, merge, chunk and execute with 1 MiB (binary) chunk size (1,048,576 = 1024*1024) for sector alignment
     let chunk_size = Information::new::<mebibyte>(1);
-    let mut physical_read_plan = logical_read_plan.as_physical_read_plan();
-    physical_read_plan.align_512().merge_contiguous_reads();
-    let plan = physical_read_plan.chunked(chunk_size);
-    let physical_read_results: PhysicalReadResults = plan.read(&volume_path)?;
+    let plan = {
+        let _span = info_span!(
+            "build_physical_mft_read_plan",
+            drive = %drive_letter,
+            logical_segments = logical_read_plan.segments.len(),
+            chunk_size_bytes = chunk_size.get::<byte>(),
+        )
+        .entered();
+        let mut physical_read_plan = logical_read_plan.as_physical_read_plan();
+        physical_read_plan.align_512().merge_contiguous_reads();
+        physical_read_plan.chunked(chunk_size)
+    };
+    let physical_read_results: PhysicalReadResults = {
+        let _span = info_span!(
+            "execute_physical_mft_read_plan",
+            drive = %drive_letter,
+            physical_requests = plan.len(),
+            total_physical_bytes = plan.total_size().get::<byte>(),
+        )
+        .entered();
+        plan.read(&volume_path)?
+    };
 
     info!(
         "Completed MFT read from drive {drive_letter} - read {} physical segments totalling {}",

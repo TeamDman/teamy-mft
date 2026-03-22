@@ -2,6 +2,7 @@ use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResults;
 use crate::read::physical_reader::PhysicalReader;
 use std::collections::BTreeSet;
+use tracing::info_span;
 use tracing::instrument;
 use uom::ConstZero;
 use uom::si::information::byte;
@@ -164,7 +165,19 @@ impl PhysicalReadPlan {
         if self.is_empty() {
             return Ok(PhysicalReadResults::new());
         }
-        PhysicalReader::try_new(filename, self.requests, MAX_IN_FLIGHT_IO)?.read_all()
+        let request_count = self.requests.len();
+        let total_size = self.total_size().get::<byte>();
+        let reader = {
+            let _span = info_span!(
+                "create_physical_reader",
+                request_count,
+                total_physical_bytes = total_size,
+                max_in_flight = MAX_IN_FLIGHT_IO,
+            )
+            .entered();
+            PhysicalReader::try_new(filename, self.requests, MAX_IN_FLIGHT_IO)?
+        };
+        reader.read_all()
     }
 }
 

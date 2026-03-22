@@ -8,6 +8,7 @@ use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
 use teamy_uom_extensions::HumanInformationExt;
+use tracing::info_span;
 use tracing::debug;
 use tracing::trace;
 use uom::si::information::byte;
@@ -144,7 +145,16 @@ impl PhysicalReadResults {
         logical_plan: &LogicalReadPlan,
         output_path: impl AsRef<std::path::Path>,
     ) -> eyre::Result<()> {
-        debug!("Writing MFT output to {:?}", output_path.as_ref());
+        let output_path = output_path.as_ref();
+        let _span = info_span!(
+            "write_physical_read_results_to_path",
+            output_path = %output_path.display(),
+            logical_size = logical_plan.total_logical_size().format_human(BINARY),
+            logical_segments = logical_plan.segments.len(),
+            physical_segments = self.entries.len(),
+        )
+        .entered();
+        debug!("Writing MFT output to {:?}", output_path);
         let file = std::fs::File::create(output_path)?;
         file.set_len(logical_plan.total_logical_size().get::<byte>() as u64)?;
 

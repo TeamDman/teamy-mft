@@ -82,13 +82,21 @@ impl SyncMftArgs {
             tokio::pin!(physical_mft_stream);
             while let Some(mft) = physical_mft_stream.next().await {
                 let (drive_info, mft_result) = mft?;
-                mft_result.write_to_path(&drive_info.mft_output_path).wrap_err_with(|| {
-                    format!(
-                        "Failed writing MFT snapshot for drive {} to {}",
-                        drive_info.drive_letter,
-                        drive_info.mft_output_path.display()
+                {
+                    let _span = info_span!(
+                        "write_mft_snapshot_for_drive",
+                        drive = %drive_info.drive_letter,
+                        output_path = %drive_info.mft_output_path.display(),
                     )
-                })?;
+                    .entered();
+                    mft_result.write_to_path(&drive_info.mft_output_path).wrap_err_with(|| {
+                        format!(
+                            "Failed writing MFT snapshot for drive {} to {}",
+                            drive_info.drive_letter,
+                            drive_info.mft_output_path.display()
+                        )
+                    })?;
+                }
                 yield (drive_info, mft_result);
             }
         })
@@ -105,6 +113,11 @@ pub fn read_physical_mft_stream_with_info(
         .map(|drive_info| async move {
             tokio::task::spawn_blocking(
                 move || -> eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)> {
+                    let _span = info_span!(
+                        "read_physical_mft_for_drive",
+                        drive = %drive_info.drive_letter,
+                    )
+                    .entered();
                     let physical_mft_read_result = read_physical_mft(drive_info.drive_letter)
                         .wrap_err_with(|| {
                             format!(
