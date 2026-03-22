@@ -26,6 +26,9 @@ pub struct QueryArgs {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
     #[facet(args::positional, default)]
     pub query: Vec<String>,
+    /// Restrict results to this path. Directories include descendants; files match exactly.
+    #[facet(args::named, default)]
+    pub r#in: Option<String>,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
     pub drive_letter_pattern: DriveLetterPattern,
@@ -58,6 +61,12 @@ pub enum QueryDensity {
 struct DriveQueryResult {
     loaded_rows: usize,
     matched_rows: Vec<IndexedPathRow>,
+}
+
+#[derive(Debug, Clone)]
+struct QueryScope {
+    root: PathBuf,
+    include_descendants: bool,
 }
 
 fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
@@ -143,6 +152,53 @@ fn should_include_indexed_row(
     }
 
     include_deleted || !has_deleted_entries
+}
+
+fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
+    let Some(scope) = scope else {
+        return Ok(None);
+    };
+
+    let root = dunce::canonicalize(scope)
+        .wrap_err_with(|| format!("Failed resolving query scope from {scope}"))?;
+
+    Ok(Some(QueryScope {
+        include_descendants: root.is_dir(),
+        root,
+    }))
+}
+
+fn lowercase_path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect()
+}
+
+fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
+    if cfg!(windows) {
+        let path_components = lowercase_path_components(path);
+        let scope_components = lowercase_path_components(&scope.root);
+
+        return if scope.include_descendants {
+            path_components.starts_with(&scope_components)
+        } else {
+            path_components == scope_components
+        };
+    }
+
+    if scope.include_descendants {
+        path.starts_with(&scope.root)
+    } else {
+        path == scope.root
+    }
+}
+
+fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+
+    path_matches_scope(Path::new(path), scope)
 }
 
 fn matching_row_indices_for_rule(
@@ -403,6 +459,10 @@ impl QueryArgs {
             let _span = info_span!("parse_query_rules", query = ?self.query).entered();
             QueryPlan::parse_inputs(&self.query)?
         };
+        let query_scope = {
+            let _span = info_span!("resolve_query_scope", query_scope = ?self.r#in).entered();
+            resolve_query_scope(self.r#in.as_deref())?
+        };
 
         let mut loaded_rows = 0usize;
         let mut results = Vec::new();
@@ -426,7 +486,12 @@ impl QueryArgs {
             for result in load_results {
                 let result = result?;
                 loaded_rows += result.loaded_rows;
-                results.extend(result.matched_rows);
+                results.extend(
+                    result
+                        .matched_rows
+                        .into_iter()
+                        .filter(|row| should_include_scope(&row.path, query_scope.as_ref())),
+                );
             }
         }
 
@@ -460,8 +525,9 @@ impl QueryArgs {
     /// # Errors
     ///
     /// Returns an error if the query is empty, sync directory cannot be retrieved,
-    /// drive letters cannot be resolved, or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.query, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
+    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
+    /// or if reading/parsing index files fails.
+    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
     pub fn invoke(self) -> eyre::Result<()> {
         debug!("Running query with args: {:?}", self);
         if self.query.iter().all(|query| query.trim().is_empty()) {
@@ -488,12 +554,30 @@ impl QueryArgs {
 #[cfg(test)]
 mod tests {
     use super::matching_row_indices_for_rule;
+    use super::resolve_query_scope;
+    use super::should_include_scope;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    fn current_dir_lock() -> &'static Mutex<()> {
+        static CURRENT_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        CURRENT_DIR_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct CurrentDirRestore(PathBuf);
+
+    impl Drop for CurrentDirRestore {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
 
     fn parse_fixture_index()
     -> eyre::Result<crate::search_index::search_index_bytes::ParsedSearchIndex<'static>> {
@@ -581,6 +665,64 @@ mod tests {
         let rule = QueryRule::parse(".git$").expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_directory_matches_descendants_but_not_sibling_prefixes() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let scope_dir = temp_dir.path().join("repo");
+        let nested_file = scope_dir.join("music").join("song.mp3");
+        let sibling_file = temp_dir.path().join("repo2").join("song.mp3");
+
+        std::fs::create_dir_all(nested_file.parent().expect("nested file should have parent"))?;
+        std::fs::create_dir_all(sibling_file.parent().expect("sibling file should have parent"))?;
+        std::fs::write(&nested_file, [])?;
+        std::fs::write(&sibling_file, [])?;
+
+        let scope = resolve_query_scope(Some(&scope_dir.to_string_lossy()))?
+            .expect("directory scope should resolve");
+
+        assert!(should_include_scope(&nested_file.to_string_lossy(), Some(&scope)));
+        assert!(!should_include_scope(&sibling_file.to_string_lossy(), Some(&scope)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_file_matches_only_exact_path() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let scope_file = temp_dir.path().join("track.flac");
+        let other_file = temp_dir.path().join("track.flac.bak");
+
+        std::fs::write(&scope_file, [])?;
+        std::fs::write(&other_file, [])?;
+
+        let scope = resolve_query_scope(Some(&scope_file.to_string_lossy()))?
+            .expect("file scope should resolve");
+
+        assert!(should_include_scope(&scope_file.to_string_lossy(), Some(&scope)));
+        assert!(!should_include_scope(&other_file.to_string_lossy(), Some(&scope)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn query_scope_dot_resolves_against_current_working_directory() -> eyre::Result<()> {
+        let _lock = current_dir_lock()
+            .lock()
+            .expect("current dir test lock should not be poisoned");
+        let temp_dir = tempfile::tempdir()?;
+        let original_dir = std::env::current_dir()?;
+        let _restore = CurrentDirRestore(original_dir);
+
+        std::env::set_current_dir(temp_dir.path())?;
+
+        let scope = resolve_query_scope(Some("."))?.expect("dot scope should resolve");
+
+        assert_eq!(scope.root, dunce::canonicalize(temp_dir.path())?);
+        assert!(scope.include_descendants);
 
         Ok(())
     }
