@@ -38,6 +38,9 @@ impl Deref for MftFile {
     }
 }
 impl MftFile {
+    // mftf[impl cached-stream.record-size-field]
+    // mftf[impl cached-stream.fixed-record-size]
+    // mftf[impl cached-stream.fixups-applied-before-iteration]
     fn validate_and_apply_fixups(raw: &mut [u8]) -> eyre::Result<()> {
         {
             let _span = debug_span!("validate_minimum_header_size", raw_len = raw.len()).entered();
@@ -224,6 +227,8 @@ impl MftFile {
     /// The caller is responsible for ensuring fixups were already applied
     /// (handled by `MftFile::from_bytes`/`from_path`).
     #[inline]
+    // mftf[impl cached-stream.begins-at-record-zero]
+    // mftf[impl record-iteration.contiguous-fixed-size-slices]
     pub fn iter_records(&self) -> MftRecordIter {
         MftRecordIter::new(self.bytes.clone(), self.record_size())
     }

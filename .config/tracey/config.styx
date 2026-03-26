@@ -1,0 +1,81 @@
+// repo[impl tracey.specification.present]
+@schema {id crate:tracey-config@1, cli tracey}
+
+specs (
+    {
+        name teamy-mft-publishing-standards
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/repo/**/*.md)
+        impls (
+            {
+                name repo
+                include (
+                    README.md
+                    Cargo.toml
+                    LICENSE
+                    .config/tracey/config.styx
+                )
+            }
+        )
+    }
+    {
+        name teamy-mft-tool-standards
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/tools/**/*.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+    {
+        name teamy-mft-cli
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/product/cli.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+    {
+        name teamy-mft-mft-file-format
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/product/mft-file-format.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+    {
+        name teamy-mft-index-file-format
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/product/index-file-format.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+    {
+        name teamy-mft-mft-io
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/product/mft-io.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+)

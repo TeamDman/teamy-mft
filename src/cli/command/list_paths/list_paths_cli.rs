@@ -43,6 +43,7 @@ impl ListPathsArgs {
     ///
     /// Returns an error if the sync directory cannot be retrieved, drive letters cannot be resolved,
     /// or if reading/parsing MFT files fails.
+    // cli[impl command.list-paths.cached-mft-input]
     #[allow(
         clippy::too_many_lines,
         reason = "function processes MFT data in a single pass for performance"

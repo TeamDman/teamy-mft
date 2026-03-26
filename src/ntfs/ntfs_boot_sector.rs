@@ -14,6 +14,7 @@ impl NtfsBootSector {
     /// # Errors
     ///
     /// Returns an error if the drive handle cannot be read.
+    // mfti[impl boot-sector.reads-512-byte-sector]
     #[instrument(skip_all)]
     pub fn try_from_handle(drive_handle: &NtfsDriveHandle) -> eyre::Result<Self> {
         Ok(NtfsBootSector {
@@ -62,6 +63,7 @@ impl NtfsBootSector {
     /// # Panics
     ///
     /// Panics if the exponent or cluster count fails to fit into `usize` (should not happen for valid sectors).
+    // mfti[impl boot-sector.file-record-size-encoding]
     #[must_use]
     pub fn file_record_size(&self) -> Information {
         let val = i8::from_ne_bytes([self.data[0x40]]);
@@ -121,6 +123,7 @@ mod tests {
     }
 
     #[test]
+    // mfti[verify boot-sector.file-record-size-encoding]
     fn bytes_per_file_record_negative_exponent() {
         // rec_byte = -10 => 2^10 = 1024 bytes
         let bs = mk_boot_sector(512, 8, 100, -10);
@@ -129,6 +132,7 @@ mod tests {
     }
 
     #[test]
+    // mfti[verify boot-sector.file-record-size-encoding]
     fn bytes_per_file_record_positive_clusters() {
         // rec_byte = 2 => 2 clusters => 2 * bytes_per_cluster
         let bs = mk_boot_sector(512, 4, 200, 2);

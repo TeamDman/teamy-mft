@@ -22,6 +22,7 @@ impl MappedSearchIndex {
     ///
     /// Returns an error if the file cannot be opened or mapped, if the header
     /// cannot be parsed, or if the index version is unsupported.
+    // idxf[impl search-index.reader.rejects-unsupported-version]
     pub fn open(path: impl AsRef<Path>) -> eyre::Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)
@@ -99,6 +100,7 @@ mod tests {
     use std::fs;
 
     #[test]
+    // idxf[verify search-index.row.deleted-flag]
     fn row_views_reads_paths_without_materializing_all_rows() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let index_path = temp_dir.path().join("C.mft_search_index");
@@ -153,6 +155,7 @@ mod tests {
     }
 
     #[test]
+    // idxf[verify search-index.reader.rejects-unsupported-version]
     fn opening_legacy_v1_indexes_prompts_a_sync_rebuild() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let index_path = temp_dir.path().join("C.mft_search_index");

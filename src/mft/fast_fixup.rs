@@ -84,6 +84,7 @@ fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
 /// Quick check if an entry still needs fixup application.
 #[inline]
 #[must_use]
+// mfti[impl fixup.detects-needed-fixup]
 pub fn needs_fixup(entry: &[u8]) -> bool {
     let Some((usa_offset, usa_size)) = read_update_sequence_array_fields(entry) else {
         return false;
@@ -105,6 +106,7 @@ pub fn needs_fixup(entry: &[u8]) -> bool {
 /// Apply fixups in place for a single entry slice.
 /// Returns the state of the operation.
 #[inline]
+// mfti[impl fixup.applies-in-place]
 pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
     let Some((usa_offset, usa_size)) = read_update_sequence_array_fields(entry) else {
         return FixupState::Invalid;
@@ -168,6 +170,7 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
 /// Apply fixups to all entries in the buffer using parallelism when the `rayon` feature is enabled.
 /// Also logs basic telemetry: detected entry size, entry count, elapsed time and throughput, and outcome stats.
 #[instrument(level = "debug", skip_all)]
+// mfti[impl fixup.parallel-buffer-processing]
 pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     use rayon::prelude::*;
     {

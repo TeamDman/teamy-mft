@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use tracing::debug;
 use tracing::warn;
 
+// cli[impl sync-dir.env-overrides-persisted]
 pub const SYNC_DIR_ENV: &str = "TEAMY_MFT_SYNC_DIR";
 
 #[derive(Debug)]
@@ -41,6 +42,8 @@ impl AsRef<Path> for SyncDirPersistencePath {
 /// # Errors
 ///
 /// Returns an error if accessing the config directory or reading the persisted file fails.
+// cli[impl sync-dir.persisted-read]
+// cli[impl sync-dir.env-overrides-persisted]
 pub fn get_sync_dir() -> color_eyre::eyre::Result<Option<PathBuf>> {
     if let Ok(val) = std::env::var(SYNC_DIR_ENV) {
         let trimmed = val.trim();
@@ -91,6 +94,7 @@ pub fn try_get_sync_dir() -> eyre::Result<PathBuf> {
 /// # Errors
 ///
 /// Returns an error if the config directory cannot be created or the file cannot be written.
+// cli[impl sync-dir.persisted-write]
 pub fn set_sync_dir(path: impl AsRef<Path>) -> color_eyre::eyre::Result<()> {
     if std::env::var(SYNC_DIR_ENV).is_ok() {
         warn!(

@@ -125,6 +125,7 @@ pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
 /// Iterate all `FILE_NAME` attributes in an entry, invoking callback for each.
 /// Returns number of filename attributes found.
 #[cfg_attr(feature = "tracy", instrument(level = "debug", skip_all))]
+// mftf[impl file-name-attributes.resident-x30]
 pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     entry_bytes: &'a [u8],
     entry_id: u32,

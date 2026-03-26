@@ -1,9 +1,12 @@
 # Teamy MFT
 
+<!-- repo[impl readme.explanation] -->
+
 Command-line toolkit for interacting with the NTFS Master File Table on Windows.
 
 ## Installation
 
+<!-- repo[impl readme.code-example] -->
 ```bash
 cargo install --path .
 ```

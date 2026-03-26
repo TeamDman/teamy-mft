@@ -2,6 +2,7 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 
+// tool[impl cli.help.describes-argv]
 #[derive(Facet, Default, Arbitrary, PartialEq, Debug)]
 #[facet(rename_all = "kebab-case")]
 pub struct GlobalArgs {
@@ -12,6 +13,7 @@ pub struct GlobalArgs {
     #[facet(args::named)]
     pub log_filter: Option<String>,
 
+    // tool[impl logging.file-path-option]
     #[facet(args::named)]
     pub log_file: Option<String>,
 

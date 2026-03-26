@@ -33,6 +33,7 @@ impl MftRecordIter {
 
 impl Iterator for MftRecordIter {
     type Item = MftRecord;
+    // mftf[impl record-iteration.contiguous-fixed-size-slices]
     fn next(&mut self) -> Option<Self::Item> {
         if self.index >= self.total_record_count {
             return None;
@@ -61,6 +62,7 @@ mod tests {
     use uom::si::usize::Information;
 
     #[test]
+    // mftf[verify record-iteration.contiguous-fixed-size-slices]
     fn iter_records_yields_zero_copy_records() {
         const ENTRY_SIZE: usize = 1024;
         let mut buf = vec![0u8; ENTRY_SIZE * 2];

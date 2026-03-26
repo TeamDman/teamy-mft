@@ -13,6 +13,9 @@ use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 
+// tool[impl logging.stderr-output]
+// tool[impl logging.file-path-option]
+// tool[impl logging.file-structured-ndjson]
 /// Initialize logging based on the provided configuration.
 ///
 /// # Errors

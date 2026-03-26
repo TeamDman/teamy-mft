@@ -30,6 +30,8 @@ impl<'a> MftRecordAttributeIter<'a> {
 }
 impl<'a> Iterator for MftRecordAttributeIter<'a> {
     type Item = MftRecordAttribute<'a>;
+    // mftf[impl attribute-iteration.bounded-by-used-size]
+    // mftf[impl attribute-iteration.ends-at-sentinel]
     fn next(&mut self) -> Option<Self::Item> {
         if self.position + 4 > self.mft_record_used_size {
             return None;

@@ -129,6 +129,7 @@ fn dfs(i: usize, per_entry: &Vec<Vec<BestName>>, depth: &mut [i32], mark: &mut [
 /// extensions that might fail during decoding or validation.
 #[allow(clippy::too_many_lines, reason = "complex path resolution logic")]
 #[instrument(level = "debug", skip(file_names))]
+// mftf[impl path-resolution.parent-chain-absolute-paths]
 pub fn resolve_paths_all_parallel(
     file_names: &FileNameCollection<'_>,
     root_prefix: &Path,

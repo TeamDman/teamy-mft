@@ -15,6 +15,8 @@ use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::info_span;
 
+// tool[impl cli.version.includes-semver]
+// tool[impl cli.version.includes-git-revision]
 /// Version string combining package version and git revision.
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -42,6 +44,7 @@ fn tracy_capture_padding(_phase: &'static str) {}
 /// # Panics
 ///
 /// Panics if the CLI schema is invalid (should never happen with correct code).
+// tool[impl cli.help.position-independent]
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
@@ -53,6 +56,8 @@ pub fn main() -> eyre::Result<()> {
         teamy_windows::string::warn_if_utf8_not_enabled();
     };
 
+    // cli[impl parser.args-consistent]
+    // cli[impl parser.roundtrip]
     let cli: Cli = figue::Driver::new(
         figue::builder::<Cli>()
             .expect("schema should be valid")

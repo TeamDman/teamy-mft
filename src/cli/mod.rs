@@ -7,7 +7,12 @@ use facet::Facet;
 use figue::FigueBuiltins;
 use figue::{self as args};
 
+/// Teamy MFT command-line interface.
+///
+/// Environment variables:
+/// - `TEAMY_MFT_SYNC_DIR`: override the persisted sync directory for commands that read cached data.
 #[derive(Facet, Arbitrary, Debug, Default)]
+// tool[impl cli.help.describes-environment]
 pub struct Cli {
     #[facet(flatten)]
     pub global_args: GlobalArgs,

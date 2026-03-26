@@ -1,15 +1,21 @@
 use std::io::Write;
 
+// idxf[impl search-index.header.magic]
 pub const SEARCH_INDEX_MAGIC: &[u8; 8] = b"TMFTIDX\0";
+// idxf[impl search-index.header.version]
 pub const SEARCH_INDEX_VERSION: u16 = 7;
 pub const SEARCH_INDEX_HEADER_LEN: usize = 8 + 2 + 2 + 1 + 8 + 8;
 
+// idxf[impl search-index.row.deleted-flag]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SearchIndexPathRow {
     pub path: String,
     pub has_deleted_entries: bool,
 }
 
+// idxf[impl search-index.header.drive-letter]
+// idxf[impl search-index.header.source-mft-length]
+// idxf[impl search-index.header.node-count]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct SearchIndexHeader {
     pub version: u16,

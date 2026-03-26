@@ -22,6 +22,7 @@ use tracing::instrument;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 #[facet(rename_all = "kebab-case")]
+// cli[impl command.query.drive-pattern-selection]
 pub struct QueryArgs {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
     #[facet(args::positional, default)]
@@ -147,6 +148,7 @@ fn should_include_indexed_row(
     only_deleted: bool,
     has_deleted_entries: bool,
 ) -> bool {
+    // cli[impl command.query.deleted-filter]
     if only_deleted {
         return has_deleted_entries;
     }
@@ -194,6 +196,7 @@ fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
 }
 
 fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
+    // cli[impl command.query.scope-filter]
     let Some(scope) = scope else {
         return true;
     };
