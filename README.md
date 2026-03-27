@@ -21,7 +21,7 @@ cargo install --path .
 > A recording is planned. In the meantime, here is example usage:
 
 ```
-# Sync the MFT for all drives (requires elevation)
+# Sync the MFT for all drives (auto-elevates via UAC if needed)
 teamy-mft sync
 
 # Query indexed paths
@@ -37,7 +37,7 @@ USAGE:
     teamy-mft.exe [OPTIONS] <COMMAND>
 
 COMMANDS:
-    sync          Sync operations (requires elevation)
+    sync          Sync operations (auto-elevates via UAC if not already administrator)
     list-paths    Produce newline-delimited list of file paths for matching drives from cached .mft files
     get-sync-dir  Get the currently configured sync directory
     set-sync-dir  Set the sync directory (defaults to current directory if omitted)
