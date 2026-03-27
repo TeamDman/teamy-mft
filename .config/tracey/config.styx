@@ -9,7 +9,7 @@ specs (
         impls (
             {
                 name repo
-                include (
+                include_plain (
                     README.md
                     Cargo.toml
                     LICENSE
