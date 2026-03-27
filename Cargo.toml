@@ -20,7 +20,7 @@ directories = "5"
 dunce = "1"
 eyre = "0.6.12"
 facet = "0.44.1"
-figue = { git = "https://github.com/TeamDman/figue", rev = "b8583c08e33d6fdce90a5ab92d0c79fbe50efa91", features = ["arbitrary"] }
+figue = { package = "teamy-figue", version = "2.0.0", path = "../figue/crates/figue", features = ["arbitrary"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tracing-tracy = { version = "0.11", optional = true }
