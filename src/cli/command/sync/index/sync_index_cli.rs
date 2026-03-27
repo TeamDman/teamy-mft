@@ -93,6 +93,11 @@ impl SyncIndexArgs {
         info: &DriveSyncInfo,
         mft_file: &MftFile,
     ) -> eyre::Result<()> {
+        info!(
+            drive_letter = %info.drive_letter,
+            mft_path = %info.mft_output_path.display(),
+            "Building search index",
+        );
         let rows = {
             let _span = info_span!(
                 "build_search_index_rows",
