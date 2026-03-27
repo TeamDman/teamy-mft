@@ -14,3 +14,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host -ForegroundColor Yellow "Running tests..."
 cargo test --all-features --quiet
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host -ForegroundColor Yellow "Running tracey validation..."
+tracey query validate --deny warnings
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
