@@ -18,7 +18,7 @@ cargo install --path .
 
 <!-- repo[impl readme.media-demo] -->
 
-> A recording is planned. In the meantime, here is example usage:
+[YouTube demo](https://youtu.be/bCeMz1AZw-E)
 
 ```
 # Sync the MFT for all drives (auto-elevates via UAC if needed)
