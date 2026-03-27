@@ -12,9 +12,9 @@ use facet::Facet;
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 #[repr(u8)]
 pub enum Command {
-    /// Write .mft and .mft_search_index files (will auto-elevate via UAC if not already running as administrator)
+    /// Write `.mft` and `.mft_search_index` files (will auto-elevate via UAC if not already running as administrator)
     Sync(SyncArgs),
-    /// Produce newline-delimited list of file paths for matching drives from cached .mft files
+    /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
     /// Get the currently configured sync directory
     GetSyncDir(GetSyncDirArgs),
