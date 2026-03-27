@@ -679,16 +679,30 @@ mod tests {
         let nested_file = scope_dir.join("music").join("song.mp3");
         let sibling_file = temp_dir.path().join("repo2").join("song.mp3");
 
-        std::fs::create_dir_all(nested_file.parent().expect("nested file should have parent"))?;
-        std::fs::create_dir_all(sibling_file.parent().expect("sibling file should have parent"))?;
+        std::fs::create_dir_all(
+            nested_file
+                .parent()
+                .expect("nested file should have parent"),
+        )?;
+        std::fs::create_dir_all(
+            sibling_file
+                .parent()
+                .expect("sibling file should have parent"),
+        )?;
         std::fs::write(&nested_file, [])?;
         std::fs::write(&sibling_file, [])?;
 
         let scope = resolve_query_scope(Some(&scope_dir.to_string_lossy()))?
             .expect("directory scope should resolve");
 
-        assert!(should_include_scope(&nested_file.to_string_lossy(), Some(&scope)));
-        assert!(!should_include_scope(&sibling_file.to_string_lossy(), Some(&scope)));
+        assert!(should_include_scope(
+            &nested_file.to_string_lossy(),
+            Some(&scope)
+        ));
+        assert!(!should_include_scope(
+            &sibling_file.to_string_lossy(),
+            Some(&scope)
+        ));
 
         Ok(())
     }
@@ -705,8 +719,14 @@ mod tests {
         let scope = resolve_query_scope(Some(&scope_file.to_string_lossy()))?
             .expect("file scope should resolve");
 
-        assert!(should_include_scope(&scope_file.to_string_lossy(), Some(&scope)));
-        assert!(!should_include_scope(&other_file.to_string_lossy(), Some(&scope)));
+        assert!(should_include_scope(
+            &scope_file.to_string_lossy(),
+            Some(&scope)
+        ));
+        assert!(!should_include_scope(
+            &other_file.to_string_lossy(),
+            Some(&scope)
+        ));
 
         Ok(())
     }
