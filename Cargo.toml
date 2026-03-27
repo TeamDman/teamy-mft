@@ -10,7 +10,7 @@ license = "MPL-2.0"
 readme = "README.md"
 repository = "https://github.com/TeamDman/teamy-mft"
 keywords = ["mft", "ntfs", "cli"]
-categories = ["command-line-utilities", "file-system"]
+categories = ["command-line-utilities", "filesystem"]
 
 [dependencies]
 arbitrary = { version = "1.4.1", features = ["derive"] }
