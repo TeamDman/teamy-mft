@@ -28,6 +28,26 @@ teamy-mft sync
 teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 ```
 
+## Library Usage
+
+<!-- repo[impl examples.readme-snippet] -->
+
+```rust
+use teamy_mft::cli::command::query::QueryArgs;
+
+fn main() -> eyre::Result<()> {
+    // Find all git repositories on the machine
+    for path in QueryArgs::new(".git$").invoke()? {
+        if let Some(repo_root) = path.parent() {
+            println!("{}", repo_root.display());
+        }
+    }
+    Ok(())
+}
+```
+
+See [`examples/query_git_repos.rs`](examples/query_git_repos.rs) for a runnable version.
+
 ## Commands
 
 ```

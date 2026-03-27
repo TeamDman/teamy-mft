@@ -29,3 +29,11 @@ The repository must contain an implementation of the project it describes.
 
 repo[description.meaningful]
 The repository metadata and top-level documentation must give the project a meaningful description.
+
+## Library Examples
+
+repo[examples.rs-files]
+The repository must include at least one `examples/*.rs` file demonstrating library usage.
+
+repo[examples.readme-snippet]
+The README must include a simple library usage snippet showing how to use the crate as a dependency.
