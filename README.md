@@ -25,7 +25,7 @@ cargo install --path .
 teamy-mft sync
 
 # Query indexed paths
-teamy-mft query Documents
+teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 ```
 
 ## Commands
