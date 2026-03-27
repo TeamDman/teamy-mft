@@ -39,7 +39,7 @@ fn main() -> eyre::Result<()> {
     // Find all git repositories on the machine
     for path in QueryArgs::new(".git$").invoke()? {
         if let Some(repo_root) = path.parent() {
-            println!("{}", repo_root.display());
+            println!("{} ({})", repo_root.display(), path.display());
         }
     }
     Ok(())
@@ -48,7 +48,7 @@ fn main() -> eyre::Result<()> {
 
 See [`examples/query_git_repos.rs`](examples/query_git_repos.rs) for a runnable version.
 
-## Commands
+## CLI
 
 ```
 ❯ teamy-mft --help     

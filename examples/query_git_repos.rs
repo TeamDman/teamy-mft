@@ -21,7 +21,7 @@ fn main() -> eyre::Result<()> {
     for path in QueryArgs::new(".git$").invoke()? {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = path.parent() {
-            println!("{}", repo_root.display());
+            println!("{} ({})", repo_root.display(), path.display());
         }
     }
 

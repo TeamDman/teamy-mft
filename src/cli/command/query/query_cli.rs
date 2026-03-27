@@ -449,15 +449,94 @@ fn load_and_query_drive_search_index(
 }
 
 impl QueryArgs {
-    fn should_use_columns(&self, stdout_is_terminal: bool) -> bool {
-        match self.density {
+    /// Create a new `QueryArgs` with the given query pattern and all other options at their defaults.
+    pub fn new(pattern: impl Into<String>) -> Self {
+        Self {
+            query: vec![pattern.into()],
+            ..Default::default()
+        }
+    }
+
+    fn use_columns(density: QueryDensity, stdout_is_terminal: bool) -> bool {
+        match density {
             QueryDensity::Auto => stdout_is_terminal,
             QueryDensity::Lines => false,
             QueryDensity::Columns => true,
         }
     }
 
-    fn invoke_indexed(self, mft_files: Vec<(char, PathBuf)>, sync_dir: &Path) -> eyre::Result<()> {
+    /// Run the query and return matching paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
+    /// or if reading/parsing index files fails.
+    pub fn invoke(self) -> eyre::Result<Vec<PathBuf>> {
+        let rows = self.collect_rows()?;
+        Ok(rows.into_iter().map(|r| PathBuf::from(r.path)).collect())
+    }
+
+    /// Run the query and print results to stdout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
+    /// or if reading/parsing index files fails.
+    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
+    pub fn invoke_and_print(self) -> eyre::Result<()> {
+        let limit = self.limit;
+        let density = self.density;
+        let include_deleted = self.include_deleted;
+        let only_deleted = self.only_deleted;
+
+        let results = self.collect_rows()?;
+
+        let stdout_is_terminal = std::io::stdout().is_terminal();
+        let colorize = stdout_is_terminal && (include_deleted || only_deleted);
+        let result_limit = if limit == 0 {
+            results.len()
+        } else {
+            limit.min(results.len())
+        };
+        let display_results = &results[..result_limit];
+
+        if Self::use_columns(density, stdout_is_terminal) {
+            print_results_columns(display_results, colorize);
+        } else {
+            print_results_lines(display_results, colorize);
+        }
+
+        Ok(())
+    }
+
+    fn collect_rows(self) -> eyre::Result<Vec<IndexedPathRow>> {
+        debug!("Running query with args: {:?}", self);
+        if self.query.iter().all(|query| query.trim().is_empty()) {
+            eyre::bail!("query string required")
+        }
+        let sync_dir = {
+            let _span = info_span!("resolve_sync_dir").entered();
+            try_get_sync_dir()?
+        };
+        let mft_files: Vec<(char, PathBuf)> = {
+            let _span = info_span!("discover_mft_files").entered();
+            self.drive_letter_pattern
+                .into_drive_letters()?
+                .into_iter()
+                .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
+                .filter(|(_, p)| p.is_file())
+                .collect()
+        };
+        self.collect_rows_from_files(mft_files, &sync_dir)
+    }
+
+    fn collect_rows_from_files(
+        self,
+        mft_files: Vec<(char, PathBuf)>,
+        sync_dir: &Path,
+    ) -> eyre::Result<Vec<IndexedPathRow>> {
         let query_plan = {
             let _span = info_span!("parse_query_rules", query = ?self.query).entered();
             QueryPlan::parse_inputs(&self.query)?
@@ -505,52 +584,7 @@ impl QueryArgs {
             "Indexed query completed"
         );
 
-        let stdout_is_terminal = std::io::stdout().is_terminal();
-        let colorize = stdout_is_terminal && (self.include_deleted || self.only_deleted);
-        let result_limit = if self.limit == 0 {
-            results.len()
-        } else {
-            self.limit.min(results.len())
-        };
-        let display_results = &results[..result_limit];
-
-        if self.should_use_columns(stdout_is_terminal) {
-            print_results_columns(display_results, colorize);
-        } else {
-            print_results_lines(display_results, colorize);
-        }
-
-        Ok(())
-    }
-
-    /// Query indexed paths from `.mft_search_index` files.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the query is empty, sync directory cannot be retrieved,
-    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
-    /// or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
-    pub fn invoke(self) -> eyre::Result<()> {
-        debug!("Running query with args: {:?}", self);
-        if self.query.iter().all(|query| query.trim().is_empty()) {
-            eyre::bail!("query string required")
-        }
-        let sync_dir = {
-            let _span = info_span!("resolve_sync_dir").entered();
-            try_get_sync_dir()?
-        };
-
-        let mft_files: Vec<(char, PathBuf)> = {
-            let _span = info_span!("discover_mft_files").entered();
-            self.drive_letter_pattern
-                .into_drive_letters()?
-                .into_iter()
-                .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
-                .filter(|(_, p)| p.is_file())
-                .collect()
-        };
-        self.invoke_indexed(mft_files, &sync_dir)
+        Ok(results)
     }
 }
 

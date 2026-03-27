@@ -42,7 +42,7 @@ impl Command {
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
-            Command::Query(args) => args.invoke(),
+            Command::Query(args) => args.invoke_and_print(),
         }
     }
 }
