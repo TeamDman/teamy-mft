@@ -31,8 +31,8 @@ teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 ## Commands
 
 ```
-❯ teamy-mft --help
-teamy-mft.exe 0.4.0 (rev a9d279a)
+❯ teamy-mft --help     
+teamy-mft.exe 0.5.0 (rev 12b4a4f)
 
 Teamy MFT command-line interface.
 Environment variables:
@@ -59,7 +59,7 @@ OPTIONS:
 
 COMMANDS:
     sync
-            Sync operations (requires elevation)
+            Write .mft and .mft_search_index files (will auto-elevate via UAC if not already running as administrator)
     list-paths
             Produce newline-delimited list of file paths for matching drives from cached .mft files
     get-sync-dir
@@ -72,5 +72,5 @@ COMMANDS:
 
 Implementation:
     src\cli\mod.rs
-    https://github.com/TeamDman/teamy-mft/blob/a9d279a/src/cli/mod.rs
+    https://github.com/TeamDman/teamy-mft/blob/12b4a4f/src/cli/mod.rs
 ```
