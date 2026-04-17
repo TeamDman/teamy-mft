@@ -2,6 +2,7 @@ use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
+use crate::cli::command::status::StatusArgs;
 use crate::cli::command::sync::SyncArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -20,6 +21,8 @@ pub enum Command {
     GetSyncDir(GetSyncDirArgs),
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir(SetSyncDirArgs),
+    /// Show per-drive cache freshness for `.mft` and `.mft_search_index` files
+    Status(StatusArgs),
     /// Query indexed file paths (substring match) across cached `.mft_search_index` files
     Query(QueryArgs),
 }
@@ -42,6 +45,7 @@ impl Command {
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
+            Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(),
         }
     }

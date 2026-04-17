@@ -24,6 +24,9 @@ cargo install --path .
 # Sync the MFT for all drives (auto-elevates via UAC if needed)
 teamy-mft sync
 
+# Inspect cache freshness for the indexed query files on each drive
+teamy-mft status
+
 # Query indexed paths
 teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 ```
@@ -80,6 +83,8 @@ OPTIONS:
 COMMANDS:
     sync
             Write .mft and .mft_search_index files (will auto-elevate via UAC if not already running as administrator)
+    status
+        Show per-drive cache freshness for `.mft` and `.mft_search_index` files
     list-paths
             Produce newline-delimited list of file paths for matching drives from cached .mft files
     get-sync-dir

@@ -7,6 +7,7 @@ pub mod paths;
 pub mod query;
 pub mod read;
 pub mod search_index;
+pub mod status;
 pub mod sync_dir;
 
 use crate::cli::Cli;
