@@ -29,6 +29,12 @@ teamy-mft status
 
 # Query indexed paths
 teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
+
+# Add a privacy-preserving ignore rule
+teamy-mft ignore add FirstName
+
+# See which ignore rules are active and where they came from
+teamy-mft ignore list
 ```
 
 ## Library Usage
@@ -37,14 +43,22 @@ teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 
 ```rust
 use teamy_mft::cli::command::query::QueryArgs;
+use teamy_mft::query::QueryExecutionOptions;
+use teamy_mft::query::QueryIgnoreBehavior;
 
 fn main() -> eyre::Result<()> {
-    // Find all git repositories on the machine
+    // By default, queries honor discovered `.teamymftignore` rules.
     for path in QueryArgs::new(".git$").invoke()? {
         if let Some(repo_root) = path.parent() {
             println!("{} ({})", repo_root.display(), path.display());
         }
     }
+
+    // Library callers can also opt out explicitly.
+    let _unfiltered = QueryArgs::new("FirstName").invoke_with_options(QueryExecutionOptions {
+        ignore: QueryIgnoreBehavior::Disabled,
+    })?;
+
     Ok(())
 }
 ```

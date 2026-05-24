@@ -1,11 +1,22 @@
 mod indexed_path_row;
+mod query_execution_options;
 mod query_group;
+mod query_ignore_rules;
+mod query_index_match;
 mod query_needle;
 mod query_plan;
 mod query_rule;
 
 pub use indexed_path_row::IndexedPathRow;
+pub use query_execution_options::QueryExecutionOptions;
+pub use query_execution_options::QueryIgnoreBehavior;
 pub use query_group::QueryGroup;
+pub use query_ignore_rules::DiscoveredIgnoreFile;
+pub use query_ignore_rules::IGNORE_FILE_EXTENSION;
+pub use query_ignore_rules::IgnoreRuleLine;
+pub use query_ignore_rules::QueryIgnoreRules;
+pub use query_ignore_rules::SYNCED_IGNORE_FILE_NAME;
+pub(crate) use query_index_match::matching_row_indices_for_rule;
 pub use query_needle::QueryNeedle;
 pub use query_plan::QueryPlan;
 pub use query_rule::QueryRule;

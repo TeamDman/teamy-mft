@@ -1,8 +1,10 @@
 use crate::query::IndexedPathRow;
+use crate::query::QueryExecutionOptions;
+use crate::query::QueryIgnoreBehavior;
+use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
-use crate::query::QueryRule;
+use crate::query::matching_row_indices_for_rule;
 use crate::search_index::load::MappedSearchIndex;
-use crate::search_index::search_index_bytes::ParsedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
@@ -42,6 +44,12 @@ pub struct QueryArgs {
     /// Show only paths that contain one or more deleted MFT entries
     #[facet(args::named, default)]
     pub only_deleted: bool,
+    /// Include paths hidden by `.teamymftignore` rules
+    #[facet(args::named, default)]
+    pub show_ignored: bool,
+    /// Show only paths hidden by `.teamymftignore` rules
+    #[facet(args::named, default)]
+    pub only_ignored: bool,
     /// Output density mode
     #[facet(args::named, default)]
     pub density: QueryDensity,
@@ -73,6 +81,9 @@ struct QueryScope {
 fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
     if !colorize {
         return row.path.clone();
+    }
+    if row.is_ignored {
+        return row.path.yellow().to_string();
     }
     if row.has_deleted_entries {
         row.path.red().to_string()
@@ -156,6 +167,14 @@ fn should_include_indexed_row(
     include_deleted || !has_deleted_entries
 }
 
+fn should_include_ignored_row(show_ignored: bool, only_ignored: bool, is_ignored: bool) -> bool {
+    if only_ignored {
+        return is_ignored;
+    }
+
+    show_ignored || !is_ignored
+}
+
 fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
     let Some(scope) = scope else {
         return Ok(None);
@@ -202,157 +221,6 @@ fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
     };
 
     path_matches_scope(Path::new(path), scope)
-}
-
-fn matching_row_indices_for_rule(
-    parsed_index: &ParsedSearchIndex<'_>,
-    rule: &QueryRule,
-) -> eyre::Result<Vec<u32>> {
-    if let Some(normalized_suffix) = rule.normalized_extension_suffix() {
-        return Ok(match parsed_index.extension_postings(normalized_suffix)? {
-            Some(iter) => iter.collect(),
-            None => Vec::new(),
-        });
-    }
-
-    if rule.matches_only_terminal_segment() {
-        return terminal_matching_row_indices_for_rule(parsed_index, rule);
-    }
-
-    let matching_segment_ids = matching_segment_ids_for_rule(parsed_index, rule)?;
-
-    let mut row_indices = {
-        let _span = info_span!("collect_matching_segment_postings").entered();
-        let mut row_indices = Vec::new();
-
-        for segment_id in matching_segment_ids {
-            row_indices.extend(parsed_index.postings(segment_id)?);
-        }
-
-        row_indices
-    };
-
-    info_span!("normalize_matching_row_indices").in_scope(|| {
-        row_indices.sort_unstable();
-        row_indices.dedup();
-    });
-
-    Ok(row_indices)
-}
-
-fn terminal_matching_row_indices_for_rule(
-    parsed_index: &ParsedSearchIndex<'_>,
-    rule: &QueryRule,
-) -> eyre::Result<Vec<u32>> {
-    info_span!("match_query_rule_against_terminal_segments").in_scope(|| {
-        let mut row_indices = Vec::new();
-
-        for (row_index, row) in parsed_index.row_views().enumerate() {
-            let row = row?;
-            let Some(terminal_segment) = row.segment_views().next() else {
-                continue;
-            };
-
-            if !rule.matches_normalized(terminal_segment.normalized) {
-                continue;
-            }
-
-            let row_index = u32::try_from(row_index).wrap_err_with(|| {
-                format!("Row index {row_index} does not fit into u32 for query results")
-            })?;
-            row_indices.push(row_index);
-        }
-
-        Ok(row_indices)
-    })
-}
-
-fn matching_segment_ids_for_rule(
-    parsed_index: &ParsedSearchIndex<'_>,
-    rule: &QueryRule,
-) -> eyre::Result<Vec<u32>> {
-    if let Some(trigrams) = rule.normalized_contains_trigrams() {
-        let candidate_segment_ids = {
-            let _span = info_span!("collect_trigram_segment_candidates").entered();
-            let mut candidate_segment_ids: Option<Vec<u32>> = None;
-
-            for trigram in trigrams {
-                let Some(iter) = parsed_index.trigram_postings(trigram)? else {
-                    return Ok(Vec::new());
-                };
-
-                let mut trigram_segment_ids = iter.collect::<Vec<_>>();
-                trigram_segment_ids.sort_unstable();
-                trigram_segment_ids.dedup();
-
-                candidate_segment_ids = Some(match candidate_segment_ids.take() {
-                    Some(existing_segment_ids) => {
-                        intersect_sorted_ids(&existing_segment_ids, &trigram_segment_ids)
-                    }
-                    None => trigram_segment_ids,
-                });
-
-                if candidate_segment_ids
-                    .as_ref()
-                    .is_some_and(std::vec::Vec::is_empty)
-                {
-                    return Ok(Vec::new());
-                }
-            }
-
-            candidate_segment_ids.unwrap_or_default()
-        };
-
-        return info_span!("filter_trigram_segment_candidates").in_scope(|| {
-            let mut matching_segment_ids = Vec::with_capacity(candidate_segment_ids.len());
-
-            for segment_id in candidate_segment_ids {
-                let segment = parsed_index.segment(segment_id)?;
-                if rule.matches_normalized(segment.normalized) {
-                    matching_segment_ids.push(segment_id);
-                }
-            }
-
-            Ok(matching_segment_ids)
-        });
-    }
-
-    info_span!("match_query_rule_against_segments").in_scope(|| {
-        let mut matching_segment_ids = Vec::new();
-
-        for (segment_id, segment) in parsed_index.segments().iter().enumerate() {
-            if !rule.matches_normalized(segment.normalized) {
-                continue;
-            }
-
-            let segment_id = u32::try_from(segment_id).wrap_err_with(|| {
-                format!("Segment id {segment_id} does not fit into u32 for postings lookup")
-            })?;
-            matching_segment_ids.push(segment_id);
-        }
-
-        Ok(matching_segment_ids)
-    })
-}
-
-fn intersect_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
-    let mut left_index = 0;
-    let mut right_index = 0;
-    let mut intersection = Vec::with_capacity(left.len().min(right.len()));
-
-    while left_index < left.len() && right_index < right.len() {
-        match left[left_index].cmp(&right[right_index]) {
-            std::cmp::Ordering::Less => left_index += 1,
-            std::cmp::Ordering::Greater => right_index += 1,
-            std::cmp::Ordering::Equal => {
-                intersection.push(left[left_index]);
-                left_index += 1;
-                right_index += 1;
-            }
-        }
-    }
-
-    intersection
 }
 
 fn load_and_query_drive_search_index(
@@ -436,6 +304,7 @@ fn load_and_query_drive_search_index(
             matched_rows.push(IndexedPathRow {
                 path: row.path(),
                 has_deleted_entries: row.has_deleted_entries,
+                is_ignored: false,
             });
         }
 
@@ -473,7 +342,19 @@ impl QueryArgs {
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     pub fn invoke(self) -> eyre::Result<Vec<PathBuf>> {
-        let rows = self.collect_rows()?;
+        let rows = self.collect_rows_with_options(QueryExecutionOptions::default())?;
+        Ok(rows.into_iter().map(|r| PathBuf::from(r.path)).collect())
+    }
+
+    /// Run the query and return matching paths using explicit execution options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
+    /// or if reading/parsing index files fails.
+    pub fn invoke_with_options(self, options: QueryExecutionOptions) -> eyre::Result<Vec<PathBuf>> {
+        let rows = self.collect_rows_with_options(options)?;
         Ok(rows.into_iter().map(|r| PathBuf::from(r.path)).collect())
     }
 
@@ -484,17 +365,31 @@ impl QueryArgs {
     /// Returns an error if the query is empty, sync directory cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, density = ?self.density))]
+    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, show_ignored = self.show_ignored, only_ignored = self.only_ignored, density = ?self.density))]
     pub fn invoke_and_print(self) -> eyre::Result<()> {
+        self.invoke_and_print_with_options(QueryExecutionOptions::default())
+    }
+
+    /// Run the query and print results to stdout using explicit execution options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// drive letters cannot be resolved, the query scope cannot be canonicalized,
+    /// or if reading/parsing index files fails.
+    pub fn invoke_and_print_with_options(self, options: QueryExecutionOptions) -> eyre::Result<()> {
         let limit = self.limit;
         let density = self.density;
         let include_deleted = self.include_deleted;
         let only_deleted = self.only_deleted;
+        let show_ignored = self.show_ignored;
+        let only_ignored = self.only_ignored;
 
-        let results = self.collect_rows()?;
+        let results = self.collect_rows_with_options(options)?;
 
         let stdout_is_terminal = std::io::stdout().is_terminal();
-        let colorize = stdout_is_terminal && (include_deleted || only_deleted);
+        let colorize =
+            stdout_is_terminal && (include_deleted || only_deleted || show_ignored || only_ignored);
         let result_limit = if limit == 0 {
             results.len()
         } else {
@@ -511,7 +406,10 @@ impl QueryArgs {
         Ok(())
     }
 
-    fn collect_rows(self) -> eyre::Result<Vec<IndexedPathRow>> {
+    pub fn collect_rows_with_options(
+        self,
+        options: QueryExecutionOptions,
+    ) -> eyre::Result<Vec<IndexedPathRow>> {
         debug!("Running query with args: {:?}", self);
         if self.query.iter().all(|query| query.trim().is_empty()) {
             eyre::bail!("query string required")
@@ -529,13 +427,14 @@ impl QueryArgs {
                 .filter(|(_, p)| p.is_file())
                 .collect()
         };
-        self.collect_rows_from_files(mft_files, &sync_dir)
+        self.collect_rows_from_files(mft_files, &sync_dir, options)
     }
 
     fn collect_rows_from_files(
         self,
         mft_files: Vec<(char, PathBuf)>,
         sync_dir: &Path,
+        options: QueryExecutionOptions,
     ) -> eyre::Result<Vec<IndexedPathRow>> {
         let query_plan = {
             let _span = info_span!("parse_query_rules", query = ?self.query).entered();
@@ -545,6 +444,17 @@ impl QueryArgs {
             let _span = info_span!("resolve_query_scope", query_scope = ?self.r#in).entered();
             resolve_query_scope(self.r#in.as_deref())?
         };
+        let drive_letters = mft_files
+            .iter()
+            .map(|(drive_letter, _)| *drive_letter)
+            .collect::<Vec<_>>();
+        let ignore_rules = match options.ignore {
+            QueryIgnoreBehavior::AutoDiscover => Some(
+                QueryIgnoreRules::discover_for_drive_letters(&drive_letters, sync_dir)?,
+            ),
+            QueryIgnoreBehavior::Disabled => None,
+            QueryIgnoreBehavior::Custom(rules) => Some(rules),
+        };
 
         let mut loaded_rows = 0usize;
         let mut results = Vec::new();
@@ -552,6 +462,8 @@ impl QueryArgs {
             let _span = info_span!("load_search_indexes", drives = mft_files.len()).entered();
             let include_deleted = self.include_deleted;
             let only_deleted = self.only_deleted;
+            let show_ignored = self.show_ignored;
+            let only_ignored = self.only_ignored;
             let load_results: Vec<eyre::Result<DriveQueryResult>> = mft_files
                 .into_par_iter()
                 .map(|(drive_letter, _)| {
@@ -568,12 +480,18 @@ impl QueryArgs {
             for result in load_results {
                 let result = result?;
                 loaded_rows += result.loaded_rows;
-                results.extend(
-                    result
-                        .matched_rows
-                        .into_iter()
-                        .filter(|row| should_include_scope(&row.path, query_scope.as_ref())),
-                );
+                results.extend(result.matched_rows.into_iter().filter_map(|mut row| {
+                    if !should_include_scope(&row.path, query_scope.as_ref()) {
+                        return None;
+                    }
+
+                    row.is_ignored = ignore_rules
+                        .as_ref()
+                        .is_some_and(|rules| rules.is_ignored_path(Path::new(&row.path)));
+
+                    should_include_ignored_row(show_ignored, only_ignored, row.is_ignored)
+                        .then_some(row)
+                }));
             }
         }
 
@@ -590,8 +508,8 @@ impl QueryArgs {
 
 #[cfg(test)]
 mod tests {
-    use super::matching_row_indices_for_rule;
     use super::resolve_query_scope;
+    use super::should_include_ignored_row;
     use super::should_include_scope;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
@@ -647,7 +565,10 @@ mod tests {
         let parsed = parse_fixture_index()?;
         let rule = QueryRule::parse("ower").expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+        assert_eq!(
+            crate::query::matching_row_indices_for_rule(&parsed, &rule)?,
+            vec![0]
+        );
 
         Ok(())
     }
@@ -657,7 +578,10 @@ mod tests {
         let parsed = parse_fixture_index()?;
         let rule = QueryRule::parse("fl").expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+        assert_eq!(
+            crate::query::matching_row_indices_for_rule(&parsed, &rule)?,
+            vec![0, 1]
+        );
 
         Ok(())
     }
@@ -668,7 +592,9 @@ mod tests {
         let plan = QueryPlan::parse_inputs(&[String::from("flow .jar$")])?;
 
         assert_eq!(
-            plan.matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed, rule))?,
+            plan.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(
+                &parsed, rule
+            ))?,
             vec![0]
         );
 
@@ -701,7 +627,10 @@ mod tests {
         let parsed = SearchIndexBytes::new(bytes).parse_trusted_for_query()?;
         let rule = QueryRule::parse(".git$").expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+        assert_eq!(
+            crate::query::matching_row_indices_for_rule(&parsed, &rule)?,
+            vec![0]
+        );
 
         Ok(())
     }
@@ -782,5 +711,23 @@ mod tests {
         assert!(scope.include_descendants);
 
         Ok(())
+    }
+
+    #[test]
+    fn ignored_rows_are_hidden_by_default() {
+        assert!(!should_include_ignored_row(false, false, true));
+        assert!(should_include_ignored_row(false, false, false));
+    }
+
+    #[test]
+    fn show_ignored_includes_both_visible_and_ignored_rows() {
+        assert!(should_include_ignored_row(true, false, true));
+        assert!(should_include_ignored_row(true, false, false));
+    }
+
+    #[test]
+    fn only_ignored_filters_to_ignored_rows() {
+        assert!(should_include_ignored_row(false, true, true));
+        assert!(!should_include_ignored_row(true, true, false));
     }
 }

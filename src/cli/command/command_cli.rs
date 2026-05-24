@@ -1,4 +1,5 @@
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
+use crate::cli::command::ignore::IgnoreArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
@@ -19,6 +20,8 @@ pub enum Command {
     ListPaths(ListPathsArgs),
     /// Get the currently configured sync directory
     GetSyncDir(GetSyncDirArgs),
+    /// Manage `.teamymftignore` rules used to filter query results
+    Ignore(IgnoreArgs),
     /// Set the sync directory (defaults to current directory if omitted)
     SetSyncDir(SetSyncDirArgs),
     /// Show per-drive cache freshness for `.mft` and `.mft_search_index` files
@@ -44,6 +47,7 @@ impl Command {
             Command::Sync(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
+            Command::Ignore(args) => args.invoke(),
             Command::SetSyncDir(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(),
