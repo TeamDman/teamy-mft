@@ -6,6 +6,7 @@ use crate::query::QueryPlan;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
+use crate::sync_dir::SYNC_DIR_ENV;
 use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use color_eyre::owo_colors::OwoColorize;
@@ -13,6 +14,7 @@ use eyre::Context;
 use facet::Facet;
 use figue::{self as args};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
@@ -22,7 +24,7 @@ use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
 
-#[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
 // cli[impl command.query.drive-pattern-selection]
 pub struct QueryArgs {
@@ -53,6 +55,9 @@ pub struct QueryArgs {
     /// Output density mode
     #[facet(args::named, default)]
     pub density: QueryDensity,
+    /// Query source selection
+    #[facet(args::named, default)]
+    pub source: QuerySource,
 }
 
 #[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
@@ -64,6 +69,29 @@ pub enum QueryDensity {
     Auto,
     Lines,
     Columns,
+}
+
+#[derive(
+    Default,
+    Facet,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::Display,
+)]
+#[repr(u8)]
+#[strum(serialize_all = "kebab-case")]
+#[facet(rename_all = "kebab-case")]
+pub enum QuerySource {
+    #[default]
+    Auto,
+    DaemonOnly,
+    DiskOnly,
 }
 
 #[derive(Debug, Default)]
@@ -223,35 +251,24 @@ fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
     path_matches_scope(Path::new(path), scope)
 }
 
-fn load_and_query_drive_search_index(
-    drive_letter: char,
-    sync_dir: &Path,
+fn load_and_query_search_index(
+    index_path: &Path,
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<DriveQueryResult> {
     let _span = info_span!("load_drive_search_index").entered();
-    let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-
     {
         let _span = info_span!("validate_search_index_file").entered();
         if !index_path.is_file() {
-            eyre::bail!(
-                "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-                index_path.display(),
-                drive_letter
-            );
+            eyre::bail!("Fast query requires {}.", index_path.display(),);
         }
     }
 
     let mapped = {
         let _span = info_span!("map_search_index_file").entered();
         MappedSearchIndex::open(&index_path).wrap_err_with(|| {
-            format!(
-                "Failed loading search index for drive {} from {}",
-                drive_letter,
-                index_path.display()
-            )
+            format!("Failed loading search index from {}", index_path.display())
         })?
     };
 
@@ -261,8 +278,7 @@ fn load_and_query_drive_search_index(
             .parse_trusted_for_query()
             .wrap_err_with(|| {
                 format!(
-                    "Failed preparing search index rows for drive {} from {}",
-                    drive_letter,
+                    "Failed preparing search index rows from {}",
                     index_path.display()
                 )
             })?
@@ -275,8 +291,7 @@ fn load_and_query_drive_search_index(
             .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
             .wrap_err_with(|| {
                 format!(
-                    "Failed matching search index rows for drive {} from {}",
-                    drive_letter,
+                    "Failed matching search index rows from {}",
                     index_path.display()
                 )
             })?
@@ -290,9 +305,8 @@ fn load_and_query_drive_search_index(
                 .row_view(row_index as usize)
                 .wrap_err_with(|| {
                     format!(
-                        "Failed materializing search index row {} for drive {} from {}",
+                        "Failed materializing search index row {} from {}",
                         row_index,
-                        drive_letter,
                         index_path.display()
                     )
                 })?;
@@ -315,6 +329,53 @@ fn load_and_query_drive_search_index(
         loaded_rows,
         matched_rows,
     })
+}
+
+fn load_and_query_drive_search_index(
+    drive_letter: char,
+    sync_dir: &Path,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<DriveQueryResult> {
+    let base_index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
+    let overlay_index_path = sync_dir.join(format!("{drive_letter}.mft_overlay_search_index"));
+    let mut result =
+        load_and_query_search_index(&base_index_path, query_plan, include_deleted, only_deleted)
+            .wrap_err_with(|| {
+                format!(
+                    "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
+                    base_index_path.display(),
+                    drive_letter
+                )
+            })?;
+
+    if overlay_index_path.is_file() {
+        let overlay_result = load_and_query_search_index(
+            &overlay_index_path,
+            query_plan,
+            include_deleted,
+            only_deleted,
+        )?;
+        result.loaded_rows += overlay_result.loaded_rows;
+        result.matched_rows = merge_rows(result.matched_rows, overlay_result.matched_rows);
+    }
+
+    Ok(result)
+}
+
+fn merge_rows(
+    base_rows: Vec<IndexedPathRow>,
+    overlay_rows: Vec<IndexedPathRow>,
+) -> Vec<IndexedPathRow> {
+    let mut merged = BTreeMap::<String, IndexedPathRow>::new();
+    for row in base_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    for row in overlay_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    merged.into_values().collect()
 }
 
 impl QueryArgs {
@@ -414,20 +475,151 @@ impl QueryArgs {
         if self.query.iter().all(|query| query.trim().is_empty()) {
             eyre::bail!("query string required")
         }
-        let sync_dir = {
-            let _span = info_span!("resolve_sync_dir").entered();
-            try_get_sync_dir()?
-        };
+        let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
+        match options.source {
+            QuerySource::Auto => {
+                if let Some(sync_dir) = sync_dir_from_env() {
+                    return self.collect_rows_from_sync_dir_and_drive_letters(
+                        &sync_dir,
+                        drive_letters,
+                        QueryExecutionOptions {
+                            ignore: options.ignore,
+                            source: QuerySource::DiskOnly,
+                        },
+                    );
+                }
+
+                if let Some(config) = crate::machine::config::load_machine_config()? {
+                    if !matches!(
+                        crate::machine::service::query_service_state(&config.service_name)?,
+                        crate::machine::service::WindowsServiceState::Missing
+                    ) {
+                        match crate::machine::service::start_service_if_needed(&config.service_name)
+                        {
+                            Ok(()) => {
+                                let request = crate::machine::ipc::QueryRequest {
+                                    query: self.query.clone(),
+                                    query_scope: self.r#in.clone(),
+                                    drive_letters: drive_letters.clone(),
+                                    limit: self.limit,
+                                    include_deleted: self.include_deleted,
+                                    only_deleted: self.only_deleted,
+                                    show_ignored: self.show_ignored,
+                                    only_ignored: self.only_ignored,
+                                };
+                                match crate::machine::ipc::send_request(
+                                    &config,
+                                    &crate::machine::ipc::MachineRequest::Query(request),
+                                ) {
+                                    Ok(crate::machine::ipc::MachineResponse::Query(response)) => {
+                                        return Ok(response.rows);
+                                    }
+                                    Ok(crate::machine::ipc::MachineResponse::Error(error)) => {
+                                        match error.kind {
+                                            crate::machine::ipc::MachineErrorKind::RequestInvalid => {
+                                                eyre::bail!(error.message)
+                                            }
+                                            crate::machine::ipc::MachineErrorKind::Unavailable
+                                            | crate::machine::ipc::MachineErrorKind::Degraded => {
+                                                tracing::warn!(
+                                                    kind = ?error.kind,
+                                                    error = %error.message,
+                                                    "Daemon query reported degraded state, falling back to disk"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Ok(other) => {
+                                        tracing::warn!(?other, "Unexpected daemon response, falling back to disk");
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(error = %error, "Daemon query failed, falling back to disk");
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "Daemon start failed, falling back to disk");
+                            }
+                        }
+                    }
+
+                    return self.collect_rows_from_sync_dir_and_drive_letters(
+                        &config.cache_root,
+                        drive_letters,
+                        QueryExecutionOptions {
+                            ignore: options.ignore,
+                            source: QuerySource::DiskOnly,
+                        },
+                    );
+                }
+
+                let sync_dir = {
+                    let _span = info_span!("resolve_sync_dir").entered();
+                    try_get_sync_dir()?
+                };
+                self.collect_rows_from_sync_dir_and_drive_letters(
+                    &sync_dir,
+                    drive_letters,
+                    QueryExecutionOptions {
+                        ignore: options.ignore,
+                        source: QuerySource::DiskOnly,
+                    },
+                )
+            }
+            QuerySource::DaemonOnly => {
+                let config = crate::machine::config::load_machine_config()?.ok_or_else(|| {
+                    eyre::eyre!("Machine daemon is not installed. Run `teamy-mft install` first.")
+                })?;
+                crate::machine::service::start_service_if_needed(&config.service_name)?;
+                let request = crate::machine::ipc::QueryRequest {
+                    query: self.query,
+                    query_scope: self.r#in,
+                    drive_letters,
+                    limit: self.limit,
+                    include_deleted: self.include_deleted,
+                    only_deleted: self.only_deleted,
+                    show_ignored: self.show_ignored,
+                    only_ignored: self.only_ignored,
+                };
+                match crate::machine::ipc::send_request(
+                    &config,
+                    &crate::machine::ipc::MachineRequest::Query(request),
+                )? {
+                    crate::machine::ipc::MachineResponse::Query(response) => Ok(response.rows),
+                    crate::machine::ipc::MachineResponse::Error(error) => {
+                        eyre::bail!(error.message)
+                    }
+                    other => eyre::bail!("Unexpected daemon response: {:?}", other),
+                }
+            }
+            QuerySource::DiskOnly => {
+                let sync_dir = if let Some(sync_dir) = sync_dir_from_env() {
+                    sync_dir
+                } else if let Some(config) = crate::machine::config::load_machine_config()? {
+                    config.cache_root
+                } else {
+                    try_get_sync_dir()?
+                };
+                self.collect_rows_from_sync_dir_and_drive_letters(&sync_dir, drive_letters, options)
+            }
+        }
+    }
+
+    pub fn collect_rows_from_sync_dir_and_drive_letters(
+        self,
+        sync_dir: &Path,
+        drive_letters: Vec<char>,
+        options: QueryExecutionOptions,
+    ) -> eyre::Result<Vec<IndexedPathRow>> {
         let mft_files: Vec<(char, PathBuf)> = {
             let _span = info_span!("discover_mft_files").entered();
-            self.drive_letter_pattern
-                .into_drive_letters()?
+            drive_letters
                 .into_iter()
                 .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
                 .filter(|(_, p)| p.is_file())
                 .collect()
         };
-        self.collect_rows_from_files(mft_files, &sync_dir, options)
+        self.collect_rows_from_files(mft_files, sync_dir, options)
     }
 
     fn collect_rows_from_files(
@@ -504,6 +696,13 @@ impl QueryArgs {
 
         Ok(results)
     }
+}
+
+fn sync_dir_from_env() -> Option<PathBuf> {
+    std::env::var(SYNC_DIR_ENV).ok().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+    })
 }
 
 #[cfg(test)]

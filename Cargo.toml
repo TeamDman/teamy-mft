@@ -20,6 +20,8 @@ directories = "5"
 dunce = "1"
 eyre = "0.6.12"
 facet = "0.44.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 #figue = { package = "teamy-figue", version = "2.0.1", path = "../figue/crates/figue", features = ["arbitrary"] }
 figue = { package = "teamy-figue", version = "2.0.1", features = ["arbitrary"] }
 tracing = "0.1.41"
@@ -30,10 +32,14 @@ windows = { version = "0.62.0", features = [
     "Win32_System_Registry",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_Storage",
     "Win32_System_IO",
     "Win32_System_Ioctl",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Services",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
     "Win32_UI_Shell",

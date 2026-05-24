@@ -1,6 +1,7 @@
 pub mod cli;
 
 pub mod logging_init;
+pub mod machine;
 pub mod mft;
 pub mod ntfs;
 pub mod paths;

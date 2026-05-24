@@ -2671,6 +2671,8 @@ dependencies = [
  "mimalloc",
  "rayon",
  "rustc-hash",
+ "serde",
+ "serde_json",
  "strum",
  "teamy-figue",
  "teamy-uom-extensions",

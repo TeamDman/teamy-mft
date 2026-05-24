@@ -19,6 +19,95 @@ impl StatusArgs {
     /// Returns an error if the sync directory is unset, drive letters cannot be resolved,
     /// or cached file metadata cannot be read.
     pub fn invoke(self) -> eyre::Result<()> {
+        if let Some(machine_config) = crate::machine::config::load_machine_config()? {
+            let machine_status =
+                crate::machine::status::load_machine_status(&self.drive_letter_pattern)?;
+            println!("machine-cache-root={}", machine_config.cache_root.display());
+            println!("machine-service-name={}", machine_config.service_name);
+            println!("machine-service-state={:?}", machine_status.service_state);
+            println!("machine-owner-sid={}", machine_config.owner_sid);
+            println!(
+                "machine-current-user-sid={}",
+                machine_status
+                    .current_user_sid
+                    .unwrap_or_else(|| String::from("unknown"))
+            );
+            println!("machine-owner-access={}", machine_status.owner_access);
+            for drive in &machine_status.drives {
+                println!("machine-drive={}", drive.drive_letter);
+                println!(
+                    "machine-drive-{}-mft-path={}",
+                    drive.drive_letter,
+                    drive.mft_path.display()
+                );
+                println!(
+                    "machine-drive-{}-mft-modified-at={}",
+                    drive.drive_letter,
+                    crate::status::format_optional_system_time(drive.mft_modified_at)
+                );
+                println!(
+                    "machine-drive-{}-base-index-path={}",
+                    drive.drive_letter,
+                    drive.base_index_path.display()
+                );
+                println!(
+                    "machine-drive-{}-base-index-modified-at={}",
+                    drive.drive_letter,
+                    crate::status::format_optional_system_time(drive.base_index_modified_at)
+                );
+                println!(
+                    "machine-drive-{}-overlay-index-path={}",
+                    drive.drive_letter,
+                    drive.overlay_index_path.display()
+                );
+                println!(
+                    "machine-drive-{}-overlay-index-modified-at={}",
+                    drive.drive_letter,
+                    crate::status::format_optional_system_time(drive.overlay_index_modified_at)
+                );
+                println!(
+                    "machine-drive-{}-checkpoint-path={}",
+                    drive.drive_letter,
+                    drive.checkpoint_path.display()
+                );
+                println!(
+                    "machine-drive-{}-checkpoint-modified-at={}",
+                    drive.drive_letter,
+                    crate::status::format_optional_system_time(drive.checkpoint_modified_at)
+                );
+                println!(
+                    "machine-drive-{}-journal-id={}",
+                    drive.drive_letter,
+                    drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.journal_id)
+                        .map_or_else(|| String::from("none"), |value| value.to_string())
+                );
+                println!(
+                    "machine-drive-{}-snapshot-usn={}",
+                    drive.drive_letter,
+                    drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.snapshot_usn)
+                        .map_or_else(|| String::from("none"), |value| value.to_string())
+                );
+                println!(
+                    "machine-drive-{}-last-usn={}",
+                    drive.drive_letter,
+                    drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.last_usn)
+                        .map_or_else(|| String::from("none"), |value| value.to_string())
+                );
+            }
+        }
+
+        let Some(_legacy_sync_dir) = crate::sync_dir::get_sync_dir()? else {
+            return Ok(());
+        };
         let status = crate::status::TeamyMftStatus::load(&self.drive_letter_pattern)?;
         let now = SystemTime::now();
 

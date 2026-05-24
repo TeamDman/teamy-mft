@@ -1,10 +1,13 @@
+use crate::cli::command::daemon::DaemonArgs;
 use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::ignore::IgnoreArgs;
+use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::status::StatusArgs;
 use crate::cli::command::sync::SyncArgs;
+use crate::cli::command::uninstall::UninstallArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 
@@ -14,8 +17,14 @@ use facet::Facet;
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 #[repr(u8)]
 pub enum Command {
+    /// Internal machine daemon entrypoint
+    Daemon(DaemonArgs),
     /// Write `.mft` and `.mft_search_index` files (will auto-elevate via UAC if not already running as administrator)
     Sync(SyncArgs),
+    /// Install the machine-wide Windows service and shared cache
+    Install(InstallArgs),
+    /// Remove the machine-wide Windows service and optionally purge its cache
+    Uninstall(UninstallArgs),
     /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
     /// Get the currently configured sync directory
@@ -44,7 +53,10 @@ impl Command {
     /// Returns an error if tracing initialization fails or the command execution fails.
     pub fn invoke(self) -> eyre::Result<()> {
         match self {
+            Command::Daemon(args) => args.invoke(),
             Command::Sync(args) => args.invoke(),
+            Command::Install(args) => args.invoke(),
+            Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
             Command::GetSyncDir(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),

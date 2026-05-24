@@ -3,6 +3,8 @@ use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::cli::command::sync::drive_sync_info::resolve_drive_infos;
 use crate::cli::command::sync::index::SyncIndexArgs;
 use crate::cli::command::sync::mft::SyncMftArgs;
+use crate::machine::ipc::IfExistsDto;
+use crate::machine::ipc::SyncModeDto;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -36,6 +38,45 @@ impl SyncArgs {
     /// Returns an error if the sync directory cannot be retrieved, elevation fails,
     /// or if reading/writing MFT data fails.
     pub fn invoke(self) -> eyre::Result<()> {
+        let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
+        if sync_dir_from_env().is_none()
+            && let Some(config) = crate::machine::config::load_machine_config()?
+            && !matches!(
+                crate::machine::service::query_service_state(&config.service_name)?,
+                crate::machine::service::WindowsServiceState::Missing
+            )
+        {
+            let request = crate::machine::ipc::SyncRequest {
+                drive_letters: drive_letters.clone(),
+                mode: SyncModeDto::from(self.command.clone().unwrap_or_default()),
+                if_exists: IfExistsDto::from(self.if_exists.clone()),
+            };
+            if crate::machine::service::start_service_if_needed(&config.service_name).is_ok() {
+                match crate::machine::ipc::send_request(
+                    &config,
+                    &crate::machine::ipc::MachineRequest::Sync(request),
+                ) {
+                    Ok(crate::machine::ipc::MachineResponse::SyncCompleted) => return Ok(()),
+                    Ok(crate::machine::ipc::MachineResponse::Error(error)) => {
+                        tracing::warn!(
+                            kind = ?error.kind,
+                            error = %error.message,
+                            "Daemon sync failed, falling back to direct sync"
+                        );
+                    }
+                    Ok(other) => {
+                        tracing::warn!(
+                            ?other,
+                            "Unexpected daemon sync response, falling back to direct sync"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Daemon sync RPC failed, falling back to direct sync");
+                    }
+                }
+            }
+        }
+
         let drive_infos = resolve_drive_infos(&self.drive_letter_pattern)?;
         let if_exists = &self.if_exists;
 
@@ -52,6 +93,15 @@ impl SyncArgs {
     }
 }
 
+fn sync_dir_from_env() -> Option<std::path::PathBuf> {
+    std::env::var(crate::sync_dir::SYNC_DIR_ENV)
+        .ok()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| std::path::PathBuf::from(trimmed))
+        })
+}
+
 #[derive(Facet, Arbitrary, PartialEq, Debug, Clone, Default)]
 #[repr(u8)]
 #[facet(rename_all = "kebab-case")]
@@ -63,6 +113,26 @@ pub enum SyncCommand {
     /// Sync both stages sequentially, with preflight checks and error handling for both stages
     #[default]
     Both,
+}
+
+impl From<SyncCommand> for SyncModeDto {
+    fn from(value: SyncCommand) -> Self {
+        match value {
+            SyncCommand::Mft(_) => Self::Mft,
+            SyncCommand::Index(_) => Self::Index,
+            SyncCommand::Both => Self::Both,
+        }
+    }
+}
+
+impl From<IfExistsOutputBehaviour> for IfExistsDto {
+    fn from(value: IfExistsOutputBehaviour) -> Self {
+        match value {
+            IfExistsOutputBehaviour::Skip => Self::Skip,
+            IfExistsOutputBehaviour::Overwrite => Self::Overwrite,
+            IfExistsOutputBehaviour::Abort => Self::Abort,
+        }
+    }
 }
 
 impl SyncCommand {
