@@ -1,8 +1,9 @@
-tracy/
-target
+/tracy/
+/target
 *.mft
 *.bin
 .jj
 *.tracy
-target_ra/
-ignore
+/target_ra/
+/ignore
+*.log
