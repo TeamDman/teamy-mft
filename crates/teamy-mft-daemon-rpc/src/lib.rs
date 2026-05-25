@@ -1,4 +1,49 @@
 use facet::Facet;
+use std::ops::Deref;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Facet)]
+#[repr(transparent)]
+pub struct CorrelationId(pub Uuid);
+
+impl CorrelationId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Deref for CorrelationId {
+    type Target = Uuid;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<Uuid> for CorrelationId {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Display for CorrelationId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::str::FromStr for CorrelationId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(s).map(Self)
+    }
+}
+
+unsafe impl vox_types::Reborrow for CorrelationId {
+    type Ref<'a> = CorrelationId;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Facet, strum::Display)]
 #[repr(u8)]
@@ -26,7 +71,7 @@ pub struct DaemonLogEvent {
     pub message: String,
     pub request_id: u64,
     pub method: String,
-    pub query_transaction: Option<String>,
+    pub correlation_id: Option<CorrelationId>,
     pub fields: Vec<DaemonLogField>,
 }
 
@@ -59,7 +104,13 @@ pub struct QueryRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct QueryResponse {
+    pub correlation_id: CorrelationId,
     pub rows: Vec<IndexedPathRowDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct QueryStreamResponse {
+    pub correlation_id: CorrelationId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -183,7 +234,7 @@ pub trait MachineDaemonRpc {
         request: QueryRequest,
         rows: vox::Tx<IndexedPathRowDto>,
         logs: vox::Tx<DaemonLogEvent>,
-    ) -> Result<(), MachineError>;
+    ) -> Result<QueryStreamResponse, MachineError>;
 
     async fn sync(
         &self,

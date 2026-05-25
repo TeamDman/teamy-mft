@@ -1,5 +1,7 @@
+use crate::machine::config::DEFAULT_SERVICE_NAME;
 use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
+use crate::machine::config::is_access_denied_error;
 use crate::machine::config::load_checkpoint;
 use crate::machine::config::load_machine_config;
 use crate::machine::config::published_drive_paths;
@@ -23,11 +25,13 @@ pub struct MachineDriveStatus {
     pub checkpoint_path: PathBuf,
     pub checkpoint_modified_at: Option<SystemTime>,
     pub checkpoint: Option<PublishedCheckpoint>,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MachineStatus {
     pub config: Option<MachineConfig>,
+    pub config_warning: Option<String>,
     pub service_state: WindowsServiceState,
     pub current_user_sid: Option<String>,
     pub owner_access: bool,
@@ -40,7 +44,16 @@ pub struct MachineStatus {
 pub fn load_machine_status(
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<MachineStatus> {
-    let config = load_machine_config()?;
+    let (config, config_warning) = match load_machine_config() {
+        Ok(config) => (config, None),
+        Err(error) if is_access_denied_error(&error) => (
+            None,
+            Some(format!(
+                "machine config is installed but not readable from this session: {error}"
+            )),
+        ),
+        Err(error) => return Err(error),
+    };
     let current_user_sid = current_user_sid_string().ok();
     let (service_state, owner_access, drives) = if let Some(config) = &config {
         let service_state = query_service_state(&config.service_name)?;
@@ -52,28 +65,58 @@ pub fn load_machine_status(
             .into_iter()
             .map(|drive_letter| {
                 let paths = published_drive_paths(&config.cache_root, drive_letter);
-                let checkpoint = load_checkpoint(&paths.checkpoint_path)?;
+                let (mft_modified_at, mft_warning) =
+                    modified_at(&paths.mft_path, "mft snapshot metadata")?;
+                let (base_index_modified_at, base_index_warning) =
+                    modified_at(&paths.base_index_path, "base index metadata")?;
+                let (overlay_index_modified_at, overlay_index_warning) =
+                    modified_at(&paths.overlay_index_path, "overlay index metadata")?;
+                let (checkpoint_modified_at, checkpoint_metadata_warning) =
+                    modified_at(&paths.checkpoint_path, "checkpoint metadata")?;
+                let (checkpoint, checkpoint_warning) =
+                    load_checkpoint_status(&paths.checkpoint_path)?;
+                let warning = [
+                    mft_warning,
+                    base_index_warning,
+                    overlay_index_warning,
+                    checkpoint_metadata_warning,
+                    checkpoint_warning,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; ");
                 Ok(MachineDriveStatus {
                     drive_letter,
-                    mft_modified_at: modified_at(&paths.mft_path)?,
-                    base_index_modified_at: modified_at(&paths.base_index_path)?,
-                    overlay_index_modified_at: modified_at(&paths.overlay_index_path)?,
-                    checkpoint_modified_at: modified_at(&paths.checkpoint_path)?,
+                    mft_modified_at,
+                    base_index_modified_at,
+                    overlay_index_modified_at,
+                    checkpoint_modified_at,
                     mft_path: paths.mft_path,
                     base_index_path: paths.base_index_path,
                     overlay_index_path: paths.overlay_index_path,
                     checkpoint_path: paths.checkpoint_path,
                     checkpoint,
+                    warning: if warning.is_empty() {
+                        None
+                    } else {
+                        Some(warning)
+                    },
                 })
             })
             .collect::<eyre::Result<Vec<_>>>()?;
         (service_state, owner_access, drives)
     } else {
-        (WindowsServiceState::Missing, false, Vec::new())
+        (
+            query_service_state(DEFAULT_SERVICE_NAME).unwrap_or(WindowsServiceState::Unknown(0)),
+            false,
+            Vec::new(),
+        )
     };
 
     Ok(MachineStatus {
         config,
+        config_warning,
         service_state,
         current_user_sid,
         owner_access,
@@ -81,9 +124,45 @@ pub fn load_machine_status(
     })
 }
 
-fn modified_at(path: &std::path::Path) -> eyre::Result<Option<SystemTime>> {
+fn modified_at(
+    path: &std::path::Path,
+    label: &str,
+) -> eyre::Result<(Option<SystemTime>, Option<String>)> {
     if !path.is_file() {
-        return Ok(None);
+        return Ok((None, None));
     }
-    Ok(Some(fs::metadata(path)?.modified()?))
+
+    match fs::metadata(path).and_then(|metadata| metadata.modified()) {
+        Ok(modified_at) => Ok((Some(modified_at), None)),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => Ok((
+            None,
+            Some(format!(
+                "cannot read {label} at {}: {error}",
+                path.display()
+            )),
+        )),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn load_checkpoint_status(
+    path: &std::path::Path,
+) -> eyre::Result<(Option<PublishedCheckpoint>, Option<String>)> {
+    match load_checkpoint(path) {
+        Ok(checkpoint) => Ok((checkpoint, None)),
+        Err(error) if is_access_denied_error(&error) => Ok((
+            None,
+            Some(format!(
+                "cannot read checkpoint contents at {}: {error}",
+                path.display()
+            )),
+        )),
+        Err(error) => Ok((
+            None,
+            Some(format!(
+                "cannot parse checkpoint contents at {}: {error}",
+                path.display()
+            )),
+        )),
+    }
 }

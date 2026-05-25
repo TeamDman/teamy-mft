@@ -1,6 +1,7 @@
 use crate::paths::EnsureParentDirExists;
 use facet::Facet;
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -224,4 +225,12 @@ pub fn current_unix_ms() -> u64 {
             .unwrap_or_default()
             .as_millis() as u64
     }
+}
+
+#[must_use]
+pub fn is_access_denied_error(error: &eyre::Report) -> bool {
+    error
+        .chain()
+        .filter_map(|source| source.downcast_ref::<io::Error>())
+        .any(|source| source.kind() == io::ErrorKind::PermissionDenied)
 }

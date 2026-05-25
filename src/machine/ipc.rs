@@ -2,6 +2,7 @@ use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogEvent;
 use crate::query::IndexedPathRow;
 use std::time::Duration;
+pub use teamy_mft_daemon_rpc::CorrelationId;
 pub use teamy_mft_daemon_rpc::DaemonBuildInfo;
 pub use teamy_mft_daemon_rpc::DegradedDriveStatus;
 pub use teamy_mft_daemon_rpc::IfExistsDto;
@@ -14,6 +15,7 @@ pub use teamy_mft_daemon_rpc::MachineErrorKind;
 pub use teamy_mft_daemon_rpc::PingResponse;
 pub use teamy_mft_daemon_rpc::QueryRequest;
 pub use teamy_mft_daemon_rpc::QueryResponse as RpcQueryResponse;
+pub use teamy_mft_daemon_rpc::QueryStreamResponse;
 pub use teamy_mft_daemon_rpc::StatusRequest;
 pub use teamy_mft_daemon_rpc::StatusResponse;
 pub use teamy_mft_daemon_rpc::SyncModeDto;
@@ -61,7 +63,7 @@ pub fn query_stream(
     request: QueryRequest,
     rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
     logs: vox::Tx<DaemonLogEvent>,
-) -> eyre::Result<Result<(), MachineError>> {
+) -> eyre::Result<Result<QueryStreamResponse, MachineError>> {
     with_client(config, move |client| async move {
         client.query_stream(request, rows, logs).await
     })
@@ -186,8 +188,12 @@ fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<
 }
 
 #[must_use]
-pub fn convert_indexed_rows(rows: Vec<IndexedPathRow>) -> teamy_mft_daemon_rpc::QueryResponse {
+pub fn convert_indexed_rows(
+    rows: Vec<IndexedPathRow>,
+    correlation_id: CorrelationId,
+) -> teamy_mft_daemon_rpc::QueryResponse {
     teamy_mft_daemon_rpc::QueryResponse {
+        correlation_id,
         rows: rows
             .into_iter()
             .map(|row| teamy_mft_daemon_rpc::IndexedPathRowDto {

@@ -591,7 +591,13 @@ impl QueryArgs {
                             })??;
                             let _ = log_drain.join();
                             match query_outcome {
-                                Ok(Ok(())) => rows.extend(response_rows),
+                                Ok(Ok(response)) => {
+                                    debug!(
+                                        correlation_id = %response.correlation_id,
+                                        "Daemon streamed query completed"
+                                    );
+                                    rows.extend(response_rows);
+                                }
                                 Ok(Err(error)) => match error.kind {
                                     crate::machine::ipc::MachineErrorKind::RequestInvalid => {
                                         eyre::bail!(error.message)
@@ -673,7 +679,13 @@ impl QueryArgs {
                 })??;
                 let _ = log_drain.join();
                 match response {
-                    Ok(()) => Ok(response_rows),
+                    Ok(response) => {
+                        debug!(
+                            correlation_id = %response.correlation_id,
+                            "Daemon-only streamed query completed"
+                        );
+                        Ok(response_rows)
+                    }
                     Err(error) => eyre::bail!(error.message),
                 }
             }

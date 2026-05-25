@@ -35,14 +35,8 @@ impl StatusArgs {
         let daemon_status = load_daemon_status_summary(&machine_status)?;
         print_machine_summary(&machine_status, self.verbose);
         print_daemon_summary(&daemon_status);
-
-        if machine_status.config.is_none() {
-            return Ok(());
-        }
-        let status = crate::status::TeamyMftStatus::load(&self.drive_letter_pattern)?;
         let now = SystemTime::now();
-
-        print_cache_summary(&status, now, self.verbose);
+        print_cache_summary(&machine_status, now, self.verbose);
 
         Ok(())
     }
@@ -212,6 +206,9 @@ fn print_machine_summary(machine_status: &crate::machine::status::MachineStatus,
             .as_deref()
             .unwrap_or("unknown")
     );
+    if let Some(config_warning) = &machine_status.config_warning {
+        println!("machine-config-warning={config_warning}");
+    }
 
     if let Some(config) = &machine_status.config {
         println!("machine-service-name={}", config.service_name);
@@ -258,6 +255,9 @@ fn print_machine_summary(machine_status: &crate::machine::status::MachineStatus,
                         .and_then(|checkpoint| checkpoint.last_usn)
                 )
             );
+            if let Some(warning) = &drive.warning {
+                println!("machine-drive-{}-warning={warning}", drive.drive_letter);
+            }
             if verbose {
                 println!(
                     "machine-drive-{}-mft-path={}",
@@ -314,18 +314,40 @@ fn print_machine_summary(machine_status: &crate::machine::status::MachineStatus,
     }
 }
 
-fn print_cache_summary(status: &crate::status::TeamyMftStatus, now: SystemTime, verbose: bool) {
+fn print_cache_summary(
+    machine_status: &crate::machine::status::MachineStatus,
+    now: SystemTime,
+    verbose: bool,
+) {
+    let query_ready_drives = machine_status
+        .drives
+        .iter()
+        .filter(|drive| drive.mft_modified_at.is_some() && drive.base_index_modified_at.is_some())
+        .collect::<Vec<_>>();
+    let oldest_query_ready_at = query_ready_drives
+        .iter()
+        .filter_map(|drive| query_ready_at(drive))
+        .min();
+    let newest_query_ready_at = query_ready_drives
+        .iter()
+        .filter_map(|drive| query_ready_at(drive))
+        .max();
+
     println!(
         "machine-cache-query-ready-drive-count={}",
-        status.query_ready_drive_count()
+        query_ready_drives.len()
     );
     println!(
         "machine-cache-oldest-query-ready-age={}",
-        crate::status::format_optional_duration(status.oldest_query_ready_age(now))
+        crate::status::format_optional_duration(
+            oldest_query_ready_at.map(|value| age_since(now, value))
+        )
     );
     println!(
         "machine-cache-newest-query-ready-age={}",
-        crate::status::format_optional_duration(status.newest_query_ready_age(now))
+        crate::status::format_optional_duration(
+            newest_query_ready_at.map(|value| age_since(now, value))
+        )
     );
 
     if !verbose {
@@ -334,23 +356,25 @@ fn print_cache_summary(status: &crate::status::TeamyMftStatus, now: SystemTime, 
 
     println!(
         "machine-cache-oldest-query-ready-at={}",
-        crate::status::format_optional_system_time(status.oldest_query_ready_at())
+        crate::status::format_optional_system_time(oldest_query_ready_at)
     );
     println!(
         "machine-cache-newest-query-ready-at={}",
-        crate::status::format_optional_system_time(status.newest_query_ready_at())
+        crate::status::format_optional_system_time(newest_query_ready_at)
     );
 
-    for drive in &status.drives {
+    for drive in &machine_status.drives {
         println!(
             "machine-cache-drive-{}-query-ready={}",
             drive.drive_letter,
-            drive.is_query_ready()
+            query_ready_at(drive).is_some()
         );
         println!(
             "machine-cache-drive-{}-query-ready-age={}",
             drive.drive_letter,
-            crate::status::format_optional_duration(drive.query_ready_age(now))
+            crate::status::format_optional_duration(
+                query_ready_at(drive).map(|value| age_since(now, value))
+            )
         );
         println!(
             "machine-cache-drive-{}-mft-path={}",
@@ -365,14 +389,28 @@ fn print_cache_summary(status: &crate::status::TeamyMftStatus, now: SystemTime, 
         println!(
             "machine-cache-drive-{}-index-path={}",
             drive.drive_letter,
-            drive.index_path.display()
+            drive.base_index_path.display()
         );
         println!(
             "machine-cache-drive-{}-index-modified-at={}",
             drive.drive_letter,
-            crate::status::format_optional_system_time(drive.index_modified_at)
+            crate::status::format_optional_system_time(drive.base_index_modified_at)
         );
     }
+}
+
+fn query_ready_at(drive: &crate::machine::status::MachineDriveStatus) -> Option<SystemTime> {
+    match (drive.mft_modified_at, drive.base_index_modified_at) {
+        (Some(mft_modified_at), Some(index_modified_at)) => {
+            Some(mft_modified_at.min(index_modified_at))
+        }
+        _ => None,
+    }
+}
+
+fn age_since(now: SystemTime, then: SystemTime) -> std::time::Duration {
+    now.duration_since(then)
+        .unwrap_or(std::time::Duration::ZERO)
 }
 
 fn format_optional_u64(value: Option<u64>) -> String {

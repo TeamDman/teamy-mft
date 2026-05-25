@@ -10,8 +10,9 @@ use crate::machine::config::load_machine_config;
 use crate::machine::config::published_drive_paths;
 use crate::machine::config::save_checkpoint;
 use crate::machine::daemon_log::daemon_log_hub;
-use crate::machine::daemon_log::spawn_transaction_log_forwarder;
+use crate::machine::daemon_log::spawn_correlation_log_forwarder;
 use crate::machine::daemon_log::stop_log_forwarder;
+use crate::machine::ipc::CorrelationId;
 use crate::machine::ipc::DegradedDriveStatus;
 use crate::machine::ipc::IfExistsDto;
 use crate::machine::ipc::LogStreamRequest;
@@ -19,6 +20,7 @@ use crate::machine::ipc::MachineDaemonRpc;
 use crate::machine::ipc::MachineError;
 use crate::machine::ipc::PingResponse;
 use crate::machine::ipc::QueryRequest;
+use crate::machine::ipc::QueryStreamResponse;
 use crate::machine::ipc::RpcQueryResponse;
 use crate::machine::ipc::StatusRequest;
 use crate::machine::ipc::StatusResponse;
@@ -264,13 +266,13 @@ impl MachineDaemonService {
     async fn run_query_in_span(
         &self,
         request: QueryRequest,
-        query_transaction: &str,
+        correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
         let state = Arc::clone(&self.state);
         let request_for_body = request.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
-            query_transaction = %query_transaction,
+            correlation_id = %correlation_id,
             rpc_method = "query"
         );
         async move {
@@ -302,9 +304,10 @@ impl MachineDaemonService {
     }
 }
 
-fn next_query_transaction(method: &str) -> String {
-    let ordinal = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    format!("{method}-{ordinal}")
+fn next_correlation_id(method: &str) -> CorrelationId {
+    let _ = method;
+    let _ = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    CorrelationId::new()
 }
 
 fn repair_published_drive_permissions(
@@ -334,12 +337,12 @@ impl MachineDaemonRpc for MachineDaemonService {
         &self,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
     ) -> Result<PingResponse, MachineError> {
-        let query_transaction = next_query_transaction("ping");
-        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let correlation_id = next_correlation_id("ping");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let service_name = self.config.service_name.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
-            query_transaction = %query_transaction,
+            correlation_id = %correlation_id,
             rpc_method = "ping"
         );
         let response = async move {
@@ -364,12 +367,12 @@ impl MachineDaemonRpc for MachineDaemonService {
         request: QueryRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
     ) -> Result<RpcQueryResponse, MachineError> {
-        let query_transaction = next_query_transaction("query");
-        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let correlation_id = next_correlation_id("query");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let response = self
-            .run_query_in_span(request, &query_transaction)
+            .run_query_in_span(request, &correlation_id)
             .await
-            .map(crate::machine::ipc::convert_indexed_rows);
+            .map(|rows| crate::machine::ipc::convert_indexed_rows(rows, correlation_id.clone()));
         stop_log_forwarder(log_forwarder).await;
         response
     }
@@ -379,10 +382,10 @@ impl MachineDaemonRpc for MachineDaemonService {
         request: QueryRequest,
         rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
-    ) -> Result<(), MachineError> {
-        let query_transaction = next_query_transaction("query");
-        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
-        let response = self.run_query_in_span(request, &query_transaction).await;
+    ) -> Result<QueryStreamResponse, MachineError> {
+        let correlation_id = next_correlation_id("query");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
+        let response = self.run_query_in_span(request, &correlation_id).await;
         match response {
             Ok(matched_rows) => {
                 for row in matched_rows {
@@ -400,7 +403,7 @@ impl MachineDaemonRpc for MachineDaemonService {
                 }
                 let _ = rows.close(Vec::default()).await;
                 stop_log_forwarder(log_forwarder).await;
-                Ok(())
+                Ok(QueryStreamResponse { correlation_id })
             }
             Err(error) => {
                 let _ = rows.close(Vec::default()).await;
@@ -415,13 +418,13 @@ impl MachineDaemonRpc for MachineDaemonService {
         request: SyncRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
     ) -> Result<(), MachineError> {
-        let query_transaction = next_query_transaction("sync");
-        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let correlation_id = next_correlation_id("sync");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let drive_count = request.drive_letters.len();
         let state = Arc::clone(&self.state);
         let span = tracing::info_span!(
             "daemon_rpc",
-            query_transaction = %query_transaction,
+            correlation_id = %correlation_id,
             rpc_method = "sync"
         );
         let response = async move {
@@ -464,12 +467,12 @@ impl MachineDaemonRpc for MachineDaemonService {
         _request: StatusRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
     ) -> Result<StatusResponse, MachineError> {
-        let query_transaction = next_query_transaction("status");
-        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let correlation_id = next_correlation_id("status");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let state = Arc::clone(&self.state);
         let span = tracing::info_span!(
             "daemon_rpc",
-            query_transaction = %query_transaction,
+            correlation_id = %correlation_id,
             rpc_method = "status"
         );
         let response = async move {
