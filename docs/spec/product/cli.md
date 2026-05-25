@@ -5,7 +5,10 @@ This specification covers the current user-facing command line behavior exposed 
 ## Command Surface
 
 cli[command.surface.core]
-The CLI must expose the `sync`, `list-paths`, `get-sync-dir`, `set-sync-dir`, and `query` commands.
+The CLI must expose the `sync`, `install`, `uninstall`, `list-paths`, `ignore`, `status`, `query`, and `tray` commands.
+
+cli[help.describes-machine-install]
+The top-level CLI help output must mention the `install` command so machine-managed setup is discoverable.
 
 ## Parser Model
 
@@ -14,17 +17,6 @@ The structured CLI model must serialize to command line arguments consistently f
 
 cli[parser.roundtrip]
 The structured CLI model must roundtrip through argument serialization and parsing for parse-safe values.
-
-## Sync Directory
-
-cli[sync-dir.env-overrides-persisted]
-If `TEAMY_MFT_SYNC_DIR` is set to a non-empty value, it must take precedence over the persisted sync directory file.
-
-cli[sync-dir.persisted-read]
-If no overriding environment variable is present, the CLI must read the persisted sync directory from the configured persistence file.
-
-cli[sync-dir.persisted-write]
-The CLI must persist the configured sync directory as a UTF-8 text file for later runs.
 
 ## Cached MFT Traversal
 

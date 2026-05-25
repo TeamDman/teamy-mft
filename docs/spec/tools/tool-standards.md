@@ -22,6 +22,9 @@ The CLI help output must describe environment variables that affect program beha
 tool[cli.help.position-independent]
 The CLI must support requesting help from nested command positions.
 
+tool[cli.help.describes-machine-install]
+The CLI help output must mention the `install` command so machine-managed setup is discoverable.
+
 ## Logging
 
 tool[logging.stderr-output]
