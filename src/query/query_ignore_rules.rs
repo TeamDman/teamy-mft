@@ -34,6 +34,10 @@ pub struct IgnoreRuleLine {
 
 impl QueryIgnoreRules {
     /// Build an empty ignore set that matches nothing.
+    ///
+    /// # Panics
+    ///
+    /// Panics if building an empty ignore matcher unexpectedly fails.
     #[must_use]
     pub fn empty() -> Self {
         let builder = GitignoreBuilder::new(".");
@@ -267,8 +271,9 @@ fn normalize_candidate_path(path: &Path) -> PathBuf {
 
     for component in path.components() {
         match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {}
-            std::path::Component::CurDir => {}
+            std::path::Component::Prefix(_)
+            | std::path::Component::RootDir
+            | std::path::Component::CurDir => {}
             std::path::Component::ParentDir => normalized.push(".."),
             std::path::Component::Normal(part) => normalized.push(part),
         }

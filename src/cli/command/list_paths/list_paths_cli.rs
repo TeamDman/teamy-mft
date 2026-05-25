@@ -1,5 +1,4 @@
 use crate::mft::mft_file::MftFile;
-use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use eyre::Context;
 use facet::Facet;
@@ -41,7 +40,7 @@ impl ListPathsArgs {
     ///
     /// # Errors
     ///
-    /// Returns an error if the sync directory cannot be retrieved, drive letters cannot be resolved,
+    /// Returns an error if the machine cache cannot be retrieved, drive letters cannot be resolved,
     /// or if reading/parsing MFT files fails.
     // cli[impl command.list-paths.cached-mft-input]
     #[allow(
@@ -49,8 +48,7 @@ impl ListPathsArgs {
         reason = "function processes MFT data in a single pass for performance"
     )]
     pub fn invoke(self) -> eyre::Result<()> {
-        // Determine sync dir
-        let sync_dir = try_get_sync_dir()?;
+        let sync_dir = crate::machine::config::load_required_cache_root()?;
         // Resolve drive letters from pattern
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         // Build list of existing cached MFT files for matching drives

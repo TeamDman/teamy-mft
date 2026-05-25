@@ -1,12 +1,11 @@
 use crate::cli::command::daemon::DaemonArgs;
-use crate::cli::command::get_sync_dir::GetSyncDirArgs;
 use crate::cli::command::ignore::IgnoreArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
 use crate::cli::command::query::QueryArgs;
-use crate::cli::command::set_sync_dir::SetSyncDirArgs;
 use crate::cli::command::status::StatusArgs;
 use crate::cli::command::sync::SyncArgs;
+use crate::cli::command::tray::TrayArgs;
 use crate::cli::command::uninstall::UninstallArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -27,21 +26,19 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
-    /// Get the currently configured sync directory
-    GetSyncDir(GetSyncDirArgs),
     /// Manage `.teamymftignore` rules used to filter query results
     Ignore(IgnoreArgs),
-    /// Set the sync directory (defaults to current directory if omitted)
-    SetSyncDir(SetSyncDirArgs),
     /// Show per-drive cache freshness for `.mft` and `.mft_search_index` files
     Status(StatusArgs),
     /// Query indexed file paths (substring match) across cached `.mft_search_index` files
     Query(QueryArgs),
+    /// Launch the Windows tray icon for daemon log replay and live follow
+    Tray(TrayArgs),
 }
 
 impl Default for Command {
     fn default() -> Self {
-        Command::GetSyncDir(GetSyncDirArgs)
+        Command::Status(StatusArgs::default())
     }
 }
 
@@ -58,11 +55,10 @@ impl Command {
             Command::Install(args) => args.invoke(),
             Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
-            Command::GetSyncDir(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),
-            Command::SetSyncDir(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(),
+            Command::Tray(args) => args.invoke(),
         }
     }
 }

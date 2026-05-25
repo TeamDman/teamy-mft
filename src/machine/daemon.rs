@@ -1,47 +1,102 @@
-use crate::cli::command::sync::{
-    IfExistsOutputBehaviour, SyncCommand, resolve_drive_infos_in_dir_for_letters,
-};
-use crate::machine::config::{
-    MachineConfig, PublishedCheckpoint, current_unix_ms, load_checkpoint, load_machine_config,
-    published_drive_paths, save_checkpoint,
-};
-use crate::machine::ipc::{
-    IfExistsDto, MachineError, MachineRequest, MachineResponse, PipeSecurityAttributes,
-    QueryRequest, QueryResponse, SyncModeDto, SyncRequest, create_server,
-};
+use crate::cli::command::sync::IfExistsOutputBehaviour;
+use crate::cli::command::sync::SyncCommand;
+use crate::cli::command::sync::index::SyncIndexArgs;
+use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
+use crate::machine::config::MachineConfig;
+use crate::machine::config::PublishedCheckpoint;
+use crate::machine::config::current_unix_ms;
+use crate::machine::config::load_checkpoint;
+use crate::machine::config::load_machine_config;
+use crate::machine::config::published_drive_paths;
+use crate::machine::config::save_checkpoint;
+use crate::machine::daemon_log::daemon_log_hub;
+use crate::machine::daemon_log::spawn_transaction_log_forwarder;
+use crate::machine::daemon_log::stop_log_forwarder;
+use crate::machine::ipc::DegradedDriveStatus;
+use crate::machine::ipc::IfExistsDto;
+use crate::machine::ipc::LogStreamRequest;
+use crate::machine::ipc::MachineDaemonRpc;
+use crate::machine::ipc::MachineError;
+use crate::machine::ipc::PingResponse;
+use crate::machine::ipc::QueryRequest;
+use crate::machine::ipc::RpcQueryResponse;
+use crate::machine::ipc::StatusRequest;
+use crate::machine::ipc::StatusResponse;
+use crate::machine::ipc::SyncModeDto;
+use crate::machine::ipc::SyncRequest;
 use crate::machine::live_drive_state::LiveDriveState;
+use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournal;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
+use futures::FutureExt;
 use rustc_hash::FxHashMap;
 use std::ffi::c_void;
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicIsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{info, warn};
+use tokio::sync::Mutex;
+use tracing::Instrument;
+use tracing::debug;
+use tracing::info;
+use tracing::warn;
 use windows::Win32::Foundation::NO_ERROR;
-use windows::Win32::System::Services::{
-    RegisterServiceCtrlHandlerExW, SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP,
-    SERVICE_CONTROL_INTERROGATE, SERVICE_CONTROL_SHUTDOWN, SERVICE_CONTROL_STOP, SERVICE_RUNNING,
-    SERVICE_START_PENDING, SERVICE_STATUS, SERVICE_STATUS_CURRENT_STATE, SERVICE_STATUS_HANDLE,
-    SERVICE_STOP_PENDING, SERVICE_STOPPED, SERVICE_TABLE_ENTRYW, SERVICE_WIN32_OWN_PROCESS,
-    SetServiceStatus, StartServiceCtrlDispatcherW,
-};
+use windows::Win32::System::Services::RegisterServiceCtrlHandlerExW;
+use windows::Win32::System::Services::SERVICE_ACCEPT_SHUTDOWN;
+use windows::Win32::System::Services::SERVICE_ACCEPT_STOP;
+use windows::Win32::System::Services::SERVICE_CONTROL_SHUTDOWN;
+use windows::Win32::System::Services::SERVICE_CONTROL_STOP;
+use windows::Win32::System::Services::SERVICE_RUNNING;
+use windows::Win32::System::Services::SERVICE_START_PENDING;
+use windows::Win32::System::Services::SERVICE_STATUS;
+use windows::Win32::System::Services::SERVICE_STATUS_CURRENT_STATE;
+use windows::Win32::System::Services::SERVICE_STATUS_HANDLE;
+use windows::Win32::System::Services::SERVICE_STOP_PENDING;
+use windows::Win32::System::Services::SERVICE_STOPPED;
+use windows::Win32::System::Services::SERVICE_TABLE_ENTRYW;
+use windows::Win32::System::Services::SERVICE_WIN32_OWN_PROCESS;
+use windows::Win32::System::Services::SetServiceStatus;
+use windows::Win32::System::Services::StartServiceCtrlDispatcherW;
 use windows::core::PCWSTR;
 
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SERVICE_STATUS_HANDLE_SLOT: AtomicIsize = AtomicIsize::new(0);
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone)]
+pub struct MachineCacheSyncResult {
+    pub synced_drives: Vec<char>,
+    pub live_drives: Vec<char>,
+    pub skipped_drives: Vec<(char, String)>,
+}
+
+type SupportedDriveSyncOutcome = (
+    Vec<char>,
+    Option<FxHashMap<char, JournalCursor>>,
+    Vec<(char, String)>,
+);
 
 #[derive(Debug)]
 struct DaemonRuntimeState {
+    owner_sid: String,
     cache_root: std::path::PathBuf,
     drives: FxHashMap<char, LiveDriveState>,
     degraded: FxHashMap<char, String>,
 }
 
+#[derive(Debug, Clone)]
+struct MachineDaemonService {
+    config: MachineConfig,
+    state: Arc<Mutex<DaemonRuntimeState>>,
+}
+
 impl DaemonRuntimeState {
     fn new(config: &MachineConfig) -> Self {
         Self {
+            owner_sid: config.owner_sid.clone(),
             cache_root: config.cache_root.clone(),
             drives: FxHashMap::default(),
             degraded: FxHashMap::default(),
@@ -50,7 +105,7 @@ impl DaemonRuntimeState {
 
     fn query(
         &mut self,
-        request: QueryRequest,
+        request: &QueryRequest,
     ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
         let mut rows = Vec::new();
         for &drive in &request.drive_letters {
@@ -67,19 +122,58 @@ impl DaemonRuntimeState {
         Ok(rows)
     }
 
-    fn sync(&mut self, request: SyncRequest) -> Result<(), MachineError> {
+    fn status_response(&self, buffered_log_count: usize) -> StatusResponse {
+        StatusResponse {
+            loaded_drive_letters: self.drives.keys().copied().collect(),
+            degraded_drives: self
+                .degraded
+                .iter()
+                .map(|(&drive_letter, message)| DegradedDriveStatus {
+                    drive_letter,
+                    message: message.clone(),
+                })
+                .collect(),
+            buffered_log_count,
+        }
+    }
+
+    async fn sync(&mut self, request: SyncRequest) -> Result<(), MachineError> {
         self.flush_dirty_drives();
-        sync_machine_cache(
+        info!(
+            drives = ?request.drive_letters,
+            mode = ?request.mode,
+            if_exists = ?request.if_exists,
+            "daemon sync request starting"
+        );
+        crate::machine::security::restrict_path_to_owner(&self.cache_root, &self.owner_sid)
+            .map_err(|error| MachineError::degraded(error.to_string()))?;
+        repair_published_drive_permissions(
+            &self.cache_root,
+            &self.owner_sid,
+            &request.drive_letters,
+        )
+        .map_err(|error| MachineError::degraded(error.to_string()))?;
+        let sync_result = sync_machine_cache_async(
             &self.cache_root,
             &request.drive_letters,
             request.mode,
             request.if_exists,
         )
+        .await
         .map_err(|error| MachineError::degraded(error.to_string()))?;
+
+        debug!(
+            synced_drives = ?sync_result.synced_drives,
+            live_drives = ?sync_result.live_drives,
+            skipped_drives = ?sync_result.skipped_drives,
+            "Machine-managed sync completed"
+        );
 
         for &drive in &request.drive_letters {
             self.drives.remove(&drive);
             self.degraded.remove(&drive);
+        }
+        for &drive in &sync_result.live_drives {
             self.refresh_drive(drive)?;
             self.drive_mut(drive)?
                 .flush_published()
@@ -161,6 +255,297 @@ impl DaemonRuntimeState {
     }
 }
 
+impl MachineDaemonService {
+    fn new(config: MachineConfig) -> Self {
+        let state = Arc::new(Mutex::new(DaemonRuntimeState::new(&config)));
+        Self { config, state }
+    }
+
+    async fn run_query_in_span(
+        &self,
+        request: QueryRequest,
+        query_transaction: &str,
+    ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
+        let state = Arc::clone(&self.state);
+        let request_for_body = request.clone();
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            query_transaction = %query_transaction,
+            rpc_method = "query"
+        );
+        async move {
+            tracing::info!(
+                query_groups = request_for_body.query.len(),
+                drive_count = request_for_body.drive_letters.len(),
+                limit = request_for_body.limit,
+                "Running daemon query"
+            );
+            let mut state = state.lock().await;
+            match std::panic::catch_unwind(AssertUnwindSafe(|| state.query(&request_for_body))) {
+                Ok(Ok(rows)) => {
+                    tracing::info!(matched_rows = rows.len(), "Daemon query completed");
+                    Ok(rows)
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error.message, "Daemon query degraded");
+                    Err(error)
+                }
+                Err(payload) => {
+                    let error = machine_error_from_panic("query request panicked", payload);
+                    tracing::error!(error = %error.message, "Daemon query panicked");
+                    Err(error)
+                }
+            }
+        }
+        .instrument(span)
+        .await
+    }
+}
+
+fn next_query_transaction(method: &str) -> String {
+    let ordinal = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{method}-{ordinal}")
+}
+
+fn repair_published_drive_permissions(
+    cache_root: &std::path::Path,
+    owner_sid: &str,
+    drive_letters: &[char],
+) -> eyre::Result<()> {
+    for &drive in drive_letters {
+        let paths = published_drive_paths(cache_root, drive);
+        for artifact_path in [
+            &paths.mft_path,
+            &paths.base_index_path,
+            &paths.overlay_index_path,
+            &paths.checkpoint_path,
+        ] {
+            if !artifact_path.exists() {
+                continue;
+            }
+            crate::machine::security::restrict_path_to_owner(artifact_path, owner_sid)?;
+        }
+    }
+    Ok(())
+}
+
+impl MachineDaemonRpc for MachineDaemonService {
+    async fn ping(
+        &self,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<PingResponse, MachineError> {
+        let query_transaction = next_query_transaction("ping");
+        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let service_name = self.config.service_name.clone();
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            query_transaction = %query_transaction,
+            rpc_method = "ping"
+        );
+        let response = async move {
+            tracing::info!(service_name = %service_name, "Responding to daemon ping");
+            Ok(PingResponse {
+                service_name,
+                build: crate::machine::ipc::DaemonBuildInfo {
+                    app_version: String::from(crate::APP_SEMVER),
+                    git_revision: String::from(crate::APP_GIT_REVISION),
+                    rpc_compat_version: crate::DAEMON_RPC_COMPAT_VERSION,
+                },
+            })
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
+    async fn query(
+        &self,
+        request: QueryRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<RpcQueryResponse, MachineError> {
+        let query_transaction = next_query_transaction("query");
+        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let response = self
+            .run_query_in_span(request, &query_transaction)
+            .await
+            .map(crate::machine::ipc::convert_indexed_rows);
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
+    async fn query_stream(
+        &self,
+        request: QueryRequest,
+        rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<(), MachineError> {
+        let query_transaction = next_query_transaction("query");
+        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let response = self.run_query_in_span(request, &query_transaction).await;
+        match response {
+            Ok(matched_rows) => {
+                for row in matched_rows {
+                    if rows
+                        .send(teamy_mft_daemon_rpc::IndexedPathRowDto {
+                            path: row.path,
+                            has_deleted_entries: row.has_deleted_entries,
+                            is_ignored: row.is_ignored,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                let _ = rows.close(Vec::default()).await;
+                stop_log_forwarder(log_forwarder).await;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = rows.close(Vec::default()).await;
+                stop_log_forwarder(log_forwarder).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn sync(
+        &self,
+        request: SyncRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<(), MachineError> {
+        let query_transaction = next_query_transaction("sync");
+        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let drive_count = request.drive_letters.len();
+        let state = Arc::clone(&self.state);
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            query_transaction = %query_transaction,
+            rpc_method = "sync"
+        );
+        let response = async move {
+            tracing::info!(
+                drive_count,
+                mode = ?request.mode,
+                if_exists = ?request.if_exists,
+                "Starting daemon sync"
+            );
+            match AssertUnwindSafe(async {
+                let mut state = state.lock().await;
+                state.sync(request.clone()).await
+            })
+            .catch_unwind()
+            .await
+            {
+                Ok(Ok(())) => {
+                    tracing::info!(drive_count, "Daemon sync completed");
+                    Ok(())
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(error = %error.message, "Daemon sync degraded");
+                    Err(error)
+                }
+                Err(payload) => {
+                    let error = machine_error_from_panic("sync request panicked", payload);
+                    tracing::error!(error = %error.message, "Daemon sync panicked");
+                    Err(error)
+                }
+            }
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
+    async fn status(
+        &self,
+        _request: StatusRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<StatusResponse, MachineError> {
+        let query_transaction = next_query_transaction("status");
+        let log_forwarder = spawn_transaction_log_forwarder(query_transaction.clone(), logs);
+        let state = Arc::clone(&self.state);
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            query_transaction = %query_transaction,
+            rpc_method = "status"
+        );
+        let response = async move {
+            let buffered_log_count = daemon_log_hub().len();
+            let status = state.lock().await.status_response(buffered_log_count);
+            tracing::debug!(
+                loaded_drive_count = status.loaded_drive_letters.len(),
+                degraded_drive_count = status.degraded_drives.len(),
+                buffered_log_count = status.buffered_log_count,
+                "Collected daemon status"
+            );
+            Ok(status)
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
+    async fn stream_logs(
+        &self,
+        request: LogStreamRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        mut cancel: vox::Rx<u8>,
+    ) -> Result<(), MachineError> {
+        tracing::info!(
+            replay_recent = request.replay_recent,
+            follow = request.follow,
+            "Attaching daemon log stream"
+        );
+        if request.replay_recent {
+            for event in daemon_log_hub().snapshot() {
+                if logs.send(event).await.is_err() {
+                    return Ok(());
+                }
+            }
+        }
+
+        if request.follow {
+            let mut live_rx = daemon_log_hub().subscribe();
+            loop {
+                tokio::select! {
+                    cancel_result = cancel.recv() => {
+                        match cancel_result {
+                            Ok(Some(_) | None) => break,
+                            Err(error) => {
+                                tracing::warn!(error = %error, "Daemon log stream cancel channel failed");
+                                break;
+                            }
+                        }
+                    }
+                    live_result = live_rx.recv() => {
+                        match live_result {
+                            Ok(event) => {
+                                if logs.send(event).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(
+                                    skipped,
+                                    "Daemon log stream subscriber lagged behind live daemon logs"
+                                );
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = logs.close(Vec::default()).await;
+        Ok(())
+    }
+}
+
 /// # Errors
 ///
 /// Returns an error if the daemon runtime cannot be started.
@@ -188,6 +573,7 @@ fn run_windows_service_dispatcher() -> eyre::Result<()> {
         SERVICE_TABLE_ENTRYW::default(),
     ];
 
+    // SAFETY: The service dispatch table is valid for this call and includes the required trailing null entry.
     unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) }?;
     Ok(())
 }
@@ -204,6 +590,7 @@ fn service_main_impl() -> eyre::Result<()> {
         eyre::eyre!("Machine config is not installed. Run `teamy-mft install` first.")
     })?;
     let service_name = crate::machine::security::encode_wide(&config.service_name);
+    // SAFETY: The service name pointer remains valid for the call and the handler function has the required ABI.
     let handle = unsafe {
         RegisterServiceCtrlHandlerExW(
             PCWSTR(service_name.as_ptr()),
@@ -234,7 +621,6 @@ unsafe extern "system" fn service_control_handler(
             }
             NO_ERROR.0
         }
-        SERVICE_CONTROL_INTERROGATE => NO_ERROR.0,
         _ => NO_ERROR.0,
     }
 }
@@ -262,7 +648,8 @@ fn set_service_status(
         dwCheckPoint: 0,
         dwWaitHint: 0,
     };
-    unsafe { SetServiceStatus(handle, &status) }?;
+    // SAFETY: `handle` comes from the SCM and `status` is fully initialized for the duration of the call.
+    unsafe { SetServiceStatus(handle, &raw const status) }?;
     Ok(())
 }
 
@@ -271,19 +658,12 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        let mut state = DaemonRuntimeState::new(&config);
-        let mut security_attributes = PipeSecurityAttributes::for_owner(&config.owner_sid)?;
+        crate::machine::security::restrict_path_to_owner(&config.cache_root, &config.owner_sid)?;
+        let service = MachineDaemonService::new(config.clone());
         let mut last_activity = std::time::Instant::now();
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
-        let mut first_instance = true;
-        let mut server = unsafe {
-            create_server(
-                &config.pipe_name,
-                security_attributes.as_mut_ptr(),
-                first_instance,
-            )?
-        };
-        first_instance = false;
+        let acceptor =
+            vox::transport::local::LocalLinkAcceptor::bind(config.pipe_name.clone())?;
 
         loop {
             if STOP_REQUESTED.load(Ordering::Relaxed) {
@@ -294,64 +674,55 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
             }
 
             tokio::select! {
-                connect_result = server.connect() => {
-                    connect_result?;
-                    let connected = server;
-                    server = unsafe {
-                        create_server(
-                            &config.pipe_name,
-                            security_attributes.as_mut_ptr(),
-                            first_instance,
-                        )?
-                    };
-                    if let Err(error) = handle_connection(connected, &mut state).await {
-                        tracing::warn!(error = %error, "Daemon request failed");
-                    }
+                accept_result = acceptor.accept() => {
+                    let link = accept_result?;
+                    let rpc_service = service.clone();
+                    tokio::spawn(async move {
+                        let response = vox::acceptor_on(link)
+                            .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
+                            .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
+                            .await;
+                        match response {
+                            Ok(client) => {
+                                tracing::debug!("Daemon RPC connection established");
+                                client.caller.closed().await;
+                                tracing::debug!("Daemon RPC connection closed");
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "Daemon RPC connection failed");
+                            }
+                        }
+                    });
                     last_activity = std::time::Instant::now();
                 }
-                _ = tokio::time::sleep(Duration::from_millis(250)) => {
-                    state.refresh_loaded_drives();
+                () = tokio::time::sleep(Duration::from_millis(250)) => {
+                    service.state.lock().await.refresh_loaded_drives();
                 }
             }
         }
 
-        state.flush_dirty_drives();
+        service.state.lock().await.flush_dirty_drives();
         Ok(())
     })
 }
 
-async fn handle_connection(
-    mut server: tokio::net::windows::named_pipe::NamedPipeServer,
-    state: &mut DaemonRuntimeState,
-) -> eyre::Result<()> {
-    let request_len = server.read_u32_le().await? as usize;
-    let mut request_bytes = vec![0u8; request_len];
-    server.read_exact(&mut request_bytes).await?;
-    let request = serde_json::from_slice::<MachineRequest>(&request_bytes)?;
-    let response = match request {
-        MachineRequest::Ping => MachineResponse::Pong,
-        MachineRequest::Query(request) => match state.query(request) {
-            Ok(rows) => MachineResponse::Query(QueryResponse { rows }),
-            Err(error) => MachineResponse::Error(error),
-        },
-        MachineRequest::Sync(request) => match state.sync(request) {
-            Ok(()) => MachineResponse::SyncCompleted,
-            Err(error) => MachineResponse::Error(error),
-        },
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "catch_unwind returns owned boxed panic payloads"
+)]
+fn machine_error_from_panic(
+    context: &'static str,
+    payload: Box<dyn std::any::Any + Send>,
+) -> MachineError {
+    let detail = if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        String::from("non-string panic payload")
     };
-    let response_bytes = serde_json::to_vec(&response)?;
-    server
-        .write_u32_le(
-            response_bytes
-                .len()
-                .try_into()
-                .map_err(|_| eyre::eyre!("response too large"))?,
-        )
-        .await?;
-    server.write_all(&response_bytes).await?;
-    server.flush().await?;
-    let _ = server.disconnect();
-    Ok(())
+    warn!(context, detail, "Daemon request panicked");
+    MachineError::degraded(format!("{context}: {detail}"))
 }
 
 /// # Errors
@@ -362,10 +733,25 @@ pub fn sync_machine_cache(
     drive_letters: &[char],
     mode: SyncModeDto,
     if_exists: IfExistsDto,
-) -> eyre::Result<()> {
+) -> eyre::Result<MachineCacheSyncResult> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(sync_machine_cache_async(
+        cache_root,
+        drive_letters,
+        mode,
+        if_exists,
+    ))
+}
+
+async fn sync_machine_cache_async(
+    cache_root: &std::path::Path,
+    drive_letters: &[char],
+    mode: SyncModeDto,
+    if_exists: IfExistsDto,
+) -> eyre::Result<MachineCacheSyncResult> {
     std::fs::create_dir_all(cache_root)?;
-    let drive_infos =
-        resolve_drive_infos_in_dir_for_letters(cache_root, drive_letters.iter().copied())?;
     let effective_mode = if matches!(mode, SyncModeDto::Mft) {
         info!(
             drives = ?drive_letters,
@@ -375,30 +761,21 @@ pub fn sync_machine_cache(
     } else {
         mode
     };
-    let snapshot_cursors = if matches!(effective_mode, SyncModeDto::Both) {
-        let mut cursors = FxHashMap::default();
-        for drive in drive_letters {
-            let journal = VolumeUsnJournal::open(*drive)?;
-            cursors.insert(*drive, journal.query_cursor()?);
-        }
-        Some(cursors)
-    } else {
-        None
-    };
+    let (live_drives, snapshot_cursors, skipped_drives) =
+        collect_supported_drives_for_machine_sync(drive_letters, effective_mode);
+    let drive_infos =
+        resolve_drive_infos_in_dir_for_letters(cache_root, drive_letters.iter().copied())?;
     let if_exists = match if_exists {
         IfExistsDto::Skip => IfExistsOutputBehaviour::Skip,
         IfExistsDto::Overwrite => IfExistsOutputBehaviour::Overwrite,
         IfExistsDto::Abort => IfExistsOutputBehaviour::Abort,
     };
-    let sync_command = match mode {
-        SyncModeDto::Mft => SyncCommand::Both,
-        SyncModeDto::Index => SyncCommand::Index(Default::default()),
+    let sync_command = match effective_mode {
+        SyncModeDto::Index => SyncCommand::Index(SyncIndexArgs),
         SyncModeDto::Both => SyncCommand::Both,
+        SyncModeDto::Mft => unreachable!("effective mode normalizes Mft to Both"),
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(sync_command.invoke(drive_infos.clone(), &if_exists))?;
+    sync_command.invoke(drive_infos.clone(), &if_exists).await?;
 
     for info in drive_infos {
         let paths = published_drive_paths(cache_root, info.drive_letter);
@@ -423,18 +800,23 @@ pub fn sync_machine_cache(
                 let cursor = snapshot_cursors
                     .as_ref()
                     .and_then(|cursors| cursors.get(&info.drive_letter))
-                    .ok_or_else(|| {
-                        eyre::eyre!("Missing snapshot cursor for drive {}", info.drive_letter)
-                    })?;
-                let checkpoint = PublishedCheckpoint {
-                    drive_letter: info.drive_letter,
-                    volume_serial_number: None,
-                    journal_id: Some(cursor.journal_id),
-                    snapshot_usn: Some(cursor.next_usn),
-                    last_usn: Some(cursor.next_usn),
-                    published_at_unix_ms: current_unix_ms(),
-                    overlay_row_count: 0,
-                    base_index_version: SEARCH_INDEX_VERSION,
+                    .copied();
+                let checkpoint = if let Some(cursor) = cursor {
+                    PublishedCheckpoint {
+                        drive_letter: info.drive_letter,
+                        volume_serial_number: None,
+                        journal_id: Some(cursor.journal_id),
+                        snapshot_usn: Some(cursor.next_usn),
+                        last_usn: Some(cursor.next_usn),
+                        published_at_unix_ms: current_unix_ms(),
+                        overlay_row_count: 0,
+                        base_index_version: SEARCH_INDEX_VERSION,
+                    }
+                } else {
+                    PublishedCheckpoint {
+                        published_at_unix_ms: current_unix_ms(),
+                        ..PublishedCheckpoint::empty(info.drive_letter, SEARCH_INDEX_VERSION)
+                    }
                 };
                 save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
             }
@@ -442,5 +824,40 @@ pub fn sync_machine_cache(
         }
     }
 
-    Ok(())
+    Ok(MachineCacheSyncResult {
+        synced_drives: drive_letters.to_vec(),
+        live_drives,
+        skipped_drives,
+    })
+}
+
+fn collect_supported_drives_for_machine_sync(
+    drive_letters: &[char],
+    mode: SyncModeDto,
+) -> SupportedDriveSyncOutcome {
+    if !matches!(mode, SyncModeDto::Both) {
+        return (drive_letters.to_vec(), None, Vec::new());
+    }
+
+    let mut supported_drives = Vec::new();
+    let mut cursors = FxHashMap::default();
+    let mut skipped_drives = Vec::new();
+    for &drive in drive_letters {
+        match VolumeUsnJournal::open(drive).and_then(|journal| journal.query_cursor()) {
+            Ok(cursor) => {
+                supported_drives.push(drive);
+                cursors.insert(drive, cursor);
+            }
+            Err(error) => {
+                let message = error.to_string();
+                warn!(
+                    drive = %drive,
+                    error = %message,
+                    "Skipping drive for machine-managed sync because no active USN journal is available"
+                );
+                skipped_drives.push((drive, message));
+            }
+        }
+    }
+    (supported_drives, Some(cursors), skipped_drives)
 }

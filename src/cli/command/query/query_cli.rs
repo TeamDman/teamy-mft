@@ -6,8 +6,6 @@ use crate::query::QueryPlan;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
-use crate::sync_dir::SYNC_DIR_ENV;
-use crate::sync_dir::try_get_sync_dir;
 use arbitrary::Arbitrary;
 use color_eyre::owo_colors::OwoColorize;
 use eyre::Context;
@@ -27,6 +25,10 @@ use tracing::instrument;
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
 // cli[impl command.query.drive-pattern-selection]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags map directly to independent query toggles"
+)]
 pub struct QueryArgs {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
     #[facet(args::positional, default)]
@@ -71,19 +73,7 @@ pub enum QueryDensity {
     Columns,
 }
 
-#[derive(
-    Default,
-    Facet,
-    Arbitrary,
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    serde::Serialize,
-    serde::Deserialize,
-    strum::Display,
-)]
+#[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
 #[repr(u8)]
 #[strum(serialize_all = "kebab-case")]
 #[facet(rename_all = "kebab-case")]
@@ -267,7 +257,7 @@ fn load_and_query_search_index(
 
     let mapped = {
         let _span = info_span!("map_search_index_file").entered();
-        MappedSearchIndex::open(&index_path).wrap_err_with(|| {
+        MappedSearchIndex::open(index_path).wrap_err_with(|| {
             format!("Failed loading search index from {}", index_path.display())
         })?
     };
@@ -378,6 +368,71 @@ fn merge_rows(
     merged.into_values().collect()
 }
 
+#[must_use]
+fn spawn_streamed_query_row_drain(
+    mut rows_rx: vox::Rx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+) -> std::thread::JoinHandle<eyre::Result<Vec<IndexedPathRow>>> {
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let mut response_rows = Vec::new();
+            loop {
+                match rows_rx.recv().await {
+                    Ok(Some(row)) => response_rows.push(IndexedPathRow {
+                        path: row.get().path.clone(),
+                        has_deleted_entries: row.get().has_deleted_entries,
+                        is_ignored: row.get().is_ignored,
+                    }),
+                    Ok(None) => break,
+                    Err(error) => {
+                        eyre::bail!("Failed receiving streamed daemon query rows: {error}")
+                    }
+                }
+            }
+            Ok(response_rows)
+        })
+    })
+}
+
+fn published_machine_drive_letters(cache_root: &Path, requested: Vec<char>) -> Vec<char> {
+    requested
+        .into_iter()
+        .filter(|drive_letter| {
+            let paths = crate::machine::config::published_drive_paths(cache_root, *drive_letter);
+            paths.mft_path.is_file() && paths.base_index_path.is_file()
+        })
+        .collect()
+}
+
+fn partition_machine_published_drive_letters(
+    cache_root: &Path,
+    requested: Vec<char>,
+) -> eyre::Result<(Vec<char>, Vec<char>)> {
+    let mut live_drives = Vec::new();
+    let mut snapshot_only_drives = Vec::new();
+    for drive_letter in published_machine_drive_letters(cache_root, requested) {
+        let checkpoint_path =
+            crate::machine::config::published_drive_paths(cache_root, drive_letter).checkpoint_path;
+        let checkpoint = crate::machine::config::load_checkpoint(&checkpoint_path)?;
+        let is_live = checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.journal_id)
+            .is_some()
+            && checkpoint
+                .as_ref()
+                .and_then(|checkpoint| checkpoint.snapshot_usn)
+                .is_some();
+        if is_live {
+            live_drives.push(drive_letter);
+        } else {
+            snapshot_only_drives.push(drive_letter);
+        }
+    }
+    Ok((live_drives, snapshot_only_drives))
+}
+
 impl QueryArgs {
     /// Create a new `QueryArgs` with the given query pattern and all other options at their defaults.
     pub fn new(pattern: impl Into<String>) -> Self {
@@ -399,31 +454,33 @@ impl QueryArgs {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     pub fn invoke(self) -> eyre::Result<Vec<PathBuf>> {
-        let rows = self.collect_rows_with_options(QueryExecutionOptions::default())?;
-        Ok(rows.into_iter().map(|r| PathBuf::from(r.path)).collect())
+        self.invoke_with_options(QueryExecutionOptions::default())
     }
 
     /// Run the query and return matching paths using explicit execution options.
     ///
     /// # Errors
     ///
-    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     pub fn invoke_with_options(self, options: QueryExecutionOptions) -> eyre::Result<Vec<PathBuf>> {
-        let rows = self.collect_rows_with_options(options)?;
-        Ok(rows.into_iter().map(|r| PathBuf::from(r.path)).collect())
+        self.collect_rows_with_options(options).map(|rows| {
+            rows.into_iter()
+                .map(|row| PathBuf::from(row.path))
+                .collect()
+        })
     }
 
     /// Run the query and print results to stdout.
     ///
     /// # Errors
     ///
-    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, show_ignored = self.show_ignored, only_ignored = self.only_ignored, density = ?self.density))]
@@ -435,7 +492,7 @@ impl QueryArgs {
     ///
     /// # Errors
     ///
-    /// Returns an error if the query is empty, sync directory cannot be retrieved,
+    /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     pub fn invoke_and_print_with_options(self, options: QueryExecutionOptions) -> eyre::Result<()> {
@@ -467,6 +524,18 @@ impl QueryArgs {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the query is invalid, the daemon transport fails, or the published cache cannot be queried.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "This method centralizes the query source selection and fallback behavior"
+    )]
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, drive letters cannot be resolved,
+    /// the machine cache is unavailable, the query scope cannot be canonicalized,
+    /// or if daemon/disk-backed index reads fail.
     pub fn collect_rows_with_options(
         self,
         options: QueryExecutionOptions,
@@ -478,99 +547,110 @@ impl QueryArgs {
         let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
         match options.source {
             QuerySource::Auto => {
-                if let Some(sync_dir) = sync_dir_from_env() {
-                    return self.collect_rows_from_sync_dir_and_drive_letters(
-                        &sync_dir,
-                        drive_letters,
-                        QueryExecutionOptions {
-                            ignore: options.ignore,
-                            source: QuerySource::DiskOnly,
-                        },
+                let config = crate::machine::config::load_required_machine_config()?;
+                let (live_drives, snapshot_only_drives) =
+                    partition_machine_published_drive_letters(&config.cache_root, drive_letters)?;
+                if live_drives.is_empty() && snapshot_only_drives.is_empty() {
+                    eyre::bail!(
+                        "No machine-managed published drives matched the requested drive set"
                     );
                 }
-
-                if let Some(config) = crate::machine::config::load_machine_config()? {
-                    if !matches!(
-                        crate::machine::service::query_service_state(&config.service_name)?,
-                        crate::machine::service::WindowsServiceState::Missing
-                    ) {
-                        match crate::machine::service::start_service_if_needed(&config.service_name)
-                        {
-                            Ok(()) => {
-                                let request = crate::machine::ipc::QueryRequest {
-                                    query: self.query.clone(),
-                                    query_scope: self.r#in.clone(),
-                                    drive_letters: drive_letters.clone(),
-                                    limit: self.limit,
-                                    include_deleted: self.include_deleted,
-                                    only_deleted: self.only_deleted,
-                                    show_ignored: self.show_ignored,
-                                    only_ignored: self.only_ignored,
-                                };
-                                match crate::machine::ipc::send_request(
-                                    &config,
-                                    &crate::machine::ipc::MachineRequest::Query(request),
-                                ) {
-                                    Ok(crate::machine::ipc::MachineResponse::Query(response)) => {
-                                        return Ok(response.rows);
+                let mut rows = Vec::new();
+                let mut disk_fallback_drives = snapshot_only_drives;
+                match crate::machine::service::start_service_if_needed(&config.service_name) {
+                    Ok(()) if !live_drives.is_empty() => {
+                        if let Err(error) = crate::machine::ipc::ensure_daemon_compatible(&config) {
+                            tracing::warn!(
+                                error = %error,
+                                "Daemon compatibility check failed; serving published machine cache"
+                            );
+                            disk_fallback_drives.extend(live_drives.clone());
+                        } else {
+                            let request = crate::machine::ipc::QueryRequest {
+                                query: self.query.clone(),
+                                query_scope: self.r#in.clone(),
+                                drive_letters: live_drives.clone(),
+                                limit: self.limit,
+                                include_deleted: self.include_deleted,
+                                only_deleted: self.only_deleted,
+                                show_ignored: self.show_ignored,
+                                only_ignored: self.only_ignored,
+                            };
+                            let (rows_tx, rows_rx) =
+                                vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
+                            let (logs_tx, logs_rx) =
+                                vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                            let row_drain = spawn_streamed_query_row_drain(rows_rx);
+                            let log_drain =
+                                crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+                            let query_outcome = crate::machine::ipc::query_stream(
+                                &config, request, rows_tx, logs_tx,
+                            );
+                            let response_rows = row_drain.join().map_err(|join_error| {
+                                eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
+                            })??;
+                            let _ = log_drain.join();
+                            match query_outcome {
+                                Ok(Ok(())) => rows.extend(response_rows),
+                                Ok(Err(error)) => match error.kind {
+                                    crate::machine::ipc::MachineErrorKind::RequestInvalid => {
+                                        eyre::bail!(error.message)
                                     }
-                                    Ok(crate::machine::ipc::MachineResponse::Error(error)) => {
-                                        match error.kind {
-                                            crate::machine::ipc::MachineErrorKind::RequestInvalid => {
-                                                eyre::bail!(error.message)
-                                            }
-                                            crate::machine::ipc::MachineErrorKind::Unavailable
-                                            | crate::machine::ipc::MachineErrorKind::Degraded => {
-                                                tracing::warn!(
-                                                    kind = ?error.kind,
-                                                    error = %error.message,
-                                                    "Daemon query reported degraded state, falling back to disk"
-                                                );
-                                            }
-                                        }
+                                    crate::machine::ipc::MachineErrorKind::Unavailable
+                                    | crate::machine::ipc::MachineErrorKind::Degraded => {
+                                        tracing::warn!(
+                                            kind = ?error.kind,
+                                            error = %error.message,
+                                            "Daemon query degraded; serving published machine cache"
+                                        );
+                                        disk_fallback_drives.extend(live_drives.clone());
                                     }
-                                    Ok(other) => {
-                                        tracing::warn!(?other, "Unexpected daemon response, falling back to disk");
-                                    }
-                                    Err(error) => {
-                                        tracing::warn!(error = %error, "Daemon query failed, falling back to disk");
-                                    }
+                                },
+                                Err(error) => {
+                                    tracing::warn!(error = %error, "Daemon query failed; serving published machine cache");
+                                    disk_fallback_drives.extend(live_drives.clone());
                                 }
-                            }
-                            Err(error) => {
-                                tracing::warn!(error = %error, "Daemon start failed, falling back to disk");
                             }
                         }
                     }
-
-                    return self.collect_rows_from_sync_dir_and_drive_letters(
-                        &config.cache_root,
-                        drive_letters,
-                        QueryExecutionOptions {
-                            ignore: options.ignore,
-                            source: QuerySource::DiskOnly,
-                        },
-                    );
+                    Ok(()) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Daemon start failed; serving published machine cache");
+                        disk_fallback_drives.extend(live_drives);
+                    }
                 }
 
-                let sync_dir = {
-                    let _span = info_span!("resolve_sync_dir").entered();
-                    try_get_sync_dir()?
-                };
-                self.collect_rows_from_sync_dir_and_drive_letters(
-                    &sync_dir,
-                    drive_letters,
-                    QueryExecutionOptions {
-                        ignore: options.ignore,
-                        source: QuerySource::DiskOnly,
-                    },
-                )
+                if !disk_fallback_drives.is_empty() {
+                    rows = merge_rows(
+                        rows,
+                        self.clone().collect_rows_from_sync_dir_and_drive_letters(
+                            &config.cache_root,
+                            disk_fallback_drives,
+                            QueryExecutionOptions {
+                                ignore: options.ignore,
+                                source: QuerySource::DiskOnly,
+                            },
+                        )?,
+                    );
+                }
+                Ok(rows)
             }
             QuerySource::DaemonOnly => {
-                let config = crate::machine::config::load_machine_config()?.ok_or_else(|| {
-                    eyre::eyre!("Machine daemon is not installed. Run `teamy-mft install` first.")
-                })?;
+                let config = crate::machine::config::load_required_machine_config()?;
+                let (drive_letters, snapshot_only_drives) =
+                    partition_machine_published_drive_letters(&config.cache_root, drive_letters)?;
+                if !snapshot_only_drives.is_empty() {
+                    eyre::bail!(
+                        "Daemon-only queries require live-USN drives. Some requested drives are snapshot-only."
+                    );
+                }
+                if drive_letters.is_empty() {
+                    eyre::bail!(
+                        "No machine-managed published drives matched the requested drive set"
+                    );
+                }
                 crate::machine::service::start_service_if_needed(&config.service_name)?;
+                crate::machine::ipc::ensure_daemon_compatible(&config)?;
                 let request = crate::machine::ipc::QueryRequest {
                     query: self.query,
                     query_scope: self.r#in,
@@ -581,30 +661,38 @@ impl QueryArgs {
                     show_ignored: self.show_ignored,
                     only_ignored: self.only_ignored,
                 };
-                match crate::machine::ipc::send_request(
-                    &config,
-                    &crate::machine::ipc::MachineRequest::Query(request),
-                )? {
-                    crate::machine::ipc::MachineResponse::Query(response) => Ok(response.rows),
-                    crate::machine::ipc::MachineResponse::Error(error) => {
-                        eyre::bail!(error.message)
-                    }
-                    other => eyre::bail!("Unexpected daemon response: {:?}", other),
+                let (rows_tx, rows_rx) = vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
+                let (logs_tx, logs_rx) =
+                    vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                let row_drain = spawn_streamed_query_row_drain(rows_rx);
+                let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+                let response =
+                    crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx)?;
+                let response_rows = row_drain.join().map_err(|join_error| {
+                    eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
+                })??;
+                let _ = log_drain.join();
+                match response {
+                    Ok(()) => Ok(response_rows),
+                    Err(error) => eyre::bail!(error.message),
                 }
             }
             QuerySource::DiskOnly => {
-                let sync_dir = if let Some(sync_dir) = sync_dir_from_env() {
-                    sync_dir
-                } else if let Some(config) = crate::machine::config::load_machine_config()? {
-                    config.cache_root
-                } else {
-                    try_get_sync_dir()?
-                };
+                let sync_dir = crate::machine::config::load_required_cache_root()?;
+                let drive_letters = published_machine_drive_letters(&sync_dir, drive_letters);
+                if drive_letters.is_empty() {
+                    eyre::bail!(
+                        "No machine-managed published drives matched the requested drive set"
+                    );
+                }
                 self.collect_rows_from_sync_dir_and_drive_letters(&sync_dir, drive_letters, options)
             }
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the drive indexes cannot be loaded or the query scope cannot be applied.
     pub fn collect_rows_from_sync_dir_and_drive_letters(
         self,
         sync_dir: &Path,
@@ -696,13 +784,6 @@ impl QueryArgs {
 
         Ok(results)
     }
-}
-
-fn sync_dir_from_env() -> Option<PathBuf> {
-    std::env::var(SYNC_DIR_ENV).ok().and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
-    })
 }
 
 #[cfg(test)]

@@ -1,30 +1,62 @@
+#![allow(
+    clippy::borrow_as_ptr,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_ptr_alignment,
+    clippy::cast_sign_loss,
+    clippy::undocumented_unsafe_blocks,
+    reason = "Windows USN journal IOCTL interop requires raw pointer and integer conversion boilerplate"
+)]
+
 use crate::machine::security::encode_wide;
 use eyre::Context;
 use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
-use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES,
-    FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
-};
+use windows::Win32::Foundation::CloseHandle;
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Storage::FileSystem::CreateFileW;
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
+use windows::Win32::Storage::FileSystem::FILE_CREATION_DISPOSITION;
+use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
+use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+use windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+use windows::Win32::Storage::FileSystem::FILE_SHARE_MODE;
+use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows::Win32::System::IO::DeviceIoControl;
-use windows::Win32::System::Ioctl::{
-    FSCTL_QUERY_USN_JOURNAL, FSCTL_READ_USN_JOURNAL, READ_USN_JOURNAL_DATA_V1, USN_JOURNAL_DATA_V0,
-    USN_REASON_BASIC_INFO_CHANGE, USN_REASON_CLOSE, USN_REASON_COMPRESSION_CHANGE,
-    USN_REASON_DATA_EXTEND, USN_REASON_DATA_OVERWRITE, USN_REASON_DATA_TRUNCATION,
-    USN_REASON_DESIRED_STORAGE_CLASS_CHANGE, USN_REASON_EA_CHANGE, USN_REASON_ENCRYPTION_CHANGE,
-    USN_REASON_INDEXABLE_CHANGE, USN_REASON_INTEGRITY_CHANGE, USN_REASON_NAMED_DATA_EXTEND,
-    USN_REASON_NAMED_DATA_OVERWRITE, USN_REASON_NAMED_DATA_TRUNCATION, USN_REASON_OBJECT_ID_CHANGE,
-    USN_REASON_REPARSE_POINT_CHANGE, USN_REASON_SECURITY_CHANGE, USN_REASON_STREAM_CHANGE,
-    USN_REASON_TRANSACTED_CHANGE, USN_RECORD_V2, USN_RECORD_V3,
-};
+use windows::Win32::System::Ioctl::FSCTL_QUERY_USN_JOURNAL;
+use windows::Win32::System::Ioctl::FSCTL_READ_USN_JOURNAL;
+use windows::Win32::System::Ioctl::READ_USN_JOURNAL_DATA_V1;
+use windows::Win32::System::Ioctl::USN_JOURNAL_DATA_V0;
+use windows::Win32::System::Ioctl::USN_REASON_BASIC_INFO_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_CLOSE;
+use windows::Win32::System::Ioctl::USN_REASON_COMPRESSION_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_DATA_EXTEND;
+use windows::Win32::System::Ioctl::USN_REASON_DATA_OVERWRITE;
+use windows::Win32::System::Ioctl::USN_REASON_DATA_TRUNCATION;
+use windows::Win32::System::Ioctl::USN_REASON_DESIRED_STORAGE_CLASS_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_EA_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_ENCRYPTION_CHANGE;
+pub use windows::Win32::System::Ioctl::USN_REASON_FILE_CREATE;
+pub use windows::Win32::System::Ioctl::USN_REASON_FILE_DELETE;
+pub use windows::Win32::System::Ioctl::USN_REASON_HARD_LINK_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_INDEXABLE_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_INTEGRITY_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_NAMED_DATA_EXTEND;
+use windows::Win32::System::Ioctl::USN_REASON_NAMED_DATA_OVERWRITE;
+use windows::Win32::System::Ioctl::USN_REASON_NAMED_DATA_TRUNCATION;
+use windows::Win32::System::Ioctl::USN_REASON_OBJECT_ID_CHANGE;
+pub use windows::Win32::System::Ioctl::USN_REASON_RENAME_NEW_NAME;
+pub use windows::Win32::System::Ioctl::USN_REASON_RENAME_OLD_NAME;
+use windows::Win32::System::Ioctl::USN_REASON_REPARSE_POINT_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_SECURITY_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_STREAM_CHANGE;
+use windows::Win32::System::Ioctl::USN_REASON_TRANSACTED_CHANGE;
+use windows::Win32::System::Ioctl::USN_RECORD_V2;
+use windows::Win32::System::Ioctl::USN_RECORD_V3;
 use windows::core::PCWSTR;
-
-pub use windows::Win32::System::Ioctl::{
-    USN_REASON_FILE_CREATE, USN_REASON_FILE_DELETE, USN_REASON_HARD_LINK_CHANGE,
-    USN_REASON_RENAME_NEW_NAME, USN_REASON_RENAME_OLD_NAME,
-};
 
 const JOURNAL_BUFFER_BYTES: usize = 1024 * 1024;
 const RELEVANT_REASON_MASK: u32 = USN_REASON_FILE_CREATE
@@ -118,12 +150,12 @@ impl VolumeUsnJournal {
     /// Returns an error if the NTFS volume handle cannot be opened.
     #[instrument(level = "debug")]
     pub fn open(drive_letter: char) -> eyre::Result<Self> {
-        let volume_path = format!(r"\\.\{}:", drive_letter);
+        let volume_path = format!(r"\\.\{drive_letter}:");
         let wide = encode_wide(&volume_path);
         let handle = unsafe {
             CreateFileW(
                 PCWSTR(wide.as_ptr()),
-                0,
+                FILE_GENERIC_READ.0,
                 FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0),
                 None,
                 FILE_CREATION_DISPOSITION(OPEN_EXISTING.0),
@@ -133,7 +165,12 @@ impl VolumeUsnJournal {
         }
         .wrap_err_with(|| format!("Failed opening NTFS volume handle for {volume_path}"))?;
 
-        debug!(drive = %drive_letter, "Opened USN journal volume handle");
+        debug!(
+            drive = %drive_letter,
+            volume_path,
+            desired_access = FILE_GENERIC_READ.0,
+            "Opened USN journal volume handle"
+        );
         Ok(Self {
             drive_letter,
             handle: OwnedHandle(handle),
@@ -153,7 +190,7 @@ impl VolumeUsnJournal {
                 FSCTL_QUERY_USN_JOURNAL,
                 None,
                 0,
-                Some((&mut output as *mut USN_JOURNAL_DATA_V0).cast()),
+                Some(std::ptr::from_mut(&mut output).cast()),
                 size_of::<USN_JOURNAL_DATA_V0>() as u32,
                 Some(&mut bytes_returned),
                 None,
@@ -161,8 +198,9 @@ impl VolumeUsnJournal {
         }
         .wrap_err_with(|| {
             format!(
-                "Failed querying USN journal metadata for {}",
-                self.drive_letter
+                "Failed querying USN journal metadata for {}. \
+This usually means the volume does not expose an NTFS USN journal or the volume handle was opened with incompatible rights.",
+                self.drive_letter,
             )
         })?;
 
@@ -179,6 +217,10 @@ impl VolumeUsnJournal {
     ///
     /// Returns an error if reading or decoding the USN journal fails.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, start_usn))]
+    /// # Panics
+    ///
+    /// Panics if the configured journal read buffer length cannot fit in the
+    /// Win32 `u32` length field, which would indicate a fundamentally unsupported build target.
     pub fn read_available_since(
         &self,
         start_usn: u64,
@@ -214,7 +256,7 @@ impl VolumeUsnJournal {
                 DeviceIoControl(
                     self.handle.0,
                     FSCTL_READ_USN_JOURNAL,
-                    Some((&mut read_input as *mut READ_USN_JOURNAL_DATA_V1).cast()),
+                    Some(std::ptr::from_mut(&mut read_input).cast()),
                     size_of::<READ_USN_JOURNAL_DATA_V1>() as u32,
                     Some(buffer.as_mut_ptr().cast()),
                     buffer.len().try_into().expect("journal buffer fits in u32"),
@@ -350,7 +392,8 @@ fn decode_usn_name(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_usn_name, low_u64_from_file_id};
+    use super::decode_usn_name;
+    use super::low_u64_from_file_id;
 
     #[test]
     fn file_id_low_bits_roundtrip() {

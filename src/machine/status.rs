@@ -1,8 +1,11 @@
-use crate::machine::config::{
-    MachineConfig, PublishedCheckpoint, load_checkpoint, load_machine_config, published_drive_paths,
-};
+use crate::machine::config::MachineConfig;
+use crate::machine::config::PublishedCheckpoint;
+use crate::machine::config::load_checkpoint;
+use crate::machine::config::load_machine_config;
+use crate::machine::config::published_drive_paths;
 use crate::machine::security::current_user_sid_string;
-use crate::machine::service::{WindowsServiceState, query_service_state};
+use crate::machine::service::WindowsServiceState;
+use crate::machine::service::query_service_state;
 use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;

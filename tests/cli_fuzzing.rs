@@ -22,8 +22,8 @@ fn fuzz_cli_args_roundtrip() {
 }
 
 #[test]
-// tool[verify cli.help.describes-environment]
-fn help_mentions_environment_variable() {
+// tool[verify cli.help.describes-machine-install]
+fn help_mentions_machine_install_command() {
     let result = from_slice::<Cli>(&["--help"]);
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -31,7 +31,7 @@ fn help_mentions_environment_variable() {
 
     let help = err.help_text().expect("help text should be present");
     assert!(
-        help.contains("TEAMY_MFT_SYNC_DIR"),
-        "help should mention TEAMY_MFT_SYNC_DIR, got:\n{help}"
+        help.contains("install"),
+        "help should mention the install command, got:\n{help}"
     );
 }

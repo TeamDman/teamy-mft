@@ -1,0 +1,10 @@
+[package]
+name = "teamy-mft-daemon-rpc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facet = "0.46"
+strum = { version = "0.27.2", features = ["derive"] }
+vox = { version = "0.8.2", features = ["transport-local"] }
+vox-types = "0.8.2"

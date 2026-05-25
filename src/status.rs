@@ -50,7 +50,7 @@ pub struct TeamyMftStatus {
 impl TeamyMftStatus {
     /// # Errors
     ///
-    /// Returns an error if the sync directory is unset, drive letters cannot be resolved,
+    /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or file metadata cannot be read.
     pub fn load_all_drives() -> eyre::Result<Self> {
         Self::load(&DriveLetterPattern::default())
@@ -58,10 +58,10 @@ impl TeamyMftStatus {
 
     /// # Errors
     ///
-    /// Returns an error if the sync directory is unset, drive letters cannot be resolved,
+    /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or file metadata cannot be read.
     pub fn load(drive_letter_pattern: &DriveLetterPattern) -> eyre::Result<Self> {
-        let sync_dir = crate::sync_dir::try_get_sync_dir()?;
+        let sync_dir = crate::machine::config::load_required_cache_root()?;
         let drive_letters = drive_letter_pattern.into_drive_letters()?;
         Self::from_sync_dir_and_drive_letters(&sync_dir, drive_letters)
     }

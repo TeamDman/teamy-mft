@@ -9,7 +9,7 @@ pub mod query;
 pub mod read;
 pub mod search_index;
 pub mod status;
-pub mod sync_dir;
+pub mod tray;
 
 use crate::cli::Cli;
 use teamy_windows::console::console_attach;
@@ -20,7 +20,10 @@ use tracing::info_span;
 // tool[impl cli.version.includes-semver]
 // tool[impl cli.version.includes-git-revision]
 /// Version string combining package version and git revision.
-const VERSION: &str = concat!(
+pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
+pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
+pub const DAEMON_RPC_COMPAT_VERSION: u32 = 1;
+pub const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (rev ",
     env!("GIT_REVISION"),

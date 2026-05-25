@@ -1,4 +1,6 @@
-use crate::machine::config::{load_machine_config, machine_config_path, machine_root_dir};
+use crate::machine::config::load_machine_config;
+use crate::machine::config::machine_config_path;
+use crate::machine::config::machine_root_dir;
 use crate::machine::service::uninstall_windows_service;
 use arbitrary::Arbitrary;
 use facet::Facet;

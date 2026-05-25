@@ -1,4 +1,3 @@
-use crate::sync_dir::try_get_sync_dir;
 use eyre::bail;
 use std::fs::create_dir_all;
 use std::path::Path;
@@ -15,13 +14,19 @@ pub struct DriveSyncInfo {
     pub checkpoint_output_path: PathBuf,
 }
 
+/// # Errors
+///
+/// Returns an error if the machine cache root cannot be resolved or if no drives match.
 pub fn resolve_drive_infos(
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<Vec<DriveSyncInfo>> {
-    let sync_dir = try_get_sync_dir()?;
-    resolve_drive_infos_in_dir(&sync_dir, drive_letter_pattern)
+    let sync_dir = crate::machine::config::load_required_cache_root()?;
+    resolve_drive_infos_in_dir(sync_dir.as_path(), drive_letter_pattern)
 }
 
+/// # Errors
+///
+/// Returns an error if the drive pattern cannot be expanded or if no drives match.
 pub fn resolve_drive_infos_in_dir(
     sync_dir: &Path,
     drive_letter_pattern: &DriveLetterPattern,
@@ -29,12 +34,15 @@ pub fn resolve_drive_infos_in_dir(
     resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letter_pattern.into_drive_letters()?)
 }
 
+/// # Errors
+///
+/// Returns an error if the sync directory cannot be created or if no drives match.
 pub fn resolve_drive_infos_in_dir_for_letters(
     sync_dir: &Path,
     drive_letters: impl IntoIterator<Item = char>,
 ) -> eyre::Result<Vec<DriveSyncInfo>> {
     info!("Syncing in directory: {}", sync_dir.display());
-    create_dir_all(&sync_dir)?;
+    create_dir_all(sync_dir)?;
 
     let mut drive_infos = drive_letters
         .into_iter()

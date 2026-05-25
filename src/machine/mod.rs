@@ -1,5 +1,6 @@
 pub mod config;
 pub mod daemon;
+pub mod daemon_log;
 pub mod ipc;
 pub mod live_drive_state;
 pub mod security;

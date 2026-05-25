@@ -1,20 +1,38 @@
-use crate::machine::config::{
-    PublishedCheckpoint, PublishedDrivePaths, current_unix_ms, load_checkpoint, save_checkpoint,
-};
-use crate::machine::ipc::{MachineError, QueryRequest};
-use crate::machine::usn::{JournalCursor, UsnEvent, VolumeUsnJournal};
+use crate::machine::config::PublishedCheckpoint;
+use crate::machine::config::PublishedDrivePaths;
+use crate::machine::config::current_unix_ms;
+use crate::machine::config::load_checkpoint;
+use crate::machine::config::save_checkpoint;
+use crate::machine::ipc::MachineError;
+use crate::machine::ipc::QueryRequest;
+use crate::machine::usn::JournalCursor;
+use crate::machine::usn::UsnEvent;
+use crate::machine::usn::VolumeUsnJournal;
 use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
-use crate::query::{IndexedPathRow, QueryIgnoreRules, QueryPlan, matching_row_indices_for_rule};
-use crate::search_index::format::{SEARCH_INDEX_VERSION, SearchIndexHeader, SearchIndexPathRow};
-use crate::search_index::search_index_bytes::{SearchIndexBytes, SearchIndexBytesMut};
+use crate::query::IndexedPathRow;
+use crate::query::QueryIgnoreRules;
+use crate::query::QueryPlan;
+use crate::query::matching_row_indices_for_rule;
+use crate::search_index::format::SEARCH_INDEX_VERSION;
+use crate::search_index::format::SearchIndexHeader;
+use crate::search_index::format::SearchIndexPathRow;
+use crate::search_index::search_index_bytes::SearchIndexBytes;
+use crate::search_index::search_index_bytes::SearchIndexBytesMut;
 use eyre::Context;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use tracing::{debug, info, info_span, instrument, trace, warn};
+use std::path::Path;
+use std::path::PathBuf;
+use tracing::debug;
+use tracing::info;
+use tracing::info_span;
+use tracing::instrument;
+use tracing::trace;
+use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveNodeLink {
@@ -398,7 +416,9 @@ impl LiveDriveGraph {
             node.is_directory = record.flags().is_directory();
 
             let mut best_by_parent = FxHashMap::<u64, (u8, String)>::default();
-            for name_ref in file_names.filenames_for_entry(entry_id as u32) {
+            let entry_id =
+                u32::try_from(entry_id).expect("MFT entry ids should fit in a u32 row space");
+            for name_ref in file_names.filenames_for_entry(entry_id) {
                 best_by_parent
                     .entry(name_ref.parent_ref)
                     .and_modify(|(namespace, current_name)| {
@@ -621,6 +641,10 @@ fn validate_active_cursor(
     Ok(())
 }
 
+#[allow(
+    clippy::redundant_closure_for_method_calls,
+    reason = "The explicit closure keeps the Result mapping readable at this boundary"
+)]
 fn load_rows_from_index_path(path: &Path) -> eyre::Result<Vec<SearchIndexPathRow>> {
     let bytes = std::fs::read(path)
         .wrap_err_with(|| format!("Failed reading search index rows from {}", path.display()))?;
@@ -778,14 +802,21 @@ fn should_include_ignored_row(show_ignored: bool, only_ignored: bool, is_ignored
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LiveDriveGraph, LiveDriveState, LiveNode, LiveNodeLink, current_unix_ms, diff_overlay_rows,
-        join_windows_path, validate_active_cursor,
-    };
+    use super::LiveDriveGraph;
+    use super::LiveDriveState;
+    use super::LiveNode;
+    use super::LiveNodeLink;
+    use super::current_unix_ms;
+    use super::diff_overlay_rows;
+    use super::join_windows_path;
+    use super::validate_active_cursor;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
-    use crate::machine::ipc::{IfExistsDto, QueryRequest, SyncModeDto};
-    use crate::machine::usn::{JournalCursor, UsnEvent};
+    use crate::machine::ipc::IfExistsDto;
+    use crate::machine::ipc::QueryRequest;
+    use crate::machine::ipc::SyncModeDto;
+    use crate::machine::usn::JournalCursor;
+    use crate::machine::usn::UsnEvent;
     use crate::search_index::format::SearchIndexPathRow;
     use rustc_hash::FxHashMap;
     use std::time::Duration;

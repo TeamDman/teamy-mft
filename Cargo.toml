@@ -20,8 +20,7 @@ directories = "5"
 dunce = "1"
 eyre = "0.6.12"
 facet = "0.44.1"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+facet_json = { package = "facet-json", version = "0.44.1" }
 #figue = { package = "teamy-figue", version = "2.0.1", path = "../figue/crates/figue", features = ["arbitrary"] }
 figue = { package = "teamy-figue", version = "2.0.1", features = ["arbitrary"] }
 tracing = "0.1.41"
@@ -58,7 +57,7 @@ rayon = { version = "1.10" }
 humantime = "2.2.0"
 thousands = "0.2.0"
 chrono = "0.4.41"
-teamy-windows = {version="0.11.1",features=["arbitrary"]}
+teamy-windows = {version="0.11.1",features=["arbitrary","tracing-subscriber"]}
 tempfile = "3.20"
 teamy-uom-extensions = "0.1.0"
 uom = { version = "0.37.0", features = ["usize"] }
@@ -73,6 +72,8 @@ tokio-stream = "0.1.18"
 futures = "0.3.32"
 zerotrie = { version = "0.2.3", features = ["alloc"] }
 ignore = "0.4.24"
+teamy-mft-daemon-rpc = { path = "crates/teamy-mft-daemon-rpc" }
+vox = { version = "0.8.2", features = ["transport-local"] }
 
 [features]
 default = []

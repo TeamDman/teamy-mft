@@ -10,6 +10,7 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -42,11 +43,12 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
         .with_file(cfg!(debug_assertions))
         .with_line_number(cfg!(debug_assertions))
         .with_target(true)
-        .with_writer(std::io::stderr)
+        .with_writer(std::io::stderr.and(teamy_windows::log::LOG_BUFFER.clone()))
         .pretty()
         .with_timer(tracing_subscriber::fmt::time::uptime());
 
     let subscriber = subscriber.with(stderr_layer);
+    let subscriber = subscriber.with(crate::machine::daemon_log::DaemonTraceLayer);
 
     let json_log_path = match global_args.log_file.as_ref() {
         None => None,

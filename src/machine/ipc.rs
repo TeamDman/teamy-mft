@@ -1,270 +1,200 @@
 use crate::machine::config::MachineConfig;
-use crate::machine::security::{encode_wide, named_pipe_sddl, wide_pcwstr};
+use crate::machine::daemon_log::DaemonLogEvent;
 use crate::query::IndexedPathRow;
-use serde::{Deserialize, Serialize};
-use std::ffi::c_void;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::windows::named_pipe::{
-    ClientOptions, NamedPipeClient, NamedPipeServer, PipeMode, ServerOptions,
-};
-use windows::Win32::Foundation::HLOCAL;
-use windows::Win32::Foundation::LocalFree;
-use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+use std::time::Duration;
+pub use teamy_mft_daemon_rpc::DaemonBuildInfo;
+pub use teamy_mft_daemon_rpc::DegradedDriveStatus;
+pub use teamy_mft_daemon_rpc::IfExistsDto;
+pub use teamy_mft_daemon_rpc::LogStreamRequest;
+pub use teamy_mft_daemon_rpc::MachineDaemonRpc;
+pub use teamy_mft_daemon_rpc::MachineDaemonRpcClient;
+pub use teamy_mft_daemon_rpc::MachineDaemonRpcDispatcher;
+pub use teamy_mft_daemon_rpc::MachineError;
+pub use teamy_mft_daemon_rpc::MachineErrorKind;
+pub use teamy_mft_daemon_rpc::PingResponse;
+pub use teamy_mft_daemon_rpc::QueryRequest;
+pub use teamy_mft_daemon_rpc::QueryResponse as RpcQueryResponse;
+pub use teamy_mft_daemon_rpc::StatusRequest;
+pub use teamy_mft_daemon_rpc::StatusResponse;
+pub use teamy_mft_daemon_rpc::SyncModeDto;
+pub use teamy_mft_daemon_rpc::SyncRequest;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MachineRequest {
-    Ping,
-    Query(QueryRequest),
-    Sync(SyncRequest),
+const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonCompatibility {
+    pub rpc_compat_matches: bool,
+    pub app_version_matches: bool,
+    pub git_revision_matches: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueryRequest {
-    pub query: Vec<String>,
-    pub query_scope: Option<String>,
-    pub drive_letters: Vec<char>,
-    pub limit: usize,
-    pub include_deleted: bool,
-    pub only_deleted: bool,
-    pub show_ignored: bool,
-    pub only_ignored: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueryResponse {
-    pub rows: Vec<IndexedPathRow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SyncRequest {
-    pub drive_letters: Vec<char>,
-    pub mode: SyncModeDto,
-    pub if_exists: IfExistsDto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SyncModeDto {
-    Mft,
-    Index,
-    Both,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IfExistsDto {
-    Skip,
-    Overwrite,
-    Abort,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MachineResponse {
-    Pong,
-    Query(QueryResponse),
-    SyncCompleted,
-    Error(MachineError),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MachineErrorKind {
-    Unavailable,
-    Degraded,
-    RequestInvalid,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MachineError {
-    pub kind: MachineErrorKind,
-    pub message: String,
-}
-
-impl MachineError {
+impl DaemonCompatibility {
     #[must_use]
-    pub fn unavailable(message: impl Into<String>) -> Self {
-        Self {
-            kind: MachineErrorKind::Unavailable,
-            message: message.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn degraded(message: impl Into<String>) -> Self {
-        Self {
-            kind: MachineErrorKind::Degraded,
-            message: message.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn request_invalid(message: impl Into<String>) -> Self {
-        Self {
-            kind: MachineErrorKind::RequestInvalid,
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct PipeSecurityAttributes {
-    attrs: SECURITY_ATTRIBUTES,
-    descriptor: PSECURITY_DESCRIPTOR,
-}
-
-impl PipeSecurityAttributes {
-    /// # Errors
-    ///
-    /// Returns an error if the pipe security descriptor cannot be constructed.
-    pub fn for_owner(owner_sid: &str) -> eyre::Result<Self> {
-        let sddl = named_pipe_sddl(owner_sid);
-        let wide = encode_wide(&sddl);
-        let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                wide_pcwstr(&wide),
-                1,
-                &mut descriptor,
-                None,
-            )
-        }?;
-
-        Ok(Self {
-            attrs: SECURITY_ATTRIBUTES {
-                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: descriptor.0,
-                bInheritHandle: false.into(),
-            },
-            descriptor,
-        })
-    }
-
-    #[must_use]
-    pub fn as_mut_ptr(&mut self) -> *mut c_void {
-        &mut self.attrs as *mut SECURITY_ATTRIBUTES as *mut c_void
-    }
-}
-
-impl Drop for PipeSecurityAttributes {
-    fn drop(&mut self) {
-        if !self.descriptor.0.is_null() {
-            let _ = unsafe { LocalFree(Some(HLOCAL(self.descriptor.0.cast()))) };
-        }
+    pub fn is_fully_matching(&self) -> bool {
+        self.rpc_compat_matches && self.app_version_matches && self.git_revision_matches
     }
 }
 
 /// # Errors
 ///
-/// Returns an error if the daemon pipe cannot be reached or the request exchange fails.
-pub fn send_request(
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn query(
     config: &MachineConfig,
-    request: &MachineRequest,
-) -> eyre::Result<MachineResponse> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async move {
-        let client = open_client(&config.pipe_name).await?;
-        send_request_over_pipe(client, request).await
+    request: QueryRequest,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<Vec<IndexedPathRow>, MachineError>> {
+    with_client(config, move |client| async move {
+        client
+            .query(request, logs)
+            .await
+            .map(convert_query_response)
     })
 }
 
-async fn open_client(pipe_name: &str) -> eyre::Result<NamedPipeClient> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match ClientOptions::new()
-            .pipe_mode(PipeMode::Message)
-            .open(pipe_name)
-        {
-            Ok(client) => return Ok(client),
-            Err(error)
-                if error.raw_os_error()
-                    == Some(windows::Win32::Foundation::ERROR_PIPE_BUSY.0 as i32)
-                    && std::time::Instant::now() < deadline =>
-            {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-            Err(error) => return Err(error.into()),
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn query_stream(
+    config: &MachineConfig,
+    request: QueryRequest,
+    rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<(), MachineError>> {
+    with_client(config, move |client| async move {
+        client.query_stream(request, rows, logs).await
+    })
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn sync(
+    config: &MachineConfig,
+    request: SyncRequest,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<(), MachineError>> {
+    with_client(config, move |client| async move {
+        client.sync(request, logs).await
+    })
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn status(
+    config: &MachineConfig,
+    request: StatusRequest,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<StatusResponse, MachineError>> {
+    with_client(config, move |client| async move {
+        client.status(request, logs).await
+    })
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn ping(
+    config: &MachineConfig,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<PingResponse, MachineError>> {
+    with_client(config, move |client| async move { client.ping(logs).await })
+}
+
+#[must_use]
+pub fn daemon_compatibility(ping: &PingResponse) -> DaemonCompatibility {
+    DaemonCompatibility {
+        rpc_compat_matches: ping.build.rpc_compat_version == crate::DAEMON_RPC_COMPAT_VERSION,
+        app_version_matches: ping.build.app_version == crate::APP_SEMVER,
+        git_revision_matches: ping.build.git_revision == crate::APP_GIT_REVISION,
+    }
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon cannot be reached or reports incompatible RPC compatibility metadata.
+pub fn ensure_daemon_compatible(config: &MachineConfig) -> eyre::Result<PingResponse> {
+    let (logs_tx, logs_rx) = vox::channel::<DaemonLogEvent>();
+    let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+    let ping_response = ping(config, logs_tx)?;
+    let _ = log_drain.join();
+    let ping_response = ping_response.map_err(|error| eyre::eyre!(error.message))?;
+    let compatibility = daemon_compatibility(&ping_response);
+    if !compatibility.rpc_compat_matches {
+        eyre::bail!(
+            "Machine daemon RPC compatibility mismatch: cli rpc_compat_version={} daemon rpc_compat_version={}. Reinstall or restart the daemon with the current teamy-mft binary.",
+            crate::DAEMON_RPC_COMPAT_VERSION,
+            ping_response.build.rpc_compat_version
+        );
+    }
+    Ok(ping_response)
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn stream_logs(
+    config: &MachineConfig,
+    request: LogStreamRequest,
+    logs: vox::Tx<DaemonLogEvent>,
+    cancel: vox::Rx<u8>,
+) -> eyre::Result<Result<(), MachineError>> {
+    with_client(config, move |client| async move {
+        client.stream_logs(request, logs, cancel).await
+    })
+}
+
+fn with_client<F, Fut, T>(config: &MachineConfig, f: F) -> eyre::Result<Result<T, MachineError>>
+where
+    F: FnOnce(MachineDaemonRpcClient) -> Fut,
+    Fut: std::future::Future<Output = Result<T, vox::VoxError<MachineError>>>,
+{
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let addr = format!("local://{}", config.pipe_name);
+    runtime.block_on(async move {
+        let client: MachineDaemonRpcClient = vox::connect(&addr)
+            .connect_timeout(DAEMON_CONNECT_TIMEOUT)
+            .wait_for_service(DAEMON_CONNECT_TIMEOUT)
+            .await
+            .map_err(|error| eyre::eyre!("Failed connecting to daemon at {addr}: {error}"))?;
+        match f(client).await {
+            Ok(value) => Ok(Ok(value)),
+            Err(vox::VoxError::User(error)) => Ok(Err(error)),
+            Err(error) => Err(eyre::eyre!("Daemon RPC call failed: {error}")),
         }
-    }
+    })
 }
 
-/// # Errors
-///
-/// Returns an error if the request exchange fails.
-pub async fn send_request_over_pipe(
-    mut client: NamedPipeClient,
-    request: &MachineRequest,
-) -> eyre::Result<MachineResponse> {
-    let request_bytes = serde_json::to_vec(request)?;
-    client
-        .write_u32_le(
-            request_bytes
-                .len()
-                .try_into()
-                .map_err(|_| eyre::eyre!("request too large"))?,
-        )
-        .await?;
-    client.write_all(&request_bytes).await?;
-    client.flush().await?;
-
-    let response_len = client.read_u32_le().await? as usize;
-    let mut response_bytes = vec![0u8; response_len];
-    client.read_exact(&mut response_bytes).await?;
-    Ok(serde_json::from_slice(&response_bytes)?)
+fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<IndexedPathRow> {
+    response
+        .rows
+        .into_iter()
+        .map(|row| IndexedPathRow {
+            path: row.path,
+            has_deleted_entries: row.has_deleted_entries,
+            is_ignored: row.is_ignored,
+        })
+        .collect()
 }
 
-/// # Errors
-///
-/// Returns an error if a named pipe server cannot be created.
-pub unsafe fn create_server(
-    pipe_name: &str,
-    security_attributes: *mut c_void,
-    first_pipe_instance: bool,
-) -> eyre::Result<NamedPipeServer> {
-    let mut options = ServerOptions::new();
-    options
-        .pipe_mode(PipeMode::Message)
-        .first_pipe_instance(first_pipe_instance)
-        .reject_remote_clients(true)
-        .max_instances(1);
-
-    Ok(unsafe { options.create_with_security_attributes_raw(pipe_name, security_attributes) }?)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{MachineRequest, MachineResponse, QueryRequest, QueryResponse};
-    use crate::query::IndexedPathRow;
-
-    #[test]
-    fn request_roundtrips_through_json() -> eyre::Result<()> {
-        let request = MachineRequest::Query(QueryRequest {
-            query: vec![String::from("music"), String::from(".flac$")],
-            query_scope: Some(String::from(r"C:\library")),
-            drive_letters: vec!['C', 'D'],
-            limit: 25,
-            include_deleted: true,
-            only_deleted: false,
-            show_ignored: true,
-            only_ignored: false,
-        });
-
-        let roundtrip = serde_json::from_slice::<MachineRequest>(&serde_json::to_vec(&request)?)?;
-        assert_eq!(roundtrip, request);
-        Ok(())
-    }
-
-    #[test]
-    fn response_roundtrips_through_json() -> eyre::Result<()> {
-        let response = MachineResponse::Query(QueryResponse {
-            rows: vec![IndexedPathRow {
-                path: String::from(r"C:\music\track.flac"),
-                has_deleted_entries: false,
-                is_ignored: false,
-            }],
-        });
-
-        let roundtrip = serde_json::from_slice::<MachineResponse>(&serde_json::to_vec(&response)?)?;
-        assert_eq!(roundtrip, response);
-        Ok(())
+#[must_use]
+pub fn convert_indexed_rows(rows: Vec<IndexedPathRow>) -> teamy_mft_daemon_rpc::QueryResponse {
+    teamy_mft_daemon_rpc::QueryResponse {
+        rows: rows
+            .into_iter()
+            .map(|row| teamy_mft_daemon_rpc::IndexedPathRowDto {
+                path: row.path,
+                has_deleted_entries: row.has_deleted_entries,
+                is_ignored: row.is_ignored,
+            })
+            .collect(),
     }
 }
