@@ -59,8 +59,7 @@ impl SyncArgs {
             mode: SyncModeDto::from(self.command.unwrap_or_default()),
             if_exists: IfExistsDto::from(self.if_exists),
         };
-        crate::machine::service::start_service_if_needed(&config.service_name)?;
-        crate::machine::ipc::ensure_daemon_compatible(&config)?;
+        crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
         let response = crate::machine::ipc::sync(&config, request, logs_tx)?;

@@ -63,6 +63,9 @@ pub struct QueryArgs {
     /// Bypass the machine daemon and read published indexes directly
     #[facet(args::named, default)]
     pub no_daemon: bool,
+    /// Allow falling back to published disk indexes if the daemon query path degrades
+    #[facet(args::named, default)]
+    pub allow_fallback: bool,
 }
 
 #[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
@@ -542,47 +545,50 @@ impl QueryArgs {
                     show_ignored: self.show_ignored,
                     only_ignored: self.only_ignored,
                 };
-                match crate::machine::service::start_service_if_needed(&config.service_name) {
-                    Ok(()) => {
-                        if let Err(error) = crate::machine::ipc::ensure_daemon_compatible(&config) {
-                            tracing::warn!(error = %error, "Daemon compatibility check failed; serving published machine cache");
-                        } else {
-                            let (rows_tx, rows_rx) =
-                                vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
-                            let (logs_tx, logs_rx) =
-                                vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
-                            let row_drain = spawn_streamed_query_row_drain(rows_rx);
-                            let log_drain =
-                                crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-                            let query_outcome = crate::machine::ipc::query_stream(
-                                &config, request, rows_tx, logs_tx,
-                            );
-                            let response_rows = row_drain.join().map_err(|join_error| {
-                                eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
-                            })??;
-                            let _ = log_drain.join();
-                            match query_outcome {
-                                Ok(Ok(response)) => {
-                                    debug!(correlation_id = %response.correlation_id, "Daemon streamed query completed");
-                                    return Ok(response_rows);
+                match crate::machine::ipc::ensure_daemon_ready(&config) {
+                    Ok(_ready_daemon) => {
+                        let (rows_tx, rows_rx) =
+                            vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
+                        let (logs_tx, logs_rx) =
+                            vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                        let row_drain = spawn_streamed_query_row_drain(rows_rx);
+                        let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+                        let query_outcome =
+                            crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx);
+                        let response_rows = row_drain.join().map_err(|join_error| {
+                            eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
+                        })??;
+                        let _ = log_drain.join();
+                        match query_outcome {
+                            Ok(Ok(response)) => {
+                                debug!(correlation_id = %response.correlation_id, "Daemon streamed query completed");
+                                return Ok(response_rows);
+                            }
+                            Ok(Err(error)) => {
+                                if matches!(
+                                    error.kind,
+                                    crate::machine::ipc::MachineErrorKind::RequestInvalid
+                                ) {
+                                    eyre::bail!(error.message);
                                 }
-                                Ok(Err(error)) => {
-                                    if matches!(
-                                        error.kind,
-                                        crate::machine::ipc::MachineErrorKind::RequestInvalid
-                                    ) {
-                                        eyre::bail!(error.message);
-                                    }
-                                    tracing::warn!(kind = ?error.kind, error = %error.message, "Daemon query degraded; serving published machine cache");
+                                if !self.allow_fallback {
+                                    eyre::bail!(error.message);
                                 }
-                                Err(error) => {
-                                    tracing::warn!(error = %error, "Daemon query failed; serving published machine cache");
+                                tracing::warn!(kind = ?error.kind, error = %error.message, "Daemon query degraded; serving published machine cache");
+                            }
+                            Err(error) => {
+                                if !self.allow_fallback {
+                                    return Err(error);
                                 }
+                                tracing::warn!(error = %error, "Daemon query failed; serving published machine cache");
                             }
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(error = %error, "Daemon start failed; serving published machine cache");
+                        if !self.allow_fallback {
+                            return Err(error);
+                        }
+                        tracing::warn!(error = %error, "Daemon readiness check failed; serving published machine cache");
                     }
                 }
                 let sync_dir = crate::machine::config::load_required_cache_root()?;
@@ -603,8 +609,7 @@ impl QueryArgs {
             }
             QuerySource::DaemonOnly => {
                 let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-                crate::machine::service::start_service_if_needed(&config.service_name)?;
-                crate::machine::ipc::ensure_daemon_compatible(&config)?;
+                crate::machine::ipc::ensure_daemon_ready(&config)?;
                 let request = crate::machine::ipc::QueryRequest {
                     query: self.query,
                     query_scope: self.r#in,

@@ -19,6 +19,10 @@ pub struct StatusArgs {
     /// Bypass the machine daemon and inspect published files directly from this process
     #[facet(args::named, default)]
     pub no_daemon: bool,
+
+    /// Allow falling back to direct local inspection if the daemon cannot be reached
+    #[facet(args::named, default)]
+    pub allow_fallback: bool,
 }
 
 #[derive(Debug)]
@@ -36,7 +40,11 @@ impl StatusArgs {
     pub fn invoke(self) -> eyre::Result<()> {
         let mut machine_status =
             crate::machine::status::load_machine_status(&self.drive_letter_pattern)?;
-        let daemon_status = load_daemon_status_summary(&self.drive_letter_pattern, self.no_daemon)?;
+        let daemon_status = load_daemon_status_summary(
+            &self.drive_letter_pattern,
+            self.no_daemon,
+            self.allow_fallback,
+        )?;
         if daemon_status.ping.is_some() {
             machine_status.service_state = crate::machine::service::WindowsServiceState::Running;
         }
@@ -59,6 +67,7 @@ impl StatusArgs {
 fn load_daemon_status_summary(
     drive_letter_pattern: &DriveLetterPattern,
     no_daemon: bool,
+    allow_fallback: bool,
 ) -> eyre::Result<DaemonStatusSummary> {
     if no_daemon {
         return Ok(DaemonStatusSummary {
@@ -69,33 +78,20 @@ fn load_daemon_status_summary(
         });
     }
     let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-    if let Err(error) = crate::machine::service::start_service_if_needed(&config.service_name) {
-        return Ok(DaemonStatusSummary {
-            ping: None,
-            compatibility: None,
-            runtime_status: None,
-            warning: Some(format!("daemon start failed: {error}")),
-        });
-    }
-
-    let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
-    let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-    let ping_response = crate::machine::ipc::ping(&config, logs_tx);
-    let _ = log_drain.join();
-
-    let ping = match ping_response? {
-        Ok(ping) => ping,
-        Err(error) => {
+    let ready_daemon = match crate::machine::ipc::ensure_daemon_ready(&config) {
+        Ok(ready_daemon) => ready_daemon,
+        Err(error) if allow_fallback => {
             return Ok(DaemonStatusSummary {
                 ping: None,
                 compatibility: None,
                 runtime_status: None,
-                warning: Some(format!("daemon ping failed: {}", error.message)),
+                warning: Some(format!("daemon readiness failed: {error}")),
             });
         }
+        Err(error) => return Err(error),
     };
-
-    let compatibility = crate::machine::ipc::daemon_compatibility(&ping);
+    let ping = ready_daemon.ping;
+    let compatibility = ready_daemon.compatibility;
     let warning = if compatibility.rpc_compat_matches {
         if compatibility.is_fully_matching() {
             None
@@ -121,7 +117,18 @@ fn load_daemon_status_summary(
             logs_tx,
         );
         let _ = log_drain.join();
-        response?.ok()
+        match response? {
+            Ok(status) => Some(status),
+            Err(error) if allow_fallback => {
+                return Ok(DaemonStatusSummary {
+                    ping: Some(ping),
+                    compatibility: Some(compatibility),
+                    runtime_status: None,
+                    warning: Some(format!("daemon status failed: {}", error.message)),
+                });
+            }
+            Err(error) => eyre::bail!(error.message),
+        }
     } else {
         None
     };

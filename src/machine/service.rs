@@ -164,15 +164,8 @@ pub fn stop_service_if_running(service_name: &str) -> eyre::Result<bool> {
         );
     }
 
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(10) {
-        match query_service_state(service_name)? {
-            WindowsServiceState::Stopped | WindowsServiceState::Missing => return Ok(true),
-            _ => std::thread::sleep(std::time::Duration::from_millis(250)),
-        }
-    }
-
-    eyre::bail!("Timed out waiting for {} to stop", service_name)
+    wait_for_stopped(service_name, std::time::Duration::from_secs(10))?;
+    Ok(true)
 }
 
 fn wait_for_running(service_name: &str, timeout: std::time::Duration) -> eyre::Result<()> {
@@ -190,6 +183,25 @@ fn wait_for_running(service_name: &str, timeout: std::time::Duration) -> eyre::R
         "Timed out waiting for {} to enter running state",
         service_name
     )
+}
+
+/// # Errors
+///
+/// Returns an error if the service does not reach the stopped state before `timeout`.
+pub fn wait_for_stopped(service_name: &str, timeout: std::time::Duration) -> eyre::Result<()> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        match query_service_state(service_name)? {
+            WindowsServiceState::Stopped | WindowsServiceState::Missing => return Ok(()),
+            WindowsServiceState::Running
+            | WindowsServiceState::StartPending
+            | WindowsServiceState::Unknown(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+    }
+
+    eyre::bail!("Timed out waiting for {} to stop", service_name)
 }
 
 fn run_sc_command(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> eyre::Result<()> {

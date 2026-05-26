@@ -183,13 +183,11 @@ impl TrayWindowState {
 
         let (cancel_tx, cancel_rx) = vox::channel::<u8>();
         let join_handle = std::thread::spawn(move || {
-            if let Err(error) =
-                crate::machine::service::start_service_if_needed(&config.service_name)
-            {
+            if let Err(error) = crate::machine::ipc::ensure_daemon_ready(&config) {
                 tracing::error!(
                     service_name = %config.service_name,
                     error = %error,
-                    "Failed to start daemon service for tray log stream"
+                    "Failed to prepare daemon service for tray log stream"
                 );
                 return;
             }

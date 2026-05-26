@@ -1,6 +1,7 @@
 use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogEvent;
 use crate::query::IndexedPathRow;
+use std::cmp::Ordering;
 use std::time::Duration;
 pub use teamy_mft_daemon_rpc::CorrelationId;
 pub use teamy_mft_daemon_rpc::DaemonBuildInfo;
@@ -29,6 +30,13 @@ pub struct DaemonCompatibility {
     pub rpc_compat_matches: bool,
     pub app_version_matches: bool,
     pub git_revision_matches: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadyDaemon {
+    pub ping: PingResponse,
+    pub compatibility: DaemonCompatibility,
+    pub restarted: bool,
 }
 
 impl DaemonCompatibility {
@@ -138,18 +146,45 @@ pub fn daemon_compatibility(ping: &PingResponse) -> DaemonCompatibility {
 pub fn ensure_daemon_compatible(config: &MachineConfig) -> eyre::Result<PingResponse> {
     let (logs_tx, logs_rx) = vox::channel::<DaemonLogEvent>();
     let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-    let ping_response = ping(config, logs_tx)?;
+    let ping_response = ping(config, logs_tx);
     let _ = log_drain.join();
+    let ping_response = ping_response?;
     let ping_response = ping_response.map_err(|error| eyre::eyre!(error.message))?;
-    let compatibility = daemon_compatibility(&ping_response);
-    if !compatibility.rpc_compat_matches {
-        eyre::bail!(
-            "Machine daemon RPC compatibility mismatch: cli rpc_compat_version={} daemon rpc_compat_version={}. Reinstall or restart the daemon with the current teamy-mft binary.",
-            crate::DAEMON_RPC_COMPAT_VERSION,
-            ping_response.build.rpc_compat_version
-        );
-    }
+    ensure_rpc_compatibility(&ping_response)?;
     Ok(ping_response)
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon cannot be started, restarted, or still reports an
+/// incompatible RPC version after a restart attempt.
+pub fn ensure_daemon_ready(config: &MachineConfig) -> eyre::Result<ReadyDaemon> {
+    crate::machine::service::start_service_if_needed(&config.service_name)?;
+    let mut ping = ping_without_restart(config)?;
+    let mut compatibility = daemon_compatibility(&ping);
+    let mut restarted = false;
+
+    if should_restart_for_local_build(&ping) {
+        tracing::warn!(
+            daemon_app_version = %ping.build.app_version,
+            daemon_git_revision = %ping.build.git_revision,
+            cli_app_version = crate::APP_SEMVER,
+            cli_git_revision = crate::APP_GIT_REVISION,
+            "Restarting daemon because the running daemon build is older than the current CLI"
+        );
+        restart_daemon(config)?;
+        ping = ping_without_restart(config)?;
+        compatibility = daemon_compatibility(&ping);
+        restarted = true;
+    }
+
+    ensure_rpc_compatibility(&ping)?;
+
+    Ok(ReadyDaemon {
+        ping,
+        compatibility,
+        restarted,
+    })
 }
 
 /// # Errors
@@ -197,6 +232,77 @@ where
     })
 }
 
+fn ping_without_restart(config: &MachineConfig) -> eyre::Result<PingResponse> {
+    let (logs_tx, logs_rx) = vox::channel::<DaemonLogEvent>();
+    let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+    let ping_response = ping(config, logs_tx);
+    let _ = log_drain.join();
+    let ping_response = ping_response?;
+    ping_response.map_err(|error| eyre::eyre!(error.message))
+}
+
+fn restart_daemon(config: &MachineConfig) -> eyre::Result<()> {
+    let (logs_tx, logs_rx) = vox::channel::<DaemonLogEvent>();
+    let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+    match shutdown(config, logs_tx) {
+        Ok(Ok(())) => {
+            let _ = log_drain.join();
+        }
+        Ok(Err(error)) => {
+            let _ = log_drain.join();
+            tracing::warn!(
+                error = %error.message,
+                "Daemon shutdown RPC failed during restart; falling back to service stop"
+            );
+            let _ = crate::machine::service::stop_service_if_running(&config.service_name)?;
+        }
+        Err(error) => {
+            let _ = log_drain.join();
+            tracing::warn!(
+                error = %error,
+                "Daemon shutdown transport failed during restart; falling back to service stop"
+            );
+            let _ = crate::machine::service::stop_service_if_running(&config.service_name)?;
+        }
+    }
+    crate::machine::service::wait_for_stopped(&config.service_name, Duration::from_secs(10))?;
+    crate::machine::service::start_service_if_needed(&config.service_name)
+}
+
+fn should_restart_for_local_build(ping: &PingResponse) -> bool {
+    should_restart_for_build(crate::APP_SEMVER, crate::APP_GIT_REVISION, ping)
+}
+
+fn should_restart_for_build(
+    cli_app_version: &str,
+    cli_git_revision: &str,
+    ping: &PingResponse,
+) -> bool {
+    match compare_semver(cli_app_version, &ping.build.app_version) {
+        Some(Ordering::Greater) => true,
+        Some(Ordering::Equal) => cli_git_revision != ping.build.git_revision,
+        Some(Ordering::Less) | None => false,
+    }
+}
+
+fn ensure_rpc_compatibility(ping: &PingResponse) -> eyre::Result<()> {
+    let compatibility = daemon_compatibility(ping);
+    if !compatibility.rpc_compat_matches {
+        eyre::bail!(
+            "Machine daemon RPC compatibility mismatch: cli rpc_compat_version={} daemon rpc_compat_version={}. Reinstall or restart the daemon with the current teamy-mft binary.",
+            crate::DAEMON_RPC_COMPAT_VERSION,
+            ping.build.rpc_compat_version
+        );
+    }
+    Ok(())
+}
+
+fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
+    let left = semver::Version::parse(left).ok()?;
+    let right = semver::Version::parse(right).ok()?;
+    Some(left.cmp(&right))
+}
+
 fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<IndexedPathRow> {
     response
         .rows
@@ -224,5 +330,77 @@ pub fn convert_indexed_rows(
                 is_ignored: row.is_ignored,
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_rpc_compatibility;
+    use super::should_restart_for_build;
+    use super::PingResponse;
+
+    fn ping_response(app_version: &str, git_revision: &str, rpc_compat_version: u32) -> PingResponse {
+        PingResponse {
+            service_name: "teamy-mft".to_owned(),
+            build: super::DaemonBuildInfo {
+                app_version: app_version.to_owned(),
+                git_revision: git_revision.to_owned(),
+                rpc_compat_version,
+            },
+        }
+    }
+
+    fn mismatched_rpc_compat_version() -> u32 {
+        if crate::DAEMON_RPC_COMPAT_VERSION == 0 {
+            1
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn restart_is_required_when_cli_version_is_newer() {
+        let ping = ping_response("1.2.2", "git-a", crate::DAEMON_RPC_COMPAT_VERSION);
+
+        assert!(should_restart_for_build("1.2.3", "git-a", &ping));
+    }
+
+    #[test]
+    fn restart_is_required_when_versions_match_but_git_revisions_differ() {
+        let ping = ping_response("1.2.3", "git-daemon", crate::DAEMON_RPC_COMPAT_VERSION);
+
+        assert!(should_restart_for_build("1.2.3", "git-cli", &ping));
+    }
+
+    #[test]
+    fn restart_is_not_required_when_daemon_version_is_newer() {
+        let ping = ping_response("1.2.4", "git-a", crate::DAEMON_RPC_COMPAT_VERSION);
+
+        assert!(!should_restart_for_build("1.2.3", "git-a", &ping));
+    }
+
+    #[test]
+    fn invalid_semver_values_do_not_trigger_restart() {
+        let valid_ping = ping_response("1.2.3", "git-a", crate::DAEMON_RPC_COMPAT_VERSION);
+        let invalid_ping = ping_response("not-a-semver", "git-a", crate::DAEMON_RPC_COMPAT_VERSION);
+
+        assert!(!should_restart_for_build("not-a-semver", "git-a", &valid_ping));
+        assert!(!should_restart_for_build("1.2.3", "git-a", &invalid_ping));
+    }
+
+    #[test]
+    fn equal_versions_still_error_when_rpc_compatibility_mismatches() {
+        let ping = ping_response("1.2.3", "git-a", mismatched_rpc_compat_version());
+
+        assert!(!should_restart_for_build("1.2.3", "git-a", &ping));
+
+        let error = ensure_rpc_compatibility(&ping)
+            .expect_err("rpc compatibility mismatch should still fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Machine daemon RPC compatibility mismatch")
+        );
     }
 }

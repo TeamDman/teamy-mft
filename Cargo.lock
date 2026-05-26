@@ -3456,6 +3456,7 @@ dependencies = [
  "mimalloc",
  "rayon",
  "rustc-hash",
+ "semver",
  "strum",
  "teamy-figue",
  "teamy-mft-daemon-rpc",

@@ -4,7 +4,9 @@ use crate::machine::ipc::shutdown as shutdown_daemon;
 use crate::machine::service::WindowsServiceState;
 use crate::machine::service::query_service_state;
 use crate::machine::service::stop_service_if_running;
+use crate::machine::service::wait_for_stopped;
 use arbitrary::Arbitrary;
+use eyre::WrapErr;
 use facet::Facet;
 use tracing::info;
 use tracing::warn;
@@ -31,7 +33,13 @@ impl ServiceStopArgs {
                 match shutdown_daemon(&config, logs_tx) {
                     Ok(Ok(())) => {
                         let _ = log_drain.join();
-                        wait_for_service_to_stop(service_name)?;
+                        wait_for_stopped(service_name, std::time::Duration::from_secs(10))
+                            .wrap_err_with(|| {
+                                format!(
+                                    "Timed out waiting for {} to stop after daemon shutdown request",
+                                    service_name
+                                )
+                            })?;
                         true
                     }
                     Ok(Err(error)) => {
@@ -65,20 +73,4 @@ impl ServiceStopArgs {
         println!("Stopped {service_name}");
         Ok(())
     }
-}
-
-fn wait_for_service_to_stop(service_name: &str) -> eyre::Result<()> {
-    let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(10) {
-        match query_service_state(service_name)? {
-            WindowsServiceState::Stopped | WindowsServiceState::Missing => return Ok(()),
-            WindowsServiceState::Running
-            | WindowsServiceState::StartPending
-            | WindowsServiceState::Unknown(_) => {
-                std::thread::sleep(std::time::Duration::from_millis(150));
-            }
-        }
-    }
-
-    eyre::bail!("Timed out waiting for {service_name} to stop after daemon shutdown request")
 }
