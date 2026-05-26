@@ -301,7 +301,7 @@ where
 
     daemon_log_hub().publish(DaemonLogEvent {
         timestamp_unix_ms: crate::machine::config::current_unix_ms(),
-        level: DaemonLogLevel::Info,
+        level: DaemonLogLevel::Debug,
         target: span.metadata().target().to_string(),
         file: span.metadata().file().map(ToOwned::to_owned),
         line: span.metadata().line(),
