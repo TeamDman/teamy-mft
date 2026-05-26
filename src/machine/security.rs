@@ -11,7 +11,6 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
-use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Foundation::LocalFree;
@@ -62,6 +61,7 @@ use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::Threading::OpenProcessToken;
+use windows::core::Owned;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
 
@@ -92,16 +92,6 @@ impl PathProtectionStatus {
     }
 }
 
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            let _ = unsafe { CloseHandle(self.0) };
-        }
-    }
-}
-
 #[must_use]
 pub fn encode_wide(value: &str) -> Vec<u16> {
     std::ffi::OsStr::new(value)
@@ -116,10 +106,10 @@ pub fn encode_wide(value: &str) -> Vec<u16> {
 pub fn current_user_sid_string() -> eyre::Result<String> {
     let mut token = HANDLE::default();
     unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }?;
-    let _owned_token = OwnedHandle(token);
+    let token = unsafe { Owned::new(token) };
 
     let mut required_len = 0u32;
-    let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut required_len) };
+    let _ = unsafe { GetTokenInformation(*token, TokenUser, None, 0, &mut required_len) };
     if required_len == 0 {
         eyre::bail!("Failed determining current token information length");
     }
@@ -127,7 +117,7 @@ pub fn current_user_sid_string() -> eyre::Result<String> {
     let mut buffer = vec![0u8; required_len as usize];
     unsafe {
         GetTokenInformation(
-            token,
+            *token,
             TokenUser,
             Some(buffer.as_mut_ptr().cast::<c_void>()),
             required_len,

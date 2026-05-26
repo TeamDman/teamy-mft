@@ -13,7 +13,6 @@ use eyre::Context;
 use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
-use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::CreateFileW;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
@@ -56,6 +55,7 @@ use windows::Win32::System::Ioctl::USN_REASON_STREAM_CHANGE;
 use windows::Win32::System::Ioctl::USN_REASON_TRANSACTED_CHANGE;
 use windows::Win32::System::Ioctl::USN_RECORD_V2;
 use windows::Win32::System::Ioctl::USN_RECORD_V3;
+use windows::core::Owned;
 use windows::core::PCWSTR;
 
 const JOURNAL_BUFFER_BYTES: usize = 1024 * 1024;
@@ -83,17 +83,6 @@ const RELEVANT_REASON_MASK: u32 = USN_REASON_FILE_CREATE
     | USN_REASON_STREAM_CHANGE
     | USN_REASON_TRANSACTED_CHANGE
     | USN_REASON_DESIRED_STORAGE_CLASS_CHANGE;
-
-#[derive(Debug)]
-struct OwnedHandle(HANDLE);
-
-impl Drop for OwnedHandle {
-    fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            let _ = unsafe { CloseHandle(self.0) };
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JournalCursor {
@@ -141,7 +130,7 @@ pub struct UsnReadBatch {
 #[derive(Debug)]
 pub struct VolumeUsnJournal {
     drive_letter: char,
-    handle: OwnedHandle,
+    handle: Owned<HANDLE>,
 }
 
 impl VolumeUsnJournal {
@@ -164,6 +153,7 @@ impl VolumeUsnJournal {
             )
         }
         .wrap_err_with(|| format!("Failed opening NTFS volume handle for {volume_path}"))?;
+        let handle = unsafe { Owned::new(handle) };
 
         debug!(
             drive = %drive_letter,
@@ -173,7 +163,7 @@ impl VolumeUsnJournal {
         );
         Ok(Self {
             drive_letter,
-            handle: OwnedHandle(handle),
+            handle,
         })
     }
 
@@ -186,7 +176,7 @@ impl VolumeUsnJournal {
         let mut bytes_returned = 0u32;
         unsafe {
             DeviceIoControl(
-                self.handle.0,
+                *self.handle,
                 FSCTL_QUERY_USN_JOURNAL,
                 None,
                 0,
@@ -254,7 +244,7 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
             let mut bytes_returned = 0u32;
             unsafe {
                 DeviceIoControl(
-                    self.handle.0,
+                    *self.handle,
                     FSCTL_READ_USN_JOURNAL,
                     Some(std::ptr::from_mut(&mut read_input).cast()),
                     size_of::<READ_USN_JOURNAL_DATA_V1>() as u32,
