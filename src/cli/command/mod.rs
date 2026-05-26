@@ -1,4 +1,3 @@
-pub mod daemon;
 pub mod ignore;
 pub mod install;
 pub mod list_paths;
