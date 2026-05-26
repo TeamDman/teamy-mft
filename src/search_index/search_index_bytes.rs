@@ -261,7 +261,7 @@ impl<'a> SearchIndexBytes<'a> {
         }
 
         let terminal_count = {
-            let _span = info_span!("parse_search_index_header").entered();
+            let _span = info_span!("parse_search_index_header", bytes = self.bytes.len()).entered();
             terminal_count_from_header(self.header()?)?
         };
 
@@ -271,20 +271,31 @@ impl<'a> SearchIndexBytes<'a> {
         };
         let mut cursor = body_prefix.cursor;
         let segments = {
-            let _span = info_span!("parse_search_index_segments").entered();
+            let segment_count = body_prefix.segment_count;
+            let _span = info_span!("parse_search_index_segments", segment_count).entered();
             self.parse_segments(&mut cursor, body_prefix.segment_count, mode)?
         };
         let extension_suffixes = {
-            let _span = info_span!("parse_search_index_extensions").entered();
+            let extension_count = body_prefix.extension_count;
+            let _span = info_span!("parse_search_index_extensions", extension_count).entered();
             self.parse_extension_suffixes(&mut cursor, body_prefix.extension_count, mode)?
         };
         let trigrams = {
-            let _span = info_span!("parse_search_index_trigrams").entered();
+            let trigram_count = body_prefix.trigram_count;
+            let _span = info_span!("parse_search_index_trigrams", trigram_count).entered();
             self.parse_trigrams(&mut cursor, body_prefix.trigram_count)?
         };
 
         let layout = {
-            let _span = info_span!("compute_search_index_layout").entered();
+            let _span = info_span!(
+                "compute_search_index_layout",
+                path_nodes = body_prefix.path_node_count,
+                rows = terminal_count,
+                posting_row_ids = body_prefix.posting_row_id_count,
+                extension_posting_row_ids = body_prefix.extension_posting_row_id_count,
+                trigram_posting_segment_ids = body_prefix.trigram_posting_segment_id_count
+            )
+            .entered();
             compute_search_index_layout(
                 cursor,
                 SearchIndexLayoutCounts {
