@@ -34,6 +34,7 @@ use windows::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows::Win32::Security::Authorization::TRUSTEE_W;
 use windows::Win32::Security::CONTAINER_INHERIT_ACE;
+use windows::Win32::Security::CreateWellKnownSid;
 use windows::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows::Win32::Security::EqualSid;
 use windows::Win32::Security::GetAce;
@@ -46,9 +47,15 @@ use windows::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows::Win32::Security::PSID;
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
+use windows::Win32::Security::SECURITY_MAX_SID_SIZE;
 use windows::Win32::Security::TOKEN_QUERY;
 use windows::Win32::Security::TOKEN_USER;
 use windows::Win32::Security::TokenUser;
+use windows::Win32::Security::WELL_KNOWN_SID_TYPE;
+use windows::Win32::Security::WinBuiltinAdministratorsSid;
+use windows::Win32::Security::WinBuiltinUsersSid;
+use windows::Win32::Security::WinLocalSystemSid;
+use windows::Win32::Security::WinWorldSid;
 use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
@@ -142,9 +149,9 @@ pub fn current_user_sid_string() -> eyre::Result<String> {
 pub fn restrict_path_to_owner(path: &Path, owner_sid: &str) -> eyre::Result<()> {
     set_owner_to_administrators(path)?;
     let entries = [
-        AclGrant::full_control(owner_sid),
-        AclGrant::full_control("S-1-5-18"),
-        AclGrant::full_control("S-1-5-32-544"),
+        AclGrant::full_control(Principal::SidString(owner_sid.to_owned())),
+        AclGrant::full_control(Principal::WellKnown(WinLocalSystemSid)),
+        AclGrant::full_control(Principal::WellKnown(WinBuiltinAdministratorsSid)),
     ];
     apply_restricted_acl_tree(path, &entries)?;
     Ok(())
@@ -156,8 +163,8 @@ pub fn restrict_path_to_owner(path: &Path, owner_sid: &str) -> eyre::Result<()> 
 pub fn allow_development_reads(path: &Path) -> eyre::Result<()> {
     set_owner_to_administrators(path)?;
     let entries = [
-        AclGrant::read_execute("S-1-5-32-545"),
-        AclGrant::read_execute("S-1-1-0"),
+        AclGrant::read_execute(Principal::WellKnown(WinBuiltinUsersSid)),
+        AclGrant::read_execute(Principal::WellKnown(WinWorldSid)),
     ];
     apply_acl_grants_tree(path, &entries)?;
     Ok(())
@@ -165,45 +172,84 @@ pub fn allow_development_reads(path: &Path) -> eyre::Result<()> {
 
 #[derive(Debug, Clone)]
 struct AclGrant {
-    sid: String,
+    principal: Principal,
     access_mask: u32,
 }
 
 impl AclGrant {
-    fn full_control(sid: impl Into<String>) -> Self {
+    fn full_control(principal: Principal) -> Self {
         Self {
-            sid: sid.into(),
+            principal,
             access_mask: FILE_ALL_ACCESS.0,
         }
     }
 
-    fn read_execute(sid: impl Into<String>) -> Self {
+    fn read_execute(principal: Principal) -> Self {
         Self {
-            sid: sid.into(),
+            principal,
             access_mask: FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0,
         }
     }
 }
 
-struct OwnedSid(PSID);
+#[derive(Debug, Clone)]
+enum Principal {
+    SidString(String),
+    WellKnown(WELL_KNOWN_SID_TYPE),
+}
+
+struct OwnedSid {
+    ptr: PSID,
+    storage: OwnedSidStorage,
+}
+
+enum OwnedSidStorage {
+    LocalFree,
+    Buffer(Vec<u8>),
+}
 
 impl OwnedSid {
     fn from_string(sid: &str) -> eyre::Result<Self> {
         let wide_sid = encode_wide(sid);
         let mut sid_ptr = PSID::default();
         unsafe { ConvertStringSidToSidW(PCWSTR(wide_sid.as_ptr()), &mut sid_ptr) }?;
-        Ok(Self(sid_ptr))
+        Ok(Self {
+            ptr: sid_ptr,
+            storage: OwnedSidStorage::LocalFree,
+        })
+    }
+
+    fn from_well_known(sid_type: WELL_KNOWN_SID_TYPE) -> eyre::Result<Self> {
+        let mut buffer = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut size = SECURITY_MAX_SID_SIZE;
+        let sid_ptr = PSID(buffer.as_mut_ptr().cast());
+        unsafe { CreateWellKnownSid(sid_type, None, Some(sid_ptr), &mut size) }?;
+        buffer.truncate(size as usize);
+        Ok(Self {
+            ptr: sid_ptr,
+            storage: OwnedSidStorage::Buffer(buffer),
+        })
+    }
+
+    fn from_principal(principal: &Principal) -> eyre::Result<Self> {
+        match principal {
+            Principal::SidString(sid) => Self::from_string(sid),
+            Principal::WellKnown(sid_type) => Self::from_well_known(*sid_type),
+        }
     }
 
     fn as_psid(&self) -> PSID {
-        self.0
+        match &self.storage {
+            OwnedSidStorage::LocalFree => self.ptr,
+            OwnedSidStorage::Buffer(buffer) => PSID(buffer.as_ptr().cast_mut().cast()),
+        }
     }
 }
 
 impl Drop for OwnedSid {
     fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0.cast()))) };
+        if matches!(self.storage, OwnedSidStorage::LocalFree) && !self.ptr.is_invalid() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.ptr.0.cast()))) };
         }
     }
 }
@@ -229,7 +275,7 @@ impl Drop for SecurityDescriptorGuard {
 }
 
 fn set_owner_to_administrators(path: &Path) -> eyre::Result<()> {
-    let administrators = OwnedSid::from_string("S-1-5-32-544")?;
+    let administrators = OwnedSid::from_well_known(WinBuiltinAdministratorsSid)?;
     set_named_security_info(
         path,
         OWNER_SECURITY_INFORMATION,
@@ -286,7 +332,7 @@ fn apply_acl(
 ) -> eyre::Result<()> {
     let sids = grants
         .iter()
-        .map(|grant| OwnedSid::from_string(&grant.sid))
+        .map(|grant| OwnedSid::from_principal(&grant.principal))
         .collect::<eyre::Result<Vec<_>>>()?;
     let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
     let entries = grants
@@ -362,10 +408,10 @@ pub fn query_path_protection_status(
 
     let security = read_path_security(path)?;
     let owner_sid = OwnedSid::from_string(owner_sid)?;
-    let system_sid = OwnedSid::from_string("S-1-5-18")?;
-    let administrators_sid = OwnedSid::from_string("S-1-5-32-544")?;
-    let users_sid = OwnedSid::from_string("S-1-5-32-545")?;
-    let everyone_sid = OwnedSid::from_string("S-1-1-0")?;
+    let system_sid = OwnedSid::from_well_known(WinLocalSystemSid)?;
+    let administrators_sid = OwnedSid::from_well_known(WinBuiltinAdministratorsSid)?;
+    let users_sid = OwnedSid::from_well_known(WinBuiltinUsersSid)?;
+    let everyone_sid = OwnedSid::from_well_known(WinWorldSid)?;
     let aces = security.explicit_allowed_aces()?;
     Ok(PathProtectionStatus {
         path_exists: true,
