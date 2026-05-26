@@ -74,6 +74,7 @@ zerotrie = { version = "0.2.3", features = ["alloc"] }
 ignore = "0.4.24"
 teamy-mft-daemon-rpc = { path = "crates/teamy-mft-daemon-rpc" }
 vox = { version = "0.8.2", features = ["transport-local"] }
+vox-stream = "0.8.2"
 
 [features]
 default = []

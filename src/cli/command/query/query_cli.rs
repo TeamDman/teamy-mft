@@ -60,6 +60,9 @@ pub struct QueryArgs {
     /// Query source selection
     #[facet(args::named, default)]
     pub source: QuerySource,
+    /// Bypass the machine daemon and read published indexes directly
+    #[facet(args::named, default)]
+    pub no_daemon: bool,
 }
 
 #[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
@@ -406,33 +409,6 @@ fn published_machine_drive_letters(cache_root: &Path, requested: Vec<char>) -> V
         .collect()
 }
 
-fn partition_machine_published_drive_letters(
-    cache_root: &Path,
-    requested: Vec<char>,
-) -> eyre::Result<(Vec<char>, Vec<char>)> {
-    let mut live_drives = Vec::new();
-    let mut snapshot_only_drives = Vec::new();
-    for drive_letter in published_machine_drive_letters(cache_root, requested) {
-        let checkpoint_path =
-            crate::machine::config::published_drive_paths(cache_root, drive_letter).checkpoint_path;
-        let checkpoint = crate::machine::config::load_checkpoint(&checkpoint_path)?;
-        let is_live = checkpoint
-            .as_ref()
-            .and_then(|checkpoint| checkpoint.journal_id)
-            .is_some()
-            && checkpoint
-                .as_ref()
-                .and_then(|checkpoint| checkpoint.snapshot_usn)
-                .is_some();
-        if is_live {
-            live_drives.push(drive_letter);
-        } else {
-            snapshot_only_drives.push(drive_letter);
-        }
-    }
-    Ok((live_drives, snapshot_only_drives))
-}
-
 impl QueryArgs {
     /// Create a new `QueryArgs` with the given query pattern and all other options at their defaults.
     pub fn new(pattern: impl Into<String>) -> Self {
@@ -544,38 +520,33 @@ impl QueryArgs {
         if self.query.iter().all(|query| query.trim().is_empty()) {
             eyre::bail!("query string required")
         }
+        if self.no_daemon && matches!(options.source, QuerySource::DaemonOnly) {
+            eyre::bail!("--no-daemon cannot be combined with daemon-only query mode");
+        }
         let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
-        match options.source {
+        let effective_source = if self.no_daemon {
+            QuerySource::DiskOnly
+        } else {
+            options.source
+        };
+        match effective_source {
             QuerySource::Auto => {
-                let config = crate::machine::config::load_required_machine_config()?;
-                let (live_drives, snapshot_only_drives) =
-                    partition_machine_published_drive_letters(&config.cache_root, drive_letters)?;
-                if live_drives.is_empty() && snapshot_only_drives.is_empty() {
-                    eyre::bail!(
-                        "No machine-managed published drives matched the requested drive set"
-                    );
-                }
-                let mut rows = Vec::new();
-                let mut disk_fallback_drives = snapshot_only_drives;
+                let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+                let request = crate::machine::ipc::QueryRequest {
+                    query: self.query.clone(),
+                    query_scope: self.r#in.clone(),
+                    drive_letters: drive_letters.clone(),
+                    limit: self.limit,
+                    include_deleted: self.include_deleted,
+                    only_deleted: self.only_deleted,
+                    show_ignored: self.show_ignored,
+                    only_ignored: self.only_ignored,
+                };
                 match crate::machine::service::start_service_if_needed(&config.service_name) {
-                    Ok(()) if !live_drives.is_empty() => {
+                    Ok(()) => {
                         if let Err(error) = crate::machine::ipc::ensure_daemon_compatible(&config) {
-                            tracing::warn!(
-                                error = %error,
-                                "Daemon compatibility check failed; serving published machine cache"
-                            );
-                            disk_fallback_drives.extend(live_drives.clone());
+                            tracing::warn!(error = %error, "Daemon compatibility check failed; serving published machine cache");
                         } else {
-                            let request = crate::machine::ipc::QueryRequest {
-                                query: self.query.clone(),
-                                query_scope: self.r#in.clone(),
-                                drive_letters: live_drives.clone(),
-                                limit: self.limit,
-                                include_deleted: self.include_deleted,
-                                only_deleted: self.only_deleted,
-                                show_ignored: self.show_ignored,
-                                only_ignored: self.only_ignored,
-                            };
                             let (rows_tx, rows_rx) =
                                 vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                             let (logs_tx, logs_rx) =
@@ -592,69 +563,46 @@ impl QueryArgs {
                             let _ = log_drain.join();
                             match query_outcome {
                                 Ok(Ok(response)) => {
-                                    debug!(
-                                        correlation_id = %response.correlation_id,
-                                        "Daemon streamed query completed"
-                                    );
-                                    rows.extend(response_rows);
+                                    debug!(correlation_id = %response.correlation_id, "Daemon streamed query completed");
+                                    return Ok(response_rows);
                                 }
-                                Ok(Err(error)) => match error.kind {
-                                    crate::machine::ipc::MachineErrorKind::RequestInvalid => {
-                                        eyre::bail!(error.message)
+                                Ok(Err(error)) => {
+                                    if matches!(
+                                        error.kind,
+                                        crate::machine::ipc::MachineErrorKind::RequestInvalid
+                                    ) {
+                                        eyre::bail!(error.message);
                                     }
-                                    crate::machine::ipc::MachineErrorKind::Unavailable
-                                    | crate::machine::ipc::MachineErrorKind::Degraded => {
-                                        tracing::warn!(
-                                            kind = ?error.kind,
-                                            error = %error.message,
-                                            "Daemon query degraded; serving published machine cache"
-                                        );
-                                        disk_fallback_drives.extend(live_drives.clone());
-                                    }
-                                },
+                                    tracing::warn!(kind = ?error.kind, error = %error.message, "Daemon query degraded; serving published machine cache");
+                                }
                                 Err(error) => {
                                     tracing::warn!(error = %error, "Daemon query failed; serving published machine cache");
-                                    disk_fallback_drives.extend(live_drives.clone());
                                 }
                             }
                         }
                     }
-                    Ok(()) => {}
                     Err(error) => {
                         tracing::warn!(error = %error, "Daemon start failed; serving published machine cache");
-                        disk_fallback_drives.extend(live_drives);
                     }
                 }
-
-                if !disk_fallback_drives.is_empty() {
-                    rows = merge_rows(
-                        rows,
-                        self.clone().collect_rows_from_sync_dir_and_drive_letters(
-                            &config.cache_root,
-                            disk_fallback_drives,
-                            QueryExecutionOptions {
-                                ignore: options.ignore,
-                                source: QuerySource::DiskOnly,
-                            },
-                        )?,
-                    );
-                }
-                Ok(rows)
-            }
-            QuerySource::DaemonOnly => {
-                let config = crate::machine::config::load_required_machine_config()?;
-                let (drive_letters, snapshot_only_drives) =
-                    partition_machine_published_drive_letters(&config.cache_root, drive_letters)?;
-                if !snapshot_only_drives.is_empty() {
-                    eyre::bail!(
-                        "Daemon-only queries require live-USN drives. Some requested drives are snapshot-only."
-                    );
-                }
+                let sync_dir = crate::machine::config::load_required_cache_root()?;
+                let drive_letters = published_machine_drive_letters(&sync_dir, drive_letters);
                 if drive_letters.is_empty() {
                     eyre::bail!(
                         "No machine-managed published drives matched the requested drive set"
                     );
                 }
+                self.collect_rows_from_sync_dir_and_drive_letters(
+                    &sync_dir,
+                    drive_letters,
+                    QueryExecutionOptions {
+                        ignore: options.ignore,
+                        source: QuerySource::DiskOnly,
+                    },
+                )
+            }
+            QuerySource::DaemonOnly => {
+                let config = crate::machine::ipc::load_machine_daemon_client_config()?;
                 crate::machine::service::start_service_if_needed(&config.service_name)?;
                 crate::machine::ipc::ensure_daemon_compatible(&config)?;
                 let request = crate::machine::ipc::QueryRequest {

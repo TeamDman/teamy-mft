@@ -13,7 +13,11 @@ use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Foundation::LocalFree;
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+use windows::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows::Win32::Security::GetTokenInformation;
+use windows::Win32::Security::PSECURITY_DESCRIPTOR;
+use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Security::TOKEN_QUERY;
 use windows::Win32::Security::TOKEN_USER;
 use windows::Win32::Security::TokenUser;
@@ -132,6 +136,27 @@ pub fn take_ownership(path: &Path) -> eyre::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub struct OwnedSecurityAttributes {
+    attributes: SECURITY_ATTRIBUTES,
+    descriptor: PSECURITY_DESCRIPTOR,
+}
+
+impl OwnedSecurityAttributes {
+    #[must_use]
+    pub fn as_mut_ptr(&mut self) -> *mut c_void {
+        std::ptr::from_mut::<SECURITY_ATTRIBUTES>(&mut self.attributes).cast::<c_void>()
+    }
+}
+
+impl Drop for OwnedSecurityAttributes {
+    fn drop(&mut self) {
+        if !self.descriptor.0.is_null() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.descriptor.0.cast()))) };
+        }
+    }
+}
+
 #[must_use]
 pub fn service_sddl(owner_sid: &str) -> String {
     format!(
@@ -142,6 +167,38 @@ pub fn service_sddl(owner_sid: &str) -> String {
 #[must_use]
 pub fn named_pipe_sddl(owner_sid: &str) -> String {
     format!("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{owner_sid})")
+}
+
+/// # Errors
+///
+/// Returns an error if the named pipe security descriptor cannot be created from SDDL.
+pub fn named_pipe_security_attributes(owner_sid: &str) -> eyre::Result<OwnedSecurityAttributes> {
+    let sddl = named_pipe_sddl(owner_sid);
+    let wide = encode_wide(&sddl);
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(wide.as_ptr()),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+    }?;
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "SECURITY_ATTRIBUTES length fits in u32 on supported Windows targets"
+    )]
+    let length = std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32;
+
+    Ok(OwnedSecurityAttributes {
+        attributes: SECURITY_ATTRIBUTES {
+            nLength: length,
+            lpSecurityDescriptor: descriptor.0.cast::<c_void>(),
+            bInheritHandle: false.into(),
+        },
+        descriptor,
+    })
 }
 
 #[must_use]

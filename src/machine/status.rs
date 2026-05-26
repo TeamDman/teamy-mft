@@ -38,6 +38,21 @@ pub struct MachineStatus {
     pub drives: Vec<MachineDriveStatus>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PublishedDriveSummary {
+    pub drive_letter: char,
+    pub mft_path: PathBuf,
+    pub mft_modified_at: Option<SystemTime>,
+    pub base_index_path: PathBuf,
+    pub base_index_modified_at: Option<SystemTime>,
+    pub overlay_index_path: PathBuf,
+    pub overlay_index_modified_at: Option<SystemTime>,
+    pub checkpoint_path: PathBuf,
+    pub checkpoint_modified_at: Option<SystemTime>,
+    pub checkpoint: Option<PublishedCheckpoint>,
+    pub warning: Option<String>,
+}
+
 /// # Errors
 ///
 /// Returns an error if the machine config or checkpoint files cannot be read.
@@ -74,7 +89,7 @@ pub fn load_machine_status(
                 let (checkpoint_modified_at, checkpoint_metadata_warning) =
                     modified_at(&paths.checkpoint_path, "checkpoint metadata")?;
                 let (checkpoint, checkpoint_warning) =
-                    load_checkpoint_status(&paths.checkpoint_path)?;
+                    load_checkpoint_status(&paths.checkpoint_path);
                 let warning = [
                     mft_warning,
                     base_index_warning,
@@ -145,24 +160,75 @@ fn modified_at(
     }
 }
 
-fn load_checkpoint_status(
-    path: &std::path::Path,
-) -> eyre::Result<(Option<PublishedCheckpoint>, Option<String>)> {
+fn load_checkpoint_status(path: &std::path::Path) -> (Option<PublishedCheckpoint>, Option<String>) {
     match load_checkpoint(path) {
-        Ok(checkpoint) => Ok((checkpoint, None)),
-        Err(error) if is_access_denied_error(&error) => Ok((
+        Ok(checkpoint) => (checkpoint, None),
+        Err(error) if is_access_denied_error(&error) => (
             None,
             Some(format!(
                 "cannot read checkpoint contents at {}: {error}",
                 path.display()
             )),
-        )),
-        Err(error) => Ok((
+        ),
+        Err(error) => (
             None,
             Some(format!(
                 "cannot parse checkpoint contents at {}: {error}",
                 path.display()
             )),
-        )),
+        ),
     }
+}
+
+/// # Errors
+///
+/// Returns an error if selected drive letters cannot be resolved or if non-permission filesystem errors occur.
+pub fn collect_published_drive_summaries(
+    cache_root: &std::path::Path,
+    drive_letter_pattern: &DriveLetterPattern,
+) -> eyre::Result<Vec<PublishedDriveSummary>> {
+    drive_letter_pattern
+        .into_drive_letters()?
+        .into_iter()
+        .map(|drive_letter| {
+            let paths = published_drive_paths(cache_root, drive_letter);
+            let (mft_modified_at, mft_warning) =
+                modified_at(&paths.mft_path, "mft snapshot metadata")?;
+            let (base_index_modified_at, base_index_warning) =
+                modified_at(&paths.base_index_path, "base index metadata")?;
+            let (overlay_index_modified_at, overlay_index_warning) =
+                modified_at(&paths.overlay_index_path, "overlay index metadata")?;
+            let (checkpoint_modified_at, checkpoint_metadata_warning) =
+                modified_at(&paths.checkpoint_path, "checkpoint metadata")?;
+            let (checkpoint, checkpoint_warning) = load_checkpoint_status(&paths.checkpoint_path);
+            let warning = [
+                mft_warning,
+                base_index_warning,
+                overlay_index_warning,
+                checkpoint_metadata_warning,
+                checkpoint_warning,
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("; ");
+            Ok(PublishedDriveSummary {
+                drive_letter,
+                mft_path: paths.mft_path,
+                mft_modified_at,
+                base_index_path: paths.base_index_path,
+                base_index_modified_at,
+                overlay_index_path: paths.overlay_index_path,
+                overlay_index_modified_at,
+                checkpoint_path: paths.checkpoint_path,
+                checkpoint_modified_at,
+                checkpoint,
+                warning: if warning.is_empty() {
+                    None
+                } else {
+                    Some(warning)
+                },
+            })
+        })
+        .collect()
 }

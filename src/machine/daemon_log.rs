@@ -208,6 +208,9 @@ where
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         let metadata = event.metadata();
+        if !should_capture_daemon_log_target(metadata.target(), *metadata.level()) {
+            return;
+        }
         let mut visitor = TraceFieldVisitor::default();
         event.record(&mut visitor);
 
@@ -240,6 +243,14 @@ where
         };
         daemon_log_hub().publish(event);
     }
+}
+
+fn should_capture_daemon_log_target(target: &str, level: tracing::Level) -> bool {
+    if target.starts_with("teamy_mft") || target.starts_with("teamy_windows") {
+        return true;
+    }
+
+    level >= tracing::Level::WARN
 }
 
 fn map_level(level: tracing::Level) -> DaemonLogLevel {

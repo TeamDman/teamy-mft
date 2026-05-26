@@ -3470,6 +3470,7 @@ dependencies = [
  "tracing-tracy",
  "uom",
  "vox",
+ "vox-stream",
  "widestring",
  "windows",
  "winstructs",

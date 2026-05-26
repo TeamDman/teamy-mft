@@ -40,6 +40,8 @@ use std::sync::atomic::AtomicIsize;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use tokio::net::windows::named_pipe::NamedPipeServer;
+use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::Mutex;
 use tracing::Instrument;
 use tracing::debug;
@@ -67,6 +69,16 @@ use windows::core::PCWSTR;
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SERVICE_STATUS_HANDLE_SLOT: AtomicIsize = AtomicIsize::new(0);
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+type DaemonPipeReader = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
+type DaemonPipeWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
+type DaemonPipeLink = vox_stream::StreamLink<DaemonPipeReader, DaemonPipeWriter>;
+
+struct MachineDaemonPipeAcceptor {
+    addr: String,
+    owner_sid: String,
+    pending: Mutex<NamedPipeServer>,
+}
 
 #[derive(Debug, Clone)]
 pub struct MachineCacheSyncResult {
@@ -99,7 +111,7 @@ impl DaemonRuntimeState {
     fn new(config: &MachineConfig) -> Self {
         Self {
             owner_sid: config.owner_sid.clone(),
-            cache_root: config.cache_root.clone(),
+            cache_root: config.cache_root.clone().into_inner(),
             drives: FxHashMap::default(),
             degraded: FxHashMap::default(),
         }
@@ -124,8 +136,45 @@ impl DaemonRuntimeState {
         Ok(rows)
     }
 
-    fn status_response(&self, buffered_log_count: usize) -> StatusResponse {
+    fn status_response(&self, buffered_log_count: usize, drive_letters: &[char]) -> StatusResponse {
+        let published_drives =
+            collect_published_drive_summaries_for_letters(&self.cache_root, drive_letters)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|drive| crate::machine::ipc::PublishedDriveStatus {
+                    drive_letter: drive.drive_letter,
+                    mft_path: drive.mft_path.display().to_string(),
+                    mft_modified_at_unix_ms: drive.mft_modified_at.map(system_time_to_unix_ms),
+                    base_index_path: drive.base_index_path.display().to_string(),
+                    base_index_modified_at_unix_ms: drive
+                        .base_index_modified_at
+                        .map(system_time_to_unix_ms),
+                    overlay_index_path: drive.overlay_index_path.display().to_string(),
+                    overlay_index_modified_at_unix_ms: drive
+                        .overlay_index_modified_at
+                        .map(system_time_to_unix_ms),
+                    checkpoint_path: drive.checkpoint_path.display().to_string(),
+                    checkpoint_modified_at_unix_ms: drive
+                        .checkpoint_modified_at
+                        .map(system_time_to_unix_ms),
+                    snapshot_usn: drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.snapshot_usn),
+                    last_usn: drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.last_usn),
+                    journal_id: drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.journal_id),
+                    warning: drive.warning,
+                })
+                .collect();
         StatusResponse {
+            cache_root: self.cache_root.display().to_string(),
+            owner_sid: self.owner_sid.clone(),
             loaded_drive_letters: self.drives.keys().copied().collect(),
             degraded_drives: self
                 .degraded
@@ -136,6 +185,7 @@ impl DaemonRuntimeState {
                 })
                 .collect(),
             buffered_log_count,
+            published_drives,
         }
     }
 
@@ -464,7 +514,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn status(
         &self,
-        _request: StatusRequest,
+        request: StatusRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
     ) -> Result<StatusResponse, MachineError> {
         let correlation_id = next_correlation_id("status");
@@ -477,7 +527,10 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         let response = async move {
             let buffered_log_count = daemon_log_hub().len();
-            let status = state.lock().await.status_response(buffered_log_count);
+            let status = state
+                .lock()
+                .await
+                .status_response(buffered_log_count, &request.drive_letters);
             tracing::debug!(
                 loaded_drive_count = status.loaded_drive_letters.len(),
                 degraded_drive_count = status.degraded_drives.len(),
@@ -547,6 +600,78 @@ impl MachineDaemonRpc for MachineDaemonService {
         let _ = logs.close(Vec::default()).await;
         Ok(())
     }
+}
+
+fn system_time_to_unix_ms(value: std::time::SystemTime) -> u64 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Unix milliseconds fit in u64 for practical system lifetimes"
+    )]
+    {
+        value
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+}
+
+impl MachineDaemonPipeAcceptor {
+    fn bind(addr: String, owner_sid: String) -> eyre::Result<Self> {
+        let server = create_named_pipe_server(&addr, &owner_sid, true)?;
+        Ok(Self {
+            addr,
+            owner_sid,
+            pending: Mutex::new(server),
+        })
+    }
+
+    async fn accept(&self) -> eyre::Result<DaemonPipeLink> {
+        let mut guard = self.pending.lock().await;
+        guard.connect().await?;
+        let next = create_named_pipe_server(&self.addr, &self.owner_sid, false)?;
+        let connected = std::mem::replace(&mut *guard, next);
+        drop(guard);
+        let (reader, writer) = tokio::io::split(connected);
+        Ok(vox_stream::StreamLink::new(
+            Box::new(reader),
+            Box::new(writer),
+        ))
+    }
+}
+
+fn create_named_pipe_server(
+    addr: &str,
+    owner_sid: &str,
+    first_pipe_instance: bool,
+) -> eyre::Result<NamedPipeServer> {
+    let mut security_attributes =
+        crate::machine::security::named_pipe_security_attributes(owner_sid)?;
+    let mut options = ServerOptions::new();
+    if first_pipe_instance {
+        options.first_pipe_instance(true);
+    }
+    // SAFETY: the security attributes are built from a live, valid security descriptor and
+    // remain alive for the duration of the creation call.
+    Ok(unsafe {
+        options.create_with_security_attributes_raw(addr, security_attributes.as_mut_ptr())?
+    })
+}
+
+fn collect_published_drive_summaries_for_letters(
+    cache_root: &std::path::Path,
+    drive_letters: &[char],
+) -> eyre::Result<Vec<crate::machine::status::PublishedDriveSummary>> {
+    drive_letters
+        .iter()
+        .copied()
+        .map(|drive_letter| {
+            crate::machine::status::collect_published_drive_summaries(
+                cache_root,
+                &teamy_windows::storage::DriveLetterPattern(drive_letter.to_string()),
+            )
+        })
+        .collect::<eyre::Result<Vec<_>>>()
+        .map(|summaries| summaries.into_iter().flatten().collect())
 }
 
 /// # Errors
@@ -666,7 +791,7 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         let mut last_activity = std::time::Instant::now();
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
         let acceptor =
-            vox::transport::local::LocalLinkAcceptor::bind(config.pipe_name.clone())?;
+            MachineDaemonPipeAcceptor::bind(config.pipe_name.clone(), config.owner_sid.clone())?;
 
         loop {
             if STOP_REQUESTED.load(Ordering::Relaxed) {
@@ -680,22 +805,20 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
                 accept_result = acceptor.accept() => {
                     let link = accept_result?;
                     let rpc_service = service.clone();
-                    tokio::spawn(async move {
-                        let response = vox::acceptor_on(link)
-                            .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
-                            .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
-                            .await;
-                        match response {
-                            Ok(client) => {
-                                tracing::debug!("Daemon RPC connection established");
-                                client.caller.closed().await;
-                                tracing::debug!("Daemon RPC connection closed");
-                            }
-                            Err(error) => {
-                                tracing::warn!(error = %error, "Daemon RPC connection failed");
-                            }
+                    let response = vox::acceptor_on(link)
+                        .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
+                        .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
+                        .await;
+                    match response {
+                        Ok(client) => {
+                            tracing::debug!("Daemon RPC connection established");
+                            client.caller.closed().await;
+                            tracing::debug!("Daemon RPC connection closed");
                         }
-                    });
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Daemon RPC connection failed");
+                        }
+                    }
                     last_activity = std::time::Instant::now();
                 }
                 () = tokio::time::sleep(Duration::from_millis(250)) => {

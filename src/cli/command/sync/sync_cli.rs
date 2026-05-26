@@ -2,6 +2,7 @@ use crate::cli::command::sync::IfExistsOutputBehaviour;
 use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::cli::command::sync::index::SyncIndexArgs;
 use crate::cli::command::sync::mft::SyncMftArgs;
+use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
 use crate::machine::ipc::IfExistsDto;
 use crate::machine::ipc::SyncModeDto;
 use arbitrary::Arbitrary;
@@ -27,6 +28,10 @@ pub struct SyncArgs {
     /// Sync stage to run
     #[facet(args::subcommand)]
     pub command: Option<SyncCommand>,
+
+    /// Bypass the machine daemon and run sync work directly in this process
+    #[facet(args::named, default)]
+    pub no_daemon: bool,
 }
 
 impl SyncArgs {
@@ -38,7 +43,17 @@ impl SyncArgs {
     /// or rejects the sync request.
     pub fn invoke(self) -> eyre::Result<()> {
         let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
-        let config = crate::machine::config::load_required_machine_config()?;
+        if self.no_daemon {
+            let cache_root = crate::machine::config::load_required_cache_root()?;
+            let drive_infos = resolve_drive_infos_in_dir_for_letters(&cache_root, drive_letters)?;
+            let command = self.command.unwrap_or_default();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            return runtime.block_on(command.invoke(drive_infos, &self.if_exists));
+        }
+
+        let config = crate::machine::ipc::load_machine_daemon_client_config()?;
         let request = crate::machine::ipc::SyncRequest {
             drive_letters,
             mode: SyncModeDto::from(self.command.unwrap_or_default()),

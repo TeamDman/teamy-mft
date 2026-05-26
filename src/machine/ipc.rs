@@ -13,6 +13,7 @@ pub use teamy_mft_daemon_rpc::MachineDaemonRpcDispatcher;
 pub use teamy_mft_daemon_rpc::MachineError;
 pub use teamy_mft_daemon_rpc::MachineErrorKind;
 pub use teamy_mft_daemon_rpc::PingResponse;
+pub use teamy_mft_daemon_rpc::PublishedDriveStatus;
 pub use teamy_mft_daemon_rpc::QueryRequest;
 pub use teamy_mft_daemon_rpc::QueryResponse as RpcQueryResponse;
 pub use teamy_mft_daemon_rpc::QueryStreamResponse;
@@ -135,6 +136,13 @@ pub fn ensure_daemon_compatible(config: &MachineConfig) -> eyre::Result<PingResp
         );
     }
     Ok(ping_response)
+}
+
+/// # Errors
+///
+/// Returns an error if the installed machine config exists but cannot be parsed.
+pub fn load_machine_daemon_client_config() -> eyre::Result<MachineConfig> {
+    crate::machine::config::load_machine_client_config()
 }
 
 /// # Errors

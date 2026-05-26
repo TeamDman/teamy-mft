@@ -15,6 +15,10 @@ pub struct StatusArgs {
     /// Show per-drive artifact paths and timestamps.
     #[facet(args::named, default)]
     pub verbose: bool,
+
+    /// Bypass the machine daemon and inspect published files directly from this process
+    #[facet(args::named, default)]
+    pub no_daemon: bool,
 }
 
 #[derive(Debug)]
@@ -30,35 +34,35 @@ impl StatusArgs {
     ///
     /// Returns an error if drive letters cannot be resolved or cached file metadata cannot be read.
     pub fn invoke(self) -> eyre::Result<()> {
-        let machine_status =
+        let mut machine_status =
             crate::machine::status::load_machine_status(&self.drive_letter_pattern)?;
-        let daemon_status = load_daemon_status_summary(&machine_status)?;
-        print_machine_summary(&machine_status, self.verbose);
-        print_daemon_summary(&daemon_status);
+        let daemon_status = load_daemon_status_summary(&self.drive_letter_pattern, self.no_daemon)?;
+        if daemon_status.ping.is_some() {
+            machine_status.service_state = crate::machine::service::WindowsServiceState::Running;
+        }
+        print_machine_summary(
+            &machine_status,
+            self.verbose,
+            daemon_status.runtime_status.is_none(),
+        );
+        print_daemon_summary(&daemon_status, self.verbose);
         let now = SystemTime::now();
-        print_cache_summary(&machine_status, now, self.verbose);
+        print_cache_summary(
+            &machine_status,
+            daemon_status.runtime_status.as_ref(),
+            now,
+            self.verbose,
+        );
 
         Ok(())
     }
 }
 
 fn load_daemon_status_summary(
-    machine_status: &crate::machine::status::MachineStatus,
+    drive_letter_pattern: &DriveLetterPattern,
+    no_daemon: bool,
 ) -> eyre::Result<DaemonStatusSummary> {
-    let Some(config) = machine_status.config.as_ref() else {
-        return Ok(DaemonStatusSummary {
-            ping: None,
-            compatibility: None,
-            runtime_status: None,
-            warning: None,
-        });
-    };
-
-    if !matches!(
-        machine_status.service_state,
-        crate::machine::service::WindowsServiceState::Running
-            | crate::machine::service::WindowsServiceState::StartPending
-    ) {
+    if no_daemon {
         return Ok(DaemonStatusSummary {
             ping: None,
             compatibility: None,
@@ -66,10 +70,19 @@ fn load_daemon_status_summary(
             warning: None,
         });
     }
+    let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+    if let Err(error) = crate::machine::service::start_service_if_needed(&config.service_name) {
+        return Ok(DaemonStatusSummary {
+            ping: None,
+            compatibility: None,
+            runtime_status: None,
+            warning: Some(format!("daemon start failed: {error}")),
+        });
+    }
 
     let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
     let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-    let ping_response = crate::machine::ipc::ping(config, logs_tx);
+    let ping_response = crate::machine::ipc::ping(&config, logs_tx);
     let _ = log_drain.join();
 
     let ping = match ping_response? {
@@ -102,8 +115,13 @@ fn load_daemon_status_summary(
     let runtime_status = if compatibility.rpc_compat_matches {
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-        let response =
-            crate::machine::ipc::status(config, crate::machine::ipc::StatusRequest, logs_tx);
+        let response = crate::machine::ipc::status(
+            &config,
+            crate::machine::ipc::StatusRequest {
+                drive_letters: drive_letter_pattern.clone().into_drive_letters()?,
+            },
+            logs_tx,
+        );
         let _ = log_drain.join();
         response?.ok()
     } else {
@@ -139,19 +157,12 @@ fn print_daemon_runtime_summary(status: &crate::machine::ipc::StatusResponse) {
     }
 }
 
-fn print_daemon_summary(summary: &DaemonStatusSummary) {
-    println!("machine-daemon-cli-app-version={}", crate::APP_SEMVER);
-    println!(
-        "machine-daemon-cli-git-revision={}",
-        crate::APP_GIT_REVISION
-    );
-    println!(
-        "machine-daemon-cli-rpc-compat-version={}",
-        crate::DAEMON_RPC_COMPAT_VERSION
-    );
+fn print_daemon_summary(summary: &DaemonStatusSummary, verbose: bool) {
     println!("machine-daemon-reachable={}", summary.ping.is_some());
 
-    if let Some(ping) = &summary.ping {
+    if let Some(ping) = &summary.ping
+        && verbose
+    {
         println!("machine-daemon-service-name={}", ping.service_name);
         println!("machine-daemon-app-version={}", ping.build.app_version);
         println!("machine-daemon-git-revision={}", ping.build.git_revision);
@@ -163,28 +174,39 @@ fn print_daemon_summary(summary: &DaemonStatusSummary) {
 
     if let Some(compatibility) = &summary.compatibility {
         println!(
-            "machine-daemon-rpc-compat-match={}",
-            compatibility.rpc_compat_matches
-        );
-        println!(
-            "machine-daemon-app-version-match={}",
-            compatibility.app_version_matches
-        );
-        println!(
-            "machine-daemon-git-revision-match={}",
-            compatibility.git_revision_matches
-        );
-        println!(
             "machine-daemon-build-fully-matching={}",
             compatibility.is_fully_matching()
         );
+        if verbose || !compatibility.is_fully_matching() {
+            println!("machine-daemon-cli-app-version={}", crate::APP_SEMVER);
+            println!(
+                "machine-daemon-cli-git-revision={}",
+                crate::APP_GIT_REVISION
+            );
+            println!(
+                "machine-daemon-cli-rpc-compat-version={}",
+                crate::DAEMON_RPC_COMPAT_VERSION
+            );
+            println!(
+                "machine-daemon-rpc-compat-match={}",
+                compatibility.rpc_compat_matches
+            );
+            println!(
+                "machine-daemon-app-version-match={}",
+                compatibility.app_version_matches
+            );
+            println!(
+                "machine-daemon-git-revision-match={}",
+                compatibility.git_revision_matches
+            );
+        }
     }
 
     if let Some(warning) = &summary.warning {
         println!("machine-daemon-warning={warning}");
     }
 
-    if let Some(status) = &summary.runtime_status {
+    if verbose && let Some(status) = &summary.runtime_status {
         print_daemon_runtime_summary(status);
     }
 }
@@ -193,28 +215,39 @@ fn print_daemon_summary(summary: &DaemonStatusSummary) {
     clippy::too_many_lines,
     reason = "Verbose status output is intentionally emitted as a flat summary block"
 )]
-fn print_machine_summary(machine_status: &crate::machine::status::MachineStatus, verbose: bool) {
+fn print_machine_summary(
+    machine_status: &crate::machine::status::MachineStatus,
+    verbose: bool,
+    include_direct_drive_details: bool,
+) {
     println!("machine-managed={}", machine_status.config.is_some());
     println!(
         "machine-service-state={}",
         format_service_state(machine_status.service_state)
     );
-    println!(
-        "machine-current-user-sid={}",
-        machine_status
-            .current_user_sid
-            .as_deref()
-            .unwrap_or("unknown")
-    );
+    if verbose {
+        println!(
+            "machine-current-user-sid={}",
+            machine_status
+                .current_user_sid
+                .as_deref()
+                .unwrap_or("unknown")
+        );
+    }
     if let Some(config_warning) = &machine_status.config_warning {
         println!("machine-config-warning={config_warning}");
     }
 
     if let Some(config) = &machine_status.config {
-        println!("machine-service-name={}", config.service_name);
         println!("machine-cache-root={}", config.cache_root.display());
-        println!("machine-owner-sid={}", config.owner_sid);
-        println!("machine-owner-access={}", machine_status.owner_access);
+        if verbose {
+            println!("machine-service-name={}", config.service_name);
+            println!("machine-owner-sid={}", config.owner_sid);
+            println!("machine-owner-access={}", machine_status.owner_access);
+        }
+    }
+
+    if include_direct_drive_details && let Some(_config) = &machine_status.config {
         println!("machine-drive-count={}", machine_status.drives.len());
         println!(
             "machine-published-drive-count={}",
@@ -316,9 +349,15 @@ fn print_machine_summary(machine_status: &crate::machine::status::MachineStatus,
 
 fn print_cache_summary(
     machine_status: &crate::machine::status::MachineStatus,
+    daemon_status: Option<&crate::machine::ipc::StatusResponse>,
     now: SystemTime,
     verbose: bool,
 ) {
+    if let Some(daemon_status) = daemon_status {
+        print_cache_summary_from_daemon(daemon_status, now, verbose);
+        return;
+    }
+
     let query_ready_drives = machine_status
         .drives
         .iter()
@@ -399,6 +438,168 @@ fn print_cache_summary(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Verbose daemon-backed cache status is intentionally emitted as a flat summary block"
+)]
+fn print_cache_summary_from_daemon(
+    daemon_status: &crate::machine::ipc::StatusResponse,
+    now: SystemTime,
+    verbose: bool,
+) {
+    let query_ready_drives = daemon_status
+        .published_drives
+        .iter()
+        .filter(|drive| {
+            drive.mft_modified_at_unix_ms.is_some()
+                && drive.base_index_modified_at_unix_ms.is_some()
+        })
+        .collect::<Vec<_>>();
+    let oldest_query_ready_at = query_ready_drives
+        .iter()
+        .filter_map(|drive| daemon_query_ready_at(drive))
+        .min();
+    let newest_query_ready_at = query_ready_drives
+        .iter()
+        .filter_map(|drive| daemon_query_ready_at(drive))
+        .max();
+
+    println!(
+        "machine-drive-count={}",
+        daemon_status.published_drives.len()
+    );
+    println!(
+        "machine-published-drive-count={}",
+        daemon_status.published_drives.len()
+    );
+    println!(
+        "machine-cache-query-ready-drive-count={}",
+        query_ready_drives.len()
+    );
+    println!(
+        "machine-cache-oldest-query-ready-age={}",
+        crate::status::format_optional_duration(
+            oldest_query_ready_at.map(|value| age_since(now, value))
+        )
+    );
+    println!(
+        "machine-cache-newest-query-ready-age={}",
+        crate::status::format_optional_duration(
+            newest_query_ready_at.map(|value| age_since(now, value))
+        )
+    );
+
+    if !verbose {
+        return;
+    }
+
+    println!("machine-cache-root={}", daemon_status.cache_root);
+    println!("machine-owner-sid={}", daemon_status.owner_sid);
+    println!(
+        "machine-cache-oldest-query-ready-at={}",
+        crate::status::format_optional_system_time(oldest_query_ready_at)
+    );
+    println!(
+        "machine-cache-newest-query-ready-at={}",
+        crate::status::format_optional_system_time(newest_query_ready_at)
+    );
+
+    for drive in &daemon_status.published_drives {
+        println!("machine-drive-{}-published=true", drive.drive_letter);
+        println!(
+            "machine-drive-{}-overlay-present={}",
+            drive.drive_letter,
+            drive.overlay_index_modified_at_unix_ms.is_some()
+        );
+        println!(
+            "machine-drive-{}-snapshot-usn={}",
+            drive.drive_letter,
+            format_optional_u64(drive.snapshot_usn)
+        );
+        println!(
+            "machine-drive-{}-last-usn={}",
+            drive.drive_letter,
+            format_optional_u64(drive.last_usn)
+        );
+        if let Some(warning) = &drive.warning {
+            println!("machine-drive-{}-warning={warning}", drive.drive_letter);
+        }
+        println!(
+            "machine-cache-drive-{}-query-ready={}",
+            drive.drive_letter,
+            daemon_query_ready_at(drive).is_some()
+        );
+        println!(
+            "machine-cache-drive-{}-query-ready-age={}",
+            drive.drive_letter,
+            crate::status::format_optional_duration(
+                daemon_query_ready_at(drive).map(|value| age_since(now, value))
+            )
+        );
+        println!(
+            "machine-cache-drive-{}-mft-path={}",
+            drive.drive_letter, drive.mft_path
+        );
+        println!(
+            "machine-cache-drive-{}-mft-modified-at={}",
+            drive.drive_letter,
+            format_optional_unix_ms(drive.mft_modified_at_unix_ms)
+        );
+        println!(
+            "machine-cache-drive-{}-index-path={}",
+            drive.drive_letter, drive.base_index_path
+        );
+        println!(
+            "machine-cache-drive-{}-index-modified-at={}",
+            drive.drive_letter,
+            format_optional_unix_ms(drive.base_index_modified_at_unix_ms)
+        );
+        if verbose {
+            println!(
+                "machine-drive-{}-mft-path={}",
+                drive.drive_letter, drive.mft_path
+            );
+            println!(
+                "machine-drive-{}-mft-modified-at={}",
+                drive.drive_letter,
+                format_optional_unix_ms(drive.mft_modified_at_unix_ms)
+            );
+            println!(
+                "machine-drive-{}-base-index-path={}",
+                drive.drive_letter, drive.base_index_path
+            );
+            println!(
+                "machine-drive-{}-base-index-modified-at={}",
+                drive.drive_letter,
+                format_optional_unix_ms(drive.base_index_modified_at_unix_ms)
+            );
+            println!(
+                "machine-drive-{}-overlay-index-path={}",
+                drive.drive_letter, drive.overlay_index_path
+            );
+            println!(
+                "machine-drive-{}-overlay-index-modified-at={}",
+                drive.drive_letter,
+                format_optional_unix_ms(drive.overlay_index_modified_at_unix_ms)
+            );
+            println!(
+                "machine-drive-{}-checkpoint-path={}",
+                drive.drive_letter, drive.checkpoint_path
+            );
+            println!(
+                "machine-drive-{}-checkpoint-modified-at={}",
+                drive.drive_letter,
+                format_optional_unix_ms(drive.checkpoint_modified_at_unix_ms)
+            );
+            println!(
+                "machine-drive-{}-journal-id={}",
+                drive.drive_letter,
+                format_optional_u64(drive.journal_id)
+            );
+        }
+    }
+}
+
 fn query_ready_at(drive: &crate::machine::status::MachineDriveStatus) -> Option<SystemTime> {
     match (drive.mft_modified_at, drive.base_index_modified_at) {
         (Some(mft_modified_at), Some(index_modified_at)) => {
@@ -411,6 +612,28 @@ fn query_ready_at(drive: &crate::machine::status::MachineDriveStatus) -> Option<
 fn age_since(now: SystemTime, then: SystemTime) -> std::time::Duration {
     now.duration_since(then)
         .unwrap_or(std::time::Duration::ZERO)
+}
+
+fn daemon_query_ready_at(drive: &crate::machine::ipc::PublishedDriveStatus) -> Option<SystemTime> {
+    match (
+        drive.mft_modified_at_unix_ms.map(unix_ms_to_system_time),
+        drive
+            .base_index_modified_at_unix_ms
+            .map(unix_ms_to_system_time),
+    ) {
+        (Some(mft_modified_at), Some(index_modified_at)) => {
+            Some(mft_modified_at.min(index_modified_at))
+        }
+        _ => None,
+    }
+}
+
+fn unix_ms_to_system_time(value: u64) -> SystemTime {
+    std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+}
+
+fn format_optional_unix_ms(value: Option<u64>) -> String {
+    crate::status::format_optional_system_time(value.map(unix_ms_to_system_time))
 }
 
 fn format_optional_u64(value: Option<u64>) -> String {

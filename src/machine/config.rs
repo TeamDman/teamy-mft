@@ -2,6 +2,7 @@ use crate::paths::EnsureParentDirExists;
 use facet::Facet;
 use std::fs;
 use std::io;
+use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -17,7 +18,7 @@ pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 pub struct MachineConfig {
     pub version: u32,
     pub owner_sid: String,
-    pub cache_root: PathBuf,
+    pub cache_root: FacetPathBuf,
     pub pipe_name: String,
     pub service_name: String,
     pub idle_timeout_secs: u64,
@@ -29,12 +30,127 @@ impl MachineConfig {
         Self {
             version: 1,
             owner_sid,
-            cache_root: cache_root.unwrap_or_else(default_cache_root),
+            cache_root: cache_root.unwrap_or_else(default_cache_root).into(),
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct FacetPathBuf(PathBuf);
+
+impl FacetPathBuf {
+    #[must_use]
+    pub fn into_inner(self) -> PathBuf {
+        self.0
+    }
+}
+
+impl Deref for FacetPathBuf {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<PathBuf> for FacetPathBuf {
+    fn from(value: PathBuf) -> Self {
+        Self(value)
+    }
+}
+
+impl From<FacetPathBuf> for PathBuf {
+    fn from(value: FacetPathBuf) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<Path> for FacetPathBuf {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FacetPathBuf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.display().fmt(f)
+    }
+}
+
+unsafe fn facet_path_buf_proxy_convert_out(
+    target_ptr: facet::PtrConst,
+    proxy_ptr: facet::PtrUninit,
+) -> Result<facet::PtrMut, String> {
+    // SAFETY: `target_ptr` points at a valid `FacetPathBuf` and `proxy_ptr` points at
+    // facet-managed storage for a `String` proxy with the correct layout for this conversion.
+    unsafe {
+        let path = target_ptr.get::<FacetPathBuf>();
+        let display_string = path.0.display().to_string();
+        let roundtrip = PathBuf::from(&display_string);
+        if roundtrip != path.0 {
+            return Err(format!(
+                "Path {} cannot be safely serialized through display() without loss",
+                path.0.display()
+            ));
+        }
+
+        #[allow(
+            clippy::cast_ptr_alignment,
+            reason = "facet allocates proxy storage with the alignment required by the proxy type"
+        )]
+        let proxy_mut = proxy_ptr.as_mut_byte_ptr().cast::<String>();
+        proxy_mut.write(display_string);
+        Ok(facet::PtrMut::new(proxy_mut.cast::<u8>()))
+    }
+}
+
+unsafe fn facet_path_buf_proxy_convert_in(
+    proxy_ptr: facet::PtrConst,
+    target_ptr: facet::PtrUninit,
+) -> Result<facet::PtrMut, String> {
+    // SAFETY: `proxy_ptr` points at a valid `String` proxy and `target_ptr` points at
+    // facet-managed storage for a `FacetPathBuf` destination with the correct layout.
+    unsafe {
+        let display_string = proxy_ptr.read::<String>();
+        let roundtrip = PathBuf::from(&display_string);
+        let redisplay = roundtrip.display().to_string();
+        if redisplay != display_string {
+            return Err(format!(
+                "Path {display_string} did not round-trip cleanly through display()"
+            ));
+        }
+
+        #[allow(
+            clippy::cast_ptr_alignment,
+            reason = "facet allocates target storage with the alignment required by the target type"
+        )]
+        let target_mut = target_ptr.as_mut_byte_ptr().cast::<FacetPathBuf>();
+        target_mut.write(FacetPathBuf(roundtrip));
+        Ok(facet::PtrMut::new(target_mut.cast::<u8>()))
+    }
+}
+
+const FACET_PATH_BUF_PROXY: facet::ProxyDef = facet::ProxyDef {
+    shape: <String as Facet>::SHAPE,
+    convert_in: facet_path_buf_proxy_convert_in,
+    convert_out: facet_path_buf_proxy_convert_out,
+};
+
+// SAFETY: `FacetPathBuf` is serialized through an owned `String` proxy that validates
+// lossless round-tripping in both directions before constructing or emitting the path.
+unsafe impl Facet<'_> for FacetPathBuf {
+    const SHAPE: &'static facet::Shape = &const {
+        facet::ShapeBuilder::for_sized::<FacetPathBuf>("FacetPathBuf")
+            .module_path("teamy_mft::machine::config")
+            .ty(facet::Type::User(facet::UserType::Opaque))
+            .def(facet::Def::Scalar)
+            .proxy(&FACET_PATH_BUF_PROXY)
+            .build()
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -184,12 +300,38 @@ pub fn load_required_machine_config() -> eyre::Result<MachineConfig> {
 
 /// # Errors
 ///
+/// Returns an error if the installed machine config exists but cannot be parsed.
+pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
+    match load_machine_config() {
+        Ok(Some(config)) => Ok(config),
+        Ok(None) => Ok(MachineConfig {
+            version: 1,
+            owner_sid: String::new(),
+            cache_root: default_cache_root().into(),
+            pipe_name: String::from(DEFAULT_PIPE_NAME),
+            service_name: String::from(DEFAULT_SERVICE_NAME),
+            idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
+        }),
+        Err(error) if is_access_denied_error(&error) => Ok(MachineConfig {
+            version: 1,
+            owner_sid: String::new(),
+            cache_root: default_cache_root().into(),
+            pipe_name: String::from(DEFAULT_PIPE_NAME),
+            service_name: String::from(DEFAULT_SERVICE_NAME),
+            idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// # Errors
+///
 /// Returns an error if the machine cache root is unavailable because install has not been run.
 #[instrument(level = "debug")]
 pub fn load_required_cache_root() -> eyre::Result<PathBuf> {
     let config = load_required_machine_config()?;
     debug!(cache_root = %config.cache_root.display(), "Resolved machine cache root");
-    Ok(config.cache_root)
+    Ok(config.cache_root.into_inner())
 }
 
 /// # Errors

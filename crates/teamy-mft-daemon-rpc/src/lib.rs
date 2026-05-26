@@ -121,7 +121,9 @@ pub struct SyncRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet, Default)]
-pub struct StatusRequest;
+pub struct StatusRequest {
+    pub drive_letters: Vec<char>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct LogStreamRequest {
@@ -131,9 +133,29 @@ pub struct LogStreamRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct StatusResponse {
+    pub cache_root: String,
+    pub owner_sid: String,
     pub loaded_drive_letters: Vec<char>,
     pub degraded_drives: Vec<DegradedDriveStatus>,
     pub buffered_log_count: usize,
+    pub published_drives: Vec<PublishedDriveStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct PublishedDriveStatus {
+    pub drive_letter: char,
+    pub mft_path: String,
+    pub mft_modified_at_unix_ms: Option<u64>,
+    pub base_index_path: String,
+    pub base_index_modified_at_unix_ms: Option<u64>,
+    pub overlay_index_path: String,
+    pub overlay_index_modified_at_unix_ms: Option<u64>,
+    pub checkpoint_path: String,
+    pub checkpoint_modified_at_unix_ms: Option<u64>,
+    pub snapshot_usn: Option<u64>,
+    pub last_usn: Option<u64>,
+    pub journal_id: Option<u64>,
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
