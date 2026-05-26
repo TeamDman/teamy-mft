@@ -245,6 +245,8 @@ impl MachineError {
 pub trait MachineDaemonRpc {
     async fn ping(&self, logs: vox::Tx<DaemonLogEvent>) -> Result<PingResponse, MachineError>;
 
+    async fn shutdown(&self, logs: vox::Tx<DaemonLogEvent>) -> Result<(), MachineError>;
+
     async fn query(
         &self,
         request: QueryRequest,

@@ -109,6 +109,20 @@ pub fn ping(
     with_client(config, move |client| async move { client.ping(logs).await })
 }
 
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn shutdown(
+    config: &MachineConfig,
+    logs: vox::Tx<DaemonLogEvent>,
+) -> eyre::Result<Result<(), MachineError>> {
+    with_client(
+        config,
+        move |client| async move { client.shutdown(logs).await },
+    )
+}
+
 #[must_use]
 pub fn daemon_compatibility(ping: &PingResponse) -> DaemonCompatibility {
     DaemonCompatibility {

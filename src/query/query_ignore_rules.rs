@@ -10,6 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
 use tracing::info_span;
+use tracing::warn;
 
 pub const IGNORE_FILE_EXTENSION: &str = ".teamymftignore";
 pub const SYNCED_IGNORE_FILE_NAME: &str = "teamy-mft-sync.teamymftignore";
@@ -220,8 +221,22 @@ fn load_ignore_file(drive_letter: char, path: &Path) -> eyre::Result<Option<Disc
         return Ok(None);
     }
 
-    let contents = std::fs::read_to_string(path)
-        .wrap_err_with(|| format!("Failed reading ignore file {}", path.display()))?;
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            warn!(
+                drive = %drive_letter,
+                path = %path.display(),
+                error = %error,
+                "Skipping unreadable ignore file during query discovery"
+            );
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(error)
+                .wrap_err_with(|| format!("Failed reading ignore file {}", path.display()));
+        }
+    };
     let rules = parse_ignore_rule_lines(&contents);
 
     let mut builder = GitignoreBuilder::new(".");

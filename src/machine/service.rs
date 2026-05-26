@@ -25,7 +25,7 @@ pub fn install_windows_service(current_exe: &Path, config: &MachineConfig) -> ey
         );
     }
 
-    let binary_path = format!("\"{}\" daemon --service", current_exe.display());
+    let binary_path = format!("\"{}\" service run --service", current_exe.display());
     run_sc_command([
         "create",
         &config.service_name,
@@ -143,12 +143,12 @@ pub fn start_service_if_needed(service_name: &str) -> eyre::Result<()> {
 /// # Errors
 ///
 /// Returns an error if the service cannot be stopped.
-pub fn stop_service_if_running(service_name: &str) -> eyre::Result<()> {
+pub fn stop_service_if_running(service_name: &str) -> eyre::Result<bool> {
     if !matches!(
         query_service_state(service_name)?,
         WindowsServiceState::Running | WindowsServiceState::StartPending
     ) {
-        return Ok(());
+        return Ok(false);
     }
 
     let output = std::process::Command::new("sc.exe")
@@ -167,7 +167,7 @@ pub fn stop_service_if_running(service_name: &str) -> eyre::Result<()> {
     let start = std::time::Instant::now();
     while start.elapsed() < std::time::Duration::from_secs(10) {
         match query_service_state(service_name)? {
-            WindowsServiceState::Stopped | WindowsServiceState::Missing => return Ok(()),
+            WindowsServiceState::Stopped | WindowsServiceState::Missing => return Ok(true),
             _ => std::thread::sleep(std::time::Duration::from_millis(250)),
         }
     }

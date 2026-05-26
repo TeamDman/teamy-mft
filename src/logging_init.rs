@@ -1,18 +1,73 @@
 use crate::cli::global_args::GlobalArgs;
 use chrono::Local;
+use color_eyre::owo_colors::OwoColorize;
 use eyre::bail;
+use std::fmt;
 use std::fs::File;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tracing::Event;
 use tracing::debug;
-use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Registry;
+use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::fmt::FormatEvent;
+use tracing_subscriber::fmt::FormatFields;
+use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::prelude::*;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
+
+struct SourceAwareEventFormat<E> {
+    inner: E,
+}
+
+impl<S, N, E> FormatEvent<S, N> for SourceAwareEventFormat<E>
+where
+    S: tracing::Subscriber + for<'span> LookupSpan<'span>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+    E: FormatEvent<S, N>,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let source = if event.metadata().target() == "teamy_mft::daemon_remote" {
+            if writer.has_ansi_escapes() {
+                "[daemon] ".bright_blue().to_string()
+            } else {
+                String::from("[daemon] ")
+            }
+        } else {
+            if writer.has_ansi_escapes() {
+                "[client] ".bright_green().to_string()
+            } else {
+                String::from("[client] ")
+            }
+        };
+        writer.write_str(&source)?;
+        self.inner.format_event(ctx, writer, event)
+    }
+}
+
+fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
+    if let Some(filter) = global_args.log_filter.as_ref() {
+        if global_args.debug {
+            bail!("cannot specify log filter with --debug");
+        }
+        return EnvFilter::builder().parse(filter).map_err(Into::into);
+    }
+
+    let own_level = if global_args.debug { "debug" } else { "info" };
+    let filter = format!(
+        "warn,teamy_mft={own_level},teamy_windows={own_level},teamy_mft_daemon_rpc={own_level}"
+    );
+    EnvFilter::builder().parse(filter).map_err(Into::into)
+}
 
 // tool[impl logging.stderr-output]
 // tool[impl logging.file-path-option]
@@ -29,14 +84,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
     let subscriber = Registry::default();
 
-    let env_filter_layer = EnvFilter::builder()
-        .with_default_directive(match (global_args.debug, global_args.log_filter.as_ref()) {
-            (true, None) => LevelFilter::DEBUG.into(),
-            (false, None) => LevelFilter::INFO.into(),
-            (true, Some(_)) => bail!("cannot specify log filter with --debug"),
-            (false, Some(x)) => LevelFilter::from_str(x)?.into(),
-        })
-        .from_env()?;
+    let env_filter_layer = default_log_filter(global_args)?;
     let subscriber = subscriber.with(env_filter_layer);
 
     let stderr_layer = tracing_subscriber::fmt::layer()
@@ -44,8 +92,11 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
         .with_line_number(cfg!(debug_assertions))
         .with_target(true)
         .with_writer(std::io::stderr.and(teamy_windows::log::LOG_BUFFER.clone()))
-        .pretty()
-        .with_timer(tracing_subscriber::fmt::time::uptime());
+        .event_format(SourceAwareEventFormat {
+            inner: tracing_subscriber::fmt::format()
+                .pretty()
+                .with_timer(tracing_subscriber::fmt::time::uptime()),
+        });
 
     let subscriber = subscriber.with(stderr_layer);
     let subscriber = subscriber.with(crate::machine::daemon_log::DaemonTraceLayer);

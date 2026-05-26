@@ -40,11 +40,9 @@ impl StatusArgs {
         if daemon_status.ping.is_some() {
             machine_status.service_state = crate::machine::service::WindowsServiceState::Running;
         }
-        print_machine_summary(
-            &machine_status,
-            self.verbose,
-            daemon_status.runtime_status.is_none(),
-        );
+        let include_direct_drive_details =
+            self.no_daemon && self.verbose && teamy_windows::elevation::is_elevated();
+        print_machine_summary(&machine_status, self.verbose, include_direct_drive_details);
         print_daemon_summary(&daemon_status, self.verbose);
         let now = SystemTime::now();
         print_cache_summary(
@@ -363,6 +361,8 @@ fn print_cache_summary(
         .iter()
         .filter(|drive| drive.mft_modified_at.is_some() && drive.base_index_modified_at.is_some())
         .collect::<Vec<_>>();
+    println!("machine-drive-count={}", machine_status.drives.len());
+    println!("machine-published-drive-count={}", query_ready_drives.len());
     let oldest_query_ready_at = query_ready_drives
         .iter()
         .filter_map(|drive| query_ready_at(drive))

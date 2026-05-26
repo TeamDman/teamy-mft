@@ -412,6 +412,32 @@ impl MachineDaemonRpc for MachineDaemonService {
         response
     }
 
+    async fn shutdown(
+        &self,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+    ) -> Result<(), MachineError> {
+        let correlation_id = next_correlation_id("shutdown");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
+        let service_name = self.config.service_name.clone();
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            correlation_id = %correlation_id,
+            rpc_method = "shutdown"
+        );
+        let response = async move {
+            tracing::info!(service_name = %service_name, "Daemon shutdown requested");
+            STOP_REQUESTED.store(true, Ordering::Relaxed);
+            if let Some(handle) = current_service_status_handle() {
+                let _ = set_service_status(handle, SERVICE_STOP_PENDING);
+            }
+            Ok(())
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
     async fn query(
         &self,
         request: QueryRequest,
