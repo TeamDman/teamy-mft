@@ -1,6 +1,7 @@
 use crate::cli::command::ignore::IgnoreArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
+use crate::cli::command::protection::ProtectionArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::service::ServiceArgs;
 use crate::cli::command::status::StatusArgs;
@@ -30,6 +31,8 @@ pub enum Command {
     ListPaths(ListPathsArgs),
     /// Manage `.teamymftignore` rules used to filter query results
     Ignore(IgnoreArgs),
+    /// Toggle machine cache ACL protection for development workflows
+    Protection(ProtectionArgs),
     /// Show per-drive cache freshness for `.mft` and `.mft_search_index` files
     Status(StatusArgs),
     /// Query indexed file paths (substring match) across cached `.mft_search_index` files
@@ -58,6 +61,7 @@ impl Command {
             Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),
+            Command::Protection(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(),
             Command::Tray(args) => args.invoke(),

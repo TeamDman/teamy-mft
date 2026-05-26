@@ -29,11 +29,18 @@ use crate::machine::ipc::SyncRequest;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournal;
+use crate::query::QueryIgnoreRules;
+use crate::query::QueryPlan;
+use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
+use crate::search_index::search_index_bytes::SearchIndexBytes;
 use futures::FutureExt;
 use rustc_hash::FxHashMap;
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicIsize;
@@ -122,18 +129,120 @@ impl DaemonRuntimeState {
         request: &QueryRequest,
     ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
         let mut rows = Vec::new();
+        let mut queried_drives = 0usize;
+        let mut degraded_drives = Vec::new();
         for &drive in &request.drive_letters {
-            self.refresh_drive(drive)?;
+            if let Err(error) = self.refresh_drive(drive) {
+                match self.query_published_drive(drive, request) {
+                    Ok(drive_rows) => {
+                        queried_drives += 1;
+                        rows.extend(drive_rows);
+                        degraded_drives.push((
+                            drive,
+                            format!(
+                                "{}; served published cache for this drive instead",
+                                error.message
+                            ),
+                        ));
+                    }
+                    Err(fallback_error) => degraded_drives.push((
+                        drive,
+                        format!(
+                            "{}; published cache fallback also failed: {fallback_error}",
+                            error.message
+                        ),
+                    )),
+                }
+                continue;
+            }
             let mut per_drive_request = request.clone();
             per_drive_request.drive_letters = vec![drive];
             per_drive_request.limit = 0;
-            rows.extend(self.drive_mut(drive)?.query(&per_drive_request)?);
+            match self.drive_mut(drive)?.query(&per_drive_request) {
+                Ok(drive_rows) => {
+                    queried_drives += 1;
+                    rows.extend(drive_rows);
+                }
+                Err(error) => degraded_drives.push((drive, error.message)),
+            }
+        }
+
+        if queried_drives == 0 && !degraded_drives.is_empty() {
+            return Err(MachineError::degraded(format_degraded_query_drives(
+                &degraded_drives,
+            )));
+        }
+
+        if !degraded_drives.is_empty() {
+            warn!(
+                queried_drives,
+                degraded_drive_count = degraded_drives.len(),
+                degraded_drives = %format_degraded_query_drives(&degraded_drives),
+                "Daemon query skipped degraded drives"
+            );
         }
 
         if request.limit > 0 && rows.len() > request.limit {
             rows.truncate(request.limit);
         }
         Ok(rows)
+    }
+
+    fn query_published_drive(
+        &self,
+        drive: char,
+        request: &QueryRequest,
+    ) -> eyre::Result<Vec<crate::query::IndexedPathRow>> {
+        let paths = published_drive_paths(&self.cache_root, drive);
+        let query_plan = QueryPlan::parse_inputs(&request.query)?;
+        let query_scope = resolve_query_scope(request.query_scope.as_deref())?;
+        let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
+            &[drive],
+            &self.cache_root,
+        ) {
+            Ok(rules) => Some(rules),
+            Err(error) => {
+                warn!(
+                    drive = %drive,
+                    error = %error,
+                    "Published-cache query could not load ignore rules; treating paths as visible"
+                );
+                None
+            }
+        };
+        let mut rows = query_published_index_path(&paths.base_index_path, &query_plan)?;
+
+        if paths.overlay_index_path.is_file() {
+            rows = merge_index_rows(
+                rows,
+                query_published_index_path(&paths.overlay_index_path, &query_plan)?,
+            );
+        }
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|mut row| {
+                if !should_include_indexed_row(
+                    request.include_deleted,
+                    request.only_deleted,
+                    row.has_deleted_entries,
+                ) {
+                    return None;
+                }
+                if !should_include_scope(&row.path, query_scope.as_ref()) {
+                    return None;
+                }
+                row.is_ignored = ignore_rules
+                    .as_ref()
+                    .is_some_and(|rules| rules.is_ignored_path(Path::new(&row.path)));
+                should_include_ignored_row(
+                    request.show_ignored,
+                    request.only_ignored,
+                    row.is_ignored,
+                )
+                .then_some(row)
+            })
+            .collect())
     }
 
     fn status_response(&self, buffered_log_count: usize, drive_letters: &[char]) -> StatusResponse {
@@ -261,9 +370,11 @@ impl DaemonRuntimeState {
         }
 
         if !self.drives.contains_key(&drive) {
-            let state = self
-                .load_drive_state(drive)
-                .map_err(|error| MachineError::degraded(error.to_string()))?;
+            let state = self.load_drive_state(drive).map_err(|error| {
+                MachineError::degraded(format!(
+                    "Drive {drive} could not be loaded for live query: {error}"
+                ))
+            })?;
             self.drives.insert(drive, state);
         }
 
@@ -275,6 +386,7 @@ impl DaemonRuntimeState {
         if let Err(error) = refresh_result {
             self.drives.remove(&drive);
             let message = error.to_string();
+            let message = format!("Drive {drive} could not be refreshed for live query: {message}");
             self.degraded.insert(drive, message.clone());
             return Err(MachineError::degraded(message));
         }
@@ -305,6 +417,124 @@ impl DaemonRuntimeState {
         }
         LiveDriveState::load(&self.cache_root, paths)
     }
+}
+
+fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
+    degraded_drives
+        .iter()
+        .map(|(drive, message)| format!("{drive}: {message}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn query_published_index_path(
+    path: &Path,
+    query_plan: &QueryPlan,
+) -> eyre::Result<Vec<crate::query::IndexedPathRow>> {
+    let bytes = std::fs::read(path)?;
+    let parsed_index = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
+    let matched_row_indices = query_plan
+        .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))?;
+    let mut rows = Vec::with_capacity(matched_row_indices.len());
+    for row_index in matched_row_indices {
+        let row = parsed_index.row_view(row_index as usize)?;
+        rows.push(crate::query::IndexedPathRow {
+            path: row.path(),
+            has_deleted_entries: row.has_deleted_entries,
+            is_ignored: false,
+        });
+    }
+    Ok(rows)
+}
+
+fn merge_index_rows(
+    base_rows: Vec<crate::query::IndexedPathRow>,
+    overlay_rows: Vec<crate::query::IndexedPathRow>,
+) -> Vec<crate::query::IndexedPathRow> {
+    let mut merged = BTreeMap::<String, crate::query::IndexedPathRow>::new();
+    for row in base_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    for row in overlay_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    merged.into_values().collect()
+}
+
+#[derive(Debug, Clone)]
+struct QueryScope {
+    root: PathBuf,
+    include_descendants: bool,
+}
+
+fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
+    let Some(scope) = scope else {
+        return Ok(None);
+    };
+
+    let root = dunce::canonicalize(scope)?;
+    Ok(Some(QueryScope {
+        include_descendants: root.is_dir(),
+        root,
+    }))
+}
+
+fn lowercase_path_components(path: &Path) -> Vec<String> {
+    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
+    let path = path
+        .strip_prefix(r"\\?\UNC\")
+        .map_or_else(|| path.clone(), |rest| format!(r"\\{rest}"));
+    let path = path
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.clone(), ToString::to_string);
+
+    path.split('\\')
+        .filter(|component| !component.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
+    if cfg!(windows) {
+        let path_components = lowercase_path_components(path);
+        let scope_components = lowercase_path_components(&scope.root);
+        return if scope.include_descendants {
+            path_components.starts_with(&scope_components)
+        } else {
+            path_components == scope_components
+        };
+    }
+
+    if scope.include_descendants {
+        path.starts_with(&scope.root)
+    } else {
+        path == scope.root
+    }
+}
+
+fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+    path_matches_scope(Path::new(path), scope)
+}
+
+fn should_include_indexed_row(
+    include_deleted: bool,
+    only_deleted: bool,
+    has_deleted_entries: bool,
+) -> bool {
+    if only_deleted {
+        return has_deleted_entries;
+    }
+    include_deleted || !has_deleted_entries
+}
+
+fn should_include_ignored_row(show_ignored: bool, only_ignored: bool, is_ignored: bool) -> bool {
+    if only_ignored {
+        return is_ignored;
+    }
+    show_ignored || !is_ignored
 }
 
 impl MachineDaemonService {

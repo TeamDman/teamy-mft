@@ -14,10 +14,14 @@ use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Foundation::LocalFree;
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows::Win32::Security::Authorization::SDDL_REVISION_1;
 use windows::Win32::Security::GetTokenInformation;
+use windows::Win32::Security::LookupAccountSidW;
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
+use windows::Win32::Security::PSID;
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
+use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Security::TOKEN_QUERY;
 use windows::Win32::Security::TOKEN_USER;
 use windows::Win32::Security::TokenUser;
@@ -25,6 +29,33 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::Threading::OpenProcessToken;
 use windows::core::PCWSTR;
 use windows::core::PWSTR;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Protection status is reported as explicit flat CLI fields"
+)]
+pub struct PathProtectionStatus {
+    pub path_exists: bool,
+    pub owner_sid_grant_present: bool,
+    pub system_grant_present: bool,
+    pub administrators_grant_present: bool,
+    pub broad_read_grant_present: bool,
+    pub inheritance_disabled: bool,
+    pub raw_acl: String,
+}
+
+impl PathProtectionStatus {
+    #[must_use]
+    pub fn protection_enabled(&self) -> bool {
+        self.path_exists
+            && self.owner_sid_grant_present
+            && self.system_grant_present
+            && self.administrators_grant_present
+            && self.inheritance_disabled
+            && !self.broad_read_grant_present
+    }
+}
 
 struct OwnedHandle(HANDLE);
 
@@ -104,6 +135,238 @@ pub fn restrict_path_to_owner(path: &Path, owner_sid: &str) -> eyre::Result<()> 
         eyre::bail!("icacls failed for {}: {}{}", path.display(), stdout, stderr);
     }
     Ok(())
+}
+
+/// # Errors
+///
+/// Returns an error if the development read ACL cannot be applied with `icacls`.
+pub fn allow_development_reads(path: &Path) -> eyre::Result<()> {
+    take_ownership(path)?;
+    grant_development_read_to_path(path)?;
+    Ok(())
+}
+
+fn grant_development_read_to_path(path: &Path) -> eyre::Result<()> {
+    let path_is_dir = path.is_dir();
+    let users = if path_is_dir {
+        "*S-1-5-32-545:(OI)(CI)RX"
+    } else {
+        "*S-1-5-32-545:RX"
+    };
+    let everyone = if path_is_dir {
+        "*S-1-1-0:(OI)(CI)RX"
+    } else {
+        "*S-1-1-0:RX"
+    };
+    let mut command = std::process::Command::new("icacls.exe");
+    command
+        .arg(path)
+        .arg("/grant:r")
+        .arg(users)
+        .arg("/grant:r")
+        .arg(everyone);
+    if path_is_dir {
+        command.arg("/T").arg("/C");
+    }
+    let output = command.output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let failed_processing_count = parse_icacls_failed_processing_count(&stdout)
+        .max(parse_icacls_failed_processing_count(&stderr));
+    if !output.status.success() || failed_processing_count > 0 {
+        eyre::bail!(
+            "icacls failed while enabling development reads for {}: {}{}",
+            path.display(),
+            stdout,
+            stderr
+        );
+    }
+    Ok(())
+}
+
+/// # Errors
+///
+/// Returns an error if the ACL cannot be queried with `icacls`.
+pub fn query_path_protection_status(
+    path: &Path,
+    owner_sid: &str,
+) -> eyre::Result<PathProtectionStatus> {
+    if !path.exists() {
+        return Ok(PathProtectionStatus {
+            path_exists: false,
+            owner_sid_grant_present: false,
+            system_grant_present: false,
+            administrators_grant_present: false,
+            broad_read_grant_present: false,
+            inheritance_disabled: false,
+            raw_acl: String::new(),
+        });
+    }
+
+    let output = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        eyre::bail!(
+            "icacls failed while reading ACL for {}: {}{}",
+            path.display(),
+            stdout,
+            stderr
+        );
+    }
+
+    let owner = owner_sid.to_ascii_uppercase();
+    let owner_account = account_name_from_sid_string(owner_sid)
+        .ok()
+        .map(|account| account.to_ascii_uppercase());
+    let acl_lines = stdout
+        .lines()
+        .map(str::to_ascii_uppercase)
+        .collect::<Vec<_>>();
+    Ok(PathProtectionStatus {
+        path_exists: true,
+        owner_sid_grant_present: acl_contains_principal(&acl_lines, &owner)
+            || owner_account
+                .as_ref()
+                .is_some_and(|account| acl_contains_principal(&acl_lines, account)),
+        system_grant_present: acl_contains_principal(&acl_lines, "NT AUTHORITY\\SYSTEM")
+            || acl_contains_principal(&acl_lines, "S-1-5-18"),
+        administrators_grant_present: acl_contains_principal(&acl_lines, "BUILTIN\\ADMINISTRATORS")
+            || acl_contains_principal(&acl_lines, "S-1-5-32-544"),
+        broad_read_grant_present: acl_contains_principal(&acl_lines, "BUILTIN\\USERS")
+            || acl_contains_principal(&acl_lines, "S-1-5-32-545")
+            || acl_contains_principal(&acl_lines, "EVERYONE")
+            || acl_contains_principal(&acl_lines, "S-1-1-0"),
+        inheritance_disabled: !acl_lines
+            .iter()
+            .any(|line| acl_line_has_access_mask(line) && line.contains("(I)")),
+        raw_acl: stdout,
+    })
+}
+
+fn acl_contains_principal(acl_lines: &[String], principal: &str) -> bool {
+    let principal = principal.trim_start_matches('*');
+    let sid_principal = format!("*{principal}");
+    acl_lines.iter().any(|line| {
+        acl_line_has_principal(line, principal) || acl_line_has_principal(line, &sid_principal)
+    })
+}
+
+fn acl_line_has_principal(line: &str, principal: &str) -> bool {
+    let Some(principal_end) = line.find(":(") else {
+        return false;
+    };
+    let before_access_mask = line[..principal_end].trim_end();
+    let Some(prefix) = before_access_mask.strip_suffix(principal) else {
+        return false;
+    };
+    prefix.chars().last().is_none_or(char::is_whitespace)
+}
+
+fn acl_line_has_access_mask(line: &str) -> bool {
+    line.contains(":(")
+}
+
+pub fn warn_if_path_protection_disabled(path: &Path, status: &PathProtectionStatus) {
+    if status.protection_enabled() {
+        return;
+    }
+    tracing::warn!(
+        cache_root = %path.display(),
+        broad_read_grant_present = status.broad_read_grant_present,
+        "Machine cache protection is disabled; this should only be expected while developing teamy-mft locally. Run `teamy-mft protection enable` before normal use."
+    );
+}
+
+pub fn print_path_protection_status(status: &PathProtectionStatus) {
+    println!("machine-protection-enabled={}", status.protection_enabled());
+    println!("machine-protection-path-exists={}", status.path_exists);
+    println!(
+        "machine-protection-owner-grant-present={}",
+        status.owner_sid_grant_present
+    );
+    println!(
+        "machine-protection-system-grant-present={}",
+        status.system_grant_present
+    );
+    println!(
+        "machine-protection-administrators-grant-present={}",
+        status.administrators_grant_present
+    );
+    println!(
+        "machine-protection-broad-read-grant-present={}",
+        status.broad_read_grant_present
+    );
+    println!(
+        "machine-protection-inheritance-disabled={}",
+        status.inheritance_disabled
+    );
+}
+
+fn account_name_from_sid_string(sid: &str) -> eyre::Result<String> {
+    let wide_sid = encode_wide(sid);
+    let mut sid_ptr = PSID::default();
+    unsafe { ConvertStringSidToSidW(PCWSTR(wide_sid.as_ptr()), &mut sid_ptr) }?;
+    let _sid_guard = SidLocalFreeGuard(sid_ptr);
+
+    let mut name_len = 0u32;
+    let mut domain_len = 0u32;
+    let mut sid_name_use = SID_NAME_USE(0);
+    let _ = unsafe {
+        LookupAccountSidW(
+            PCWSTR::null(),
+            sid_ptr,
+            None,
+            &mut name_len,
+            None,
+            &mut domain_len,
+            &mut sid_name_use,
+        )
+    };
+    if name_len == 0 {
+        eyre::bail!("Failed determining account name length for SID {sid}");
+    }
+
+    let mut name = vec![0u16; name_len as usize];
+    let mut domain = vec![0u16; domain_len.max(1) as usize];
+    let domain_ptr = if domain_len == 0 {
+        None
+    } else {
+        Some(PWSTR(domain.as_mut_ptr()))
+    };
+    unsafe {
+        LookupAccountSidW(
+            PCWSTR::null(),
+            sid_ptr,
+            Some(PWSTR(name.as_mut_ptr())),
+            &mut name_len,
+            domain_ptr,
+            &mut domain_len,
+            &mut sid_name_use,
+        )
+    }?;
+
+    name.truncate(name_len as usize);
+    domain.truncate(domain_len as usize);
+    let name = String::from_utf16_lossy(&name);
+    let domain = String::from_utf16_lossy(&domain);
+    if domain.is_empty() {
+        Ok(name)
+    } else {
+        Ok(format!("{domain}\\{name}"))
+    }
+}
+
+struct SidLocalFreeGuard(PSID);
+
+impl Drop for SidLocalFreeGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0.cast()))) };
+        }
+    }
 }
 
 fn parse_icacls_failed_processing_count(output: &str) -> u64 {

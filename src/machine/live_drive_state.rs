@@ -752,8 +752,17 @@ fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> 
 }
 
 fn lowercase_path_components(path: &Path) -> Vec<String> {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
+    let path = path
+        .strip_prefix(r"\\?\UNC\")
+        .map_or_else(|| path.clone(), |rest| format!(r"\\{rest}"));
+    let path = path
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.clone(), ToString::to_string);
+
+    path.split('\\')
+        .filter(|component| !component.is_empty())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 

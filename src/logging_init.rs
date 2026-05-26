@@ -13,6 +13,8 @@ use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::fmt::FormatFields;
+#[cfg(all(feature = "tracy", not(test)))]
+use tracing_subscriber::fmt::format::DefaultFields;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -22,6 +24,36 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 struct SourceAwareEventFormat<E> {
     inner: E,
+}
+
+#[cfg(all(feature = "tracy", not(test)))]
+#[derive(Default)]
+struct TracyLayerConfig {
+    formatter: TracyPlainFields,
+}
+
+#[cfg(all(feature = "tracy", not(test)))]
+impl tracing_tracy::Config for TracyLayerConfig {
+    type Formatter = TracyPlainFields;
+
+    fn formatter(&self) -> &Self::Formatter {
+        &self.formatter
+    }
+}
+
+#[cfg(all(feature = "tracy", not(test)))]
+#[derive(Default)]
+struct TracyPlainFields(DefaultFields);
+
+#[cfg(all(feature = "tracy", not(test)))]
+impl<'writer> FormatFields<'writer> for TracyPlainFields {
+    fn format_fields<R: tracing_subscriber::field::RecordFields>(
+        &self,
+        writer: Writer<'writer>,
+        fields: R,
+    ) -> fmt::Result {
+        self.0.format_fields(writer, fields)
+    }
 }
 
 impl<S, N, E> FormatEvent<S, N> for SourceAwareEventFormat<E>
@@ -136,7 +168,7 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
     let subscriber = subscriber.with(json_layer);
 
     #[cfg(all(feature = "tracy", not(test)))]
-    let subscriber = subscriber.with(tracing_tracy::TracyLayer::default());
+    let subscriber = subscriber.with(tracing_tracy::TracyLayer::new(TracyLayerConfig::default()));
 
     if let Err(error) = subscriber.try_init() {
         eprintln!(

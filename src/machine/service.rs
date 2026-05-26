@@ -121,6 +121,7 @@ pub fn start_service_if_needed(service_name: &str) -> eyre::Result<()> {
         WindowsServiceState::Stopped | WindowsServiceState::Unknown(_) => {}
     }
 
+    tracing::info!(service_name, "Starting daemon service from client");
     let output = std::process::Command::new("sc.exe")
         .arg("start")
         .arg(service_name)
@@ -138,7 +139,9 @@ pub fn start_service_if_needed(service_name: &str) -> eyre::Result<()> {
         }
     }
 
-    wait_for_running(service_name, std::time::Duration::from_secs(10))
+    wait_for_running(service_name, std::time::Duration::from_secs(10))?;
+    tracing::info!(service_name, "Daemon service reached running state");
+    Ok(())
 }
 
 /// # Errors

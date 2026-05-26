@@ -254,6 +254,7 @@ fn print_machine_summary(
 
     if let Some(config) = &machine_status.config {
         println!("machine-cache-root={}", config.cache_root.display());
+        print_protection_summary(config);
         if verbose {
             println!("machine-service-name={}", config.service_name);
             println!("machine-owner-sid={}", config.owner_sid);
@@ -357,6 +358,22 @@ fn print_machine_summary(
                     )
                 );
             }
+        }
+    }
+}
+
+fn print_protection_summary(config: &crate::machine::config::MachineConfig) {
+    match crate::machine::security::query_path_protection_status(
+        &config.cache_root,
+        &config.owner_sid,
+    ) {
+        Ok(status) => {
+            crate::machine::security::warn_if_path_protection_disabled(&config.cache_root, &status);
+            crate::machine::security::print_path_protection_status(&status);
+        }
+        Err(error) => {
+            println!("machine-protection-enabled=unknown");
+            println!("machine-protection-warning=failed to inspect protection status: {error}");
         }
     }
 }

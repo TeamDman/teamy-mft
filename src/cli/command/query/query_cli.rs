@@ -63,7 +63,7 @@ pub struct QueryArgs {
     /// Bypass the machine daemon and read published indexes directly
     #[facet(args::named, default)]
     pub no_daemon: bool,
-    /// Allow falling back to published disk indexes if the daemon query path degrades
+    /// Allow falling back to published disk indexes if the daemon-only query path degrades
     #[facet(args::named, default)]
     pub allow_fallback: bool,
 }
@@ -214,8 +214,17 @@ fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> 
 }
 
 fn lowercase_path_components(path: &Path) -> Vec<String> {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
+    let path = path
+        .strip_prefix(r"\\?\UNC\")
+        .map_or_else(|| path.clone(), |rest| format!(r"\\{rest}"));
+    let path = path
+        .strip_prefix(r"\\?\")
+        .map_or_else(|| path.clone(), ToString::to_string);
+
+    path.split('\\')
+        .filter(|component| !component.is_empty())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -527,13 +536,19 @@ impl QueryArgs {
             eyre::bail!("--no-daemon cannot be combined with daemon-only query mode");
         }
         let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
-        let effective_source = if self.no_daemon {
-            QuerySource::DiskOnly
+        let requested_source = if matches!(options.source, QuerySource::Auto) {
+            self.source
         } else {
             options.source
         };
+        let effective_source = if self.no_daemon {
+            QuerySource::DiskOnly
+        } else {
+            requested_source
+        };
         match effective_source {
             QuerySource::Auto => {
+                let allow_auto_fallback = self.allow_fallback;
                 let config = crate::machine::ipc::load_machine_daemon_client_config()?;
                 let request = crate::machine::ipc::QueryRequest {
                     query: self.query.clone(),
@@ -571,13 +586,13 @@ impl QueryArgs {
                                 ) {
                                     eyre::bail!(error.message);
                                 }
-                                if !self.allow_fallback {
-                                    eyre::bail!(error.message);
+                                if !allow_auto_fallback {
+                                    return Err(format_daemon_query_error(&error));
                                 }
                                 tracing::warn!(kind = ?error.kind, error = %error.message, "Daemon query degraded; serving published machine cache");
                             }
                             Err(error) => {
-                                if !self.allow_fallback {
+                                if !allow_auto_fallback {
                                     return Err(error);
                                 }
                                 tracing::warn!(error = %error, "Daemon query failed; serving published machine cache");
@@ -585,7 +600,7 @@ impl QueryArgs {
                         }
                     }
                     Err(error) => {
-                        if !self.allow_fallback {
+                        if !allow_auto_fallback {
                             return Err(error);
                         }
                         tracing::warn!(error = %error, "Daemon readiness check failed; serving published machine cache");
@@ -639,7 +654,7 @@ impl QueryArgs {
                         );
                         Ok(response_rows)
                     }
-                    Err(error) => eyre::bail!(error.message),
+                    Err(error) => Err(format_daemon_query_error(&error)),
                 }
             }
             QuerySource::DiskOnly => {
@@ -749,6 +764,14 @@ impl QueryArgs {
 
         Ok(results)
     }
+}
+
+fn format_daemon_query_error(error: &crate::machine::ipc::MachineError) -> eyre::Report {
+    eyre::eyre!(
+        "Daemon query failed ({:?}): {}. Re-run with `--allow-fallback` to query the published disk cache, or `--source disk-only`/`--no-daemon` to bypass live daemon state.",
+        error.kind,
+        error.message
+    )
 }
 
 #[cfg(test)]

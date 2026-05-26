@@ -6,6 +6,16 @@ param(
 	[string[]]$QueryArgs
 )
 
+$serviceName = "teamy-mft-daemon"
+
+if (Get-Command teamy-mft -ErrorAction SilentlyContinue) {
+    Write-Host "Stopping $serviceName before build..."
+    & teamy-mft daemon stop
+}
+else {
+    Write-Host "teamy-mft not yet on PATH; skipping daemon stop helper."
+}
+
 $profilerFeatures = 'tracy'
 
 function Format-Elapsed {
@@ -66,16 +76,24 @@ function Wait-ForTracyCaptureExit {
 		[Parameter(Mandatory = $true)]
 		[string]$CapturePath,
 		[Parameter(Mandatory = $true)]
-		[TimeSpan]$Timeout
+		[TimeSpan]$Timeout,
+		[switch]$AlreadyObserved
 	)
 
 	$waitStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 	$deadline = (Get-Date).Add($Timeout)
+	$observedProcess = [bool]$AlreadyObserved
 	do {
 		$processes = @(Get-TracyCaptureProcesses -CapturePath $CapturePath)
+		if ($processes.Count -gt 0) {
+			$observedProcess = $true
+		}
 		if ($processes.Count -eq 0) {
 			$waitStopwatch.Stop()
-			return $waitStopwatch.Elapsed
+			if ($observedProcess) {
+				return $waitStopwatch.Elapsed
+			}
+			return $null
 		}
 
 		Start-Sleep -Milliseconds 250
@@ -83,6 +101,28 @@ function Wait-ForTracyCaptureExit {
 
 	$waitStopwatch.Stop()
 	return $null
+}
+
+function Start-TracyCaptureProcess {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$CapturePath
+	)
+
+	$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+	if ($wt) {
+		try {
+			Start-Process -FilePath "wt.exe" -ArgumentList @("-w", "new", "tracy-capture.exe", "-o", $CapturePath) -ErrorAction Stop
+			return
+		} catch {
+			Write-Warning "Failed to launch tracy-capture in Windows Terminal: $($_.Exception.Message)"
+			Write-Warning "Falling back to launching tracy-capture directly."
+		}
+	} else {
+		Write-Warning "wt.exe not found in PATH; launching tracy-capture directly"
+	}
+
+	Start-Process -FilePath "tracy-capture.exe" -ArgumentList @("-o", $CapturePath) -PassThru -ErrorAction Stop
 }
 
 function Stop-TracyCaptureGracefully {
@@ -155,6 +195,7 @@ $captureShutdownElapsed = [TimeSpan]::Zero
 $captureFlushDelay = [TimeSpan]::FromSeconds(1)
 $captureStartupTimeout = [TimeSpan]::FromSeconds(10)
 $captureExitTimeout = [TimeSpan]::FromMinutes(5)
+$captureAttachDelay = [TimeSpan]::FromMilliseconds(250)
 $commandExitCode = 0
 $commandFailureMessage = $null
 $captureReadyForPostProcessing = $false
@@ -215,31 +256,27 @@ $capturePath = Join-Path $captureDir $slug
 Write-Host "Capture: $capturePath"
 Write-Host "Logging teamy-mft runtime performance information to $capturePath"
 $capture = $null
-$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
-$captureLaunchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-
-if ($wt) {
-	Start-Process -FilePath "wt.exe" -ArgumentList @("-w", "new", "tracy-capture.exe", "-o", $capturePath)
-} else {
-	Write-Warning "wt.exe not found in PATH; launching tracy-capture in the current session"
-	$capture = Start-Process -FilePath "tracy-capture.exe" -ArgumentList @("-o", $capturePath) -PassThru
-}
-$captureLaunchStopwatch.Stop()
-$captureLaunchElapsed = $captureLaunchStopwatch.Elapsed
-Write-Host "Capture launch time: $(Format-Elapsed $captureLaunchElapsed)"
-Write-Host "Waiting for tracy-capture process to appear (timeout $(Format-Elapsed $captureStartupTimeout))"
-$captureProcesses = @(Wait-ForTracyCaptureReady -CapturePath $capturePath -Timeout $captureStartupTimeout)
-Write-Host "tracy-capture ready (pid: $($captureProcesses.Id -join ', '))"
-Write-Host "Waiting 00:01.000 for tracy-capture to get ready"
-Start-Sleep -Seconds 1
 
 try {
-	Write-Host "Running built $profileLabel teamy-mft: $teamyMftPath $($appArgs -join ' ')"
+	Write-Host "Starting built $profileLabel teamy-mft: $teamyMftPath $($appArgs -join ' ')"
 	$commandStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	& $teamyMftPath @appArgs
+	$teamyProcess = Start-Process -FilePath $teamyMftPath -ArgumentList $appArgs -NoNewWindow -PassThru
+	Write-Host "Waiting $(Format-Elapsed $captureAttachDelay) for teamy-mft Tracy endpoint before launching capture"
+	Start-Sleep -Milliseconds ([int]$captureAttachDelay.TotalMilliseconds)
+
+	$captureLaunchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+	$capture = Start-TracyCaptureProcess -CapturePath $capturePath
+	$captureLaunchStopwatch.Stop()
+	$captureLaunchElapsed = $captureLaunchStopwatch.Elapsed
+	Write-Host "Capture launch time: $(Format-Elapsed $captureLaunchElapsed)"
+	Write-Host "Waiting for tracy-capture process to appear (timeout $(Format-Elapsed $captureStartupTimeout))"
+	$captureProcesses = @(Wait-ForTracyCaptureReady -CapturePath $capturePath -Timeout $captureStartupTimeout)
+	Write-Host "tracy-capture ready (pid: $($captureProcesses.Id -join ', '))"
+
+	$teamyProcess.WaitForExit()
 	$commandStopwatch.Stop()
 	$commandElapsed = $commandStopwatch.Elapsed
-	$commandExitCode = $LASTEXITCODE
+	$commandExitCode = $teamyProcess.ExitCode
 	Write-Host "Traced command time: $(Format-Elapsed $commandElapsed)"
 	if ($commandExitCode -ne 0) {
 		$commandFailureMessage = "teamy-mft.exe failed with exit code $commandExitCode"
@@ -250,7 +287,7 @@ finally {
 	$cleanupStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 	Write-Host "Waiting $(Format-Elapsed $captureFlushDelay) before watching tracy-capture shutdown"
 	Start-Sleep -Milliseconds ([int]$captureFlushDelay.TotalMilliseconds)
-	$naturalCaptureShutdownElapsed = Wait-ForTracyCaptureExit -CapturePath $capturePath -Timeout $captureExitTimeout
+	$naturalCaptureShutdownElapsed = Wait-ForTracyCaptureExit -CapturePath $capturePath -Timeout $captureExitTimeout -AlreadyObserved
 	if ($null -ne $naturalCaptureShutdownElapsed) {
 		$captureShutdownElapsed = $naturalCaptureShutdownElapsed
 		$captureReadyForPostProcessing = $true
@@ -305,7 +342,9 @@ Write-Host "Timing summary:"
 if ($buildElapsed) {
 	Write-Host "  build:          $(Format-Elapsed $buildElapsed)"
 }
-Write-Host "  capture launch: $(Format-Elapsed $captureLaunchElapsed)"
+if ($captureLaunchElapsed) {
+	Write-Host "  capture launch: $(Format-Elapsed $captureLaunchElapsed)"
+}
 if ($commandElapsed) {
 	Write-Host "  traced command: $(Format-Elapsed $commandElapsed)"
 }
