@@ -268,7 +268,6 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
             path = %path.display(),
             "Machine config already exists; repairing permissions before overwrite"
         );
-        crate::machine::security::take_ownership(&path)?;
         crate::machine::security::restrict_path_to_owner(&path, &config.owner_sid)?;
         fs::remove_file(&path).map_err(|error| {
             eyre::eyre!(

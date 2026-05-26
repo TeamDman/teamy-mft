@@ -5,26 +5,54 @@
     reason = "Windows token and SID interop requires raw pointer FFI that is localized in this module"
 )]
 
+use eyre::WrapErr;
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
+use std::path::PathBuf;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Foundation::HLOCAL;
 use windows::Win32::Foundation::LocalFree;
+use windows::Win32::Foundation::WIN32_ERROR;
+use windows::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows::Win32::Security::ACE_FLAGS;
+use windows::Win32::Security::ACL;
+use windows::Win32::Security::ACL_SIZE_INFORMATION;
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
 use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
+use windows::Win32::Security::Authorization::GetNamedSecurityInfoW;
 use windows::Win32::Security::Authorization::SDDL_REVISION_1;
+use windows::Win32::Security::Authorization::SE_FILE_OBJECT;
+use windows::Win32::Security::Authorization::SET_ACCESS;
+use windows::Win32::Security::Authorization::SetEntriesInAclW;
+use windows::Win32::Security::Authorization::SetNamedSecurityInfoW;
+use windows::Win32::Security::Authorization::TRUSTEE_IS_SID;
+use windows::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
+use windows::Win32::Security::Authorization::TRUSTEE_W;
+use windows::Win32::Security::CONTAINER_INHERIT_ACE;
+use windows::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows::Win32::Security::EqualSid;
+use windows::Win32::Security::GetAce;
+use windows::Win32::Security::GetAclInformation;
 use windows::Win32::Security::GetTokenInformation;
-use windows::Win32::Security::LookupAccountSidW;
+use windows::Win32::Security::INHERITED_ACE;
+use windows::Win32::Security::OBJECT_INHERIT_ACE;
+use windows::Win32::Security::OWNER_SECURITY_INFORMATION;
+use windows::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows::Win32::Security::PSID;
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
-use windows::Win32::Security::SID_NAME_USE;
 use windows::Win32::Security::TOKEN_QUERY;
 use windows::Win32::Security::TOKEN_USER;
 use windows::Win32::Security::TokenUser;
+use windows::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+use windows::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
+use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::Threading::OpenProcessToken;
 use windows::core::PCWSTR;
@@ -110,83 +138,212 @@ pub fn current_user_sid_string() -> eyre::Result<String> {
 
 /// # Errors
 ///
-/// Returns an error if the directory ACL cannot be restricted with `icacls`.
+/// Returns an error if the directory ACL cannot be restricted.
 pub fn restrict_path_to_owner(path: &Path, owner_sid: &str) -> eyre::Result<()> {
-    take_ownership(path)?;
-    let owner = format!("*{owner_sid}:(OI)(CI)F");
-    let system = "*S-1-5-18:(OI)(CI)F";
-    let admins = "*S-1-5-32-544:(OI)(CI)F";
-    let output = std::process::Command::new("icacls.exe")
-        .arg(path)
-        .arg("/inheritance:r")
-        .arg("/grant:r")
-        .arg(owner)
-        .arg("/grant:r")
-        .arg(system)
-        .arg("/grant:r")
-        .arg(admins)
-        .arg("/T")
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let failed_processing_count = parse_icacls_failed_processing_count(&stdout)
-        .max(parse_icacls_failed_processing_count(&stderr));
-    if !output.status.success() || failed_processing_count > 0 {
-        eyre::bail!("icacls failed for {}: {}{}", path.display(), stdout, stderr);
-    }
+    set_owner_to_administrators(path)?;
+    let entries = [
+        AclGrant::full_control(owner_sid),
+        AclGrant::full_control("S-1-5-18"),
+        AclGrant::full_control("S-1-5-32-544"),
+    ];
+    apply_restricted_acl_tree(path, &entries)?;
     Ok(())
 }
 
 /// # Errors
 ///
-/// Returns an error if the development read ACL cannot be applied with `icacls`.
+/// Returns an error if the development read ACL cannot be applied.
 pub fn allow_development_reads(path: &Path) -> eyre::Result<()> {
-    take_ownership(path)?;
-    grant_development_read_to_path(path)?;
+    set_owner_to_administrators(path)?;
+    let entries = [
+        AclGrant::read_execute("S-1-5-32-545"),
+        AclGrant::read_execute("S-1-1-0"),
+    ];
+    apply_acl_grants_tree(path, &entries)?;
     Ok(())
 }
 
-fn grant_development_read_to_path(path: &Path) -> eyre::Result<()> {
-    let path_is_dir = path.is_dir();
-    let users = if path_is_dir {
-        "*S-1-5-32-545:(OI)(CI)RX"
-    } else {
-        "*S-1-5-32-545:RX"
-    };
-    let everyone = if path_is_dir {
-        "*S-1-1-0:(OI)(CI)RX"
-    } else {
-        "*S-1-1-0:RX"
-    };
-    let mut command = std::process::Command::new("icacls.exe");
-    command
-        .arg(path)
-        .arg("/grant:r")
-        .arg(users)
-        .arg("/grant:r")
-        .arg(everyone);
-    if path_is_dir {
-        command.arg("/T").arg("/C");
+#[derive(Debug, Clone)]
+struct AclGrant {
+    sid: String,
+    access_mask: u32,
+}
+
+impl AclGrant {
+    fn full_control(sid: impl Into<String>) -> Self {
+        Self {
+            sid: sid.into(),
+            access_mask: FILE_ALL_ACCESS.0,
+        }
     }
-    let output = command.output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let failed_processing_count = parse_icacls_failed_processing_count(&stdout)
-        .max(parse_icacls_failed_processing_count(&stderr));
-    if !output.status.success() || failed_processing_count > 0 {
-        eyre::bail!(
-            "icacls failed while enabling development reads for {}: {}{}",
-            path.display(),
-            stdout,
-            stderr
-        );
+
+    fn read_execute(sid: impl Into<String>) -> Self {
+        Self {
+            sid: sid.into(),
+            access_mask: FILE_GENERIC_READ.0 | FILE_GENERIC_EXECUTE.0,
+        }
+    }
+}
+
+struct OwnedSid(PSID);
+
+impl OwnedSid {
+    fn from_string(sid: &str) -> eyre::Result<Self> {
+        let wide_sid = encode_wide(sid);
+        let mut sid_ptr = PSID::default();
+        unsafe { ConvertStringSidToSidW(PCWSTR(wide_sid.as_ptr()), &mut sid_ptr) }?;
+        Ok(Self(sid_ptr))
+    }
+
+    fn as_psid(&self) -> PSID {
+        self.0
+    }
+}
+
+impl Drop for OwnedSid {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0.cast()))) };
+        }
+    }
+}
+
+struct LocalFreeGuard<T>(*mut T);
+
+impl<T> Drop for LocalFreeGuard<T> {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.cast()))) };
+        }
+    }
+}
+
+struct SecurityDescriptorGuard(PSECURITY_DESCRIPTOR);
+
+impl Drop for SecurityDescriptorGuard {
+    fn drop(&mut self) {
+        if !self.0.0.is_null() {
+            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0.cast()))) };
+        }
+    }
+}
+
+fn set_owner_to_administrators(path: &Path) -> eyre::Result<()> {
+    let administrators = OwnedSid::from_string("S-1-5-32-544")?;
+    set_named_security_info(
+        path,
+        OWNER_SECURITY_INFORMATION,
+        Some(administrators.as_psid()),
+        None,
+    )
+}
+
+fn apply_restricted_acl_tree(root: &Path, grants: &[AclGrant]) -> eyre::Result<()> {
+    for path in descendant_paths_including_root(root)? {
+        apply_acl(&path, grants, None, true)
+            .wrap_err_with(|| format!("Failed restricting ACL for {}", path.display()))?;
     }
     Ok(())
+}
+
+fn apply_acl_grants_tree(root: &Path, grants: &[AclGrant]) -> eyre::Result<()> {
+    for path in descendant_paths_including_root(root)? {
+        let current = read_path_security(&path)?;
+        apply_acl(&path, grants, current.dacl, false).wrap_err_with(|| {
+            format!(
+                "Failed applying development read ACL for {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn descendant_paths_including_root(root: &Path) -> eyre::Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        let is_reparse_point = metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0;
+        let is_dir = metadata.is_dir();
+        paths.push(path.clone());
+        if !is_dir || is_reparse_point {
+            continue;
+        }
+
+        for entry in std::fs::read_dir(&path)? {
+            stack.push(entry?.path());
+        }
+    }
+    Ok(paths)
+}
+
+fn apply_acl(
+    path: &Path,
+    grants: &[AclGrant],
+    old_dacl: Option<*const ACL>,
+    protect_dacl: bool,
+) -> eyre::Result<()> {
+    let sids = grants
+        .iter()
+        .map(|grant| OwnedSid::from_string(&grant.sid))
+        .collect::<eyre::Result<Vec<_>>>()?;
+    let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    let entries = grants
+        .iter()
+        .zip(&sids)
+        .map(|(grant, sid)| EXPLICIT_ACCESS_W {
+            grfAccessPermissions: grant.access_mask,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: inheritance,
+            Trustee: TRUSTEE_W {
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_UNKNOWN,
+                ptstrName: PWSTR(sid.as_psid().0.cast()),
+                ..Default::default()
+            },
+        })
+        .collect::<Vec<_>>();
+
+    let mut new_acl = std::ptr::null_mut::<ACL>();
+    win32_result(
+        unsafe { SetEntriesInAclW(Some(&entries), old_dacl, &mut new_acl) },
+        "SetEntriesInAclW",
+    )?;
+    let _new_acl_guard = LocalFreeGuard(new_acl);
+    let mut security_info = DACL_SECURITY_INFORMATION;
+    if protect_dacl {
+        security_info |= PROTECTED_DACL_SECURITY_INFORMATION;
+    }
+    set_named_security_info(path, security_info, None, Some(new_acl))
+}
+
+fn set_named_security_info(
+    path: &Path,
+    security_info: windows::Win32::Security::OBJECT_SECURITY_INFORMATION,
+    owner: Option<PSID>,
+    dacl: Option<*const ACL>,
+) -> eyre::Result<()> {
+    let wide_path = encode_wide(&path.display().to_string());
+    win32_result(
+        unsafe {
+            SetNamedSecurityInfoW(
+                PCWSTR(wide_path.as_ptr()),
+                SE_FILE_OBJECT,
+                security_info,
+                owner,
+                None,
+                dacl,
+                None,
+            )
+        },
+        "SetNamedSecurityInfoW",
+    )
 }
 
 /// # Errors
 ///
-/// Returns an error if the ACL cannot be queried with `icacls`.
+/// Returns an error if the ACL cannot be queried.
 pub fn query_path_protection_status(
     path: &Path,
     owner_sid: &str,
@@ -203,70 +360,140 @@ pub fn query_path_protection_status(
         });
     }
 
-    let output = std::process::Command::new("icacls.exe")
-        .arg(path)
-        .output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        eyre::bail!(
-            "icacls failed while reading ACL for {}: {}{}",
-            path.display(),
-            stdout,
-            stderr
-        );
-    }
-
-    let owner = owner_sid.to_ascii_uppercase();
-    let owner_account = account_name_from_sid_string(owner_sid)
-        .ok()
-        .map(|account| account.to_ascii_uppercase());
-    let acl_lines = stdout
-        .lines()
-        .map(str::to_ascii_uppercase)
-        .collect::<Vec<_>>();
+    let security = read_path_security(path)?;
+    let owner_sid = OwnedSid::from_string(owner_sid)?;
+    let system_sid = OwnedSid::from_string("S-1-5-18")?;
+    let administrators_sid = OwnedSid::from_string("S-1-5-32-544")?;
+    let users_sid = OwnedSid::from_string("S-1-5-32-545")?;
+    let everyone_sid = OwnedSid::from_string("S-1-1-0")?;
+    let aces = security.explicit_allowed_aces()?;
     Ok(PathProtectionStatus {
         path_exists: true,
-        owner_sid_grant_present: acl_contains_principal(&acl_lines, &owner)
-            || owner_account
-                .as_ref()
-                .is_some_and(|account| acl_contains_principal(&acl_lines, account)),
-        system_grant_present: acl_contains_principal(&acl_lines, "NT AUTHORITY\\SYSTEM")
-            || acl_contains_principal(&acl_lines, "S-1-5-18"),
-        administrators_grant_present: acl_contains_principal(&acl_lines, "BUILTIN\\ADMINISTRATORS")
-            || acl_contains_principal(&acl_lines, "S-1-5-32-544"),
-        broad_read_grant_present: acl_contains_principal(&acl_lines, "BUILTIN\\USERS")
-            || acl_contains_principal(&acl_lines, "S-1-5-32-545")
-            || acl_contains_principal(&acl_lines, "EVERYONE")
-            || acl_contains_principal(&acl_lines, "S-1-1-0"),
-        inheritance_disabled: !acl_lines
+        owner_sid_grant_present: aces.iter().any(|ace| ace.sid_equals(owner_sid.as_psid())),
+        system_grant_present: aces.iter().any(|ace| ace.sid_equals(system_sid.as_psid())),
+        administrators_grant_present: aces
             .iter()
-            .any(|line| acl_line_has_access_mask(line) && line.contains("(I)")),
-        raw_acl: stdout,
+            .any(|ace| ace.sid_equals(administrators_sid.as_psid())),
+        broad_read_grant_present: aces.iter().any(|ace| {
+            ace.sid_equals(users_sid.as_psid()) || ace.sid_equals(everyone_sid.as_psid())
+        }),
+        inheritance_disabled: aces.iter().all(|ace| !ace.inherited),
+        raw_acl: aces
+            .iter()
+            .map(AllowedAceView::describe)
+            .collect::<Vec<_>>()
+            .join("\n"),
     })
 }
 
-fn acl_contains_principal(acl_lines: &[String], principal: &str) -> bool {
-    let principal = principal.trim_start_matches('*');
-    let sid_principal = format!("*{principal}");
-    acl_lines.iter().any(|line| {
-        acl_line_has_principal(line, principal) || acl_line_has_principal(line, &sid_principal)
+struct PathSecurity {
+    _descriptor: SecurityDescriptorGuard,
+    dacl: Option<*const ACL>,
+}
+
+impl PathSecurity {
+    fn explicit_allowed_aces(&self) -> eyre::Result<Vec<AllowedAceView>> {
+        let Some(dacl) = self.dacl else {
+            return Ok(Vec::new());
+        };
+        let mut acl_info = ACL_SIZE_INFORMATION::default();
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "ACL_SIZE_INFORMATION size fits in u32"
+        )]
+        win32_unit(
+            unsafe {
+                GetAclInformation(
+                    dacl,
+                    std::ptr::from_mut(&mut acl_info).cast::<c_void>(),
+                    std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+                    windows::Win32::Security::AclSizeInformation,
+                )
+            },
+            "GetAclInformation",
+        )?;
+
+        let mut aces = Vec::new();
+        for ace_index in 0..acl_info.AceCount {
+            let mut ace_ptr = std::ptr::null_mut::<c_void>();
+            win32_unit(unsafe { GetAce(dacl, ace_index, &mut ace_ptr) }, "GetAce")?;
+            let header = unsafe { &*(ace_ptr.cast::<windows::Win32::Security::ACE_HEADER>()) };
+            if header.AceType != 0 {
+                continue;
+            }
+            let ace = unsafe { &*(ace_ptr.cast::<ACCESS_ALLOWED_ACE>()) };
+            aces.push(AllowedAceView {
+                sid: PSID(std::ptr::from_ref(&ace.SidStart).cast_mut().cast()),
+                access_mask: ace.Mask,
+                inherited: ACE_FLAGS(u32::from(header.AceFlags)).contains(INHERITED_ACE),
+            });
+        }
+        Ok(aces)
+    }
+}
+
+struct AllowedAceView {
+    sid: PSID,
+    access_mask: u32,
+    inherited: bool,
+}
+
+impl AllowedAceView {
+    fn sid_equals(&self, other: PSID) -> bool {
+        unsafe { EqualSid(self.sid, other) }.is_ok()
+    }
+
+    fn describe(&self) -> String {
+        let mut sid_string = PWSTR::null();
+        let sid = if unsafe { ConvertSidToStringSidW(self.sid, &mut sid_string) }.is_ok() {
+            let sid = unsafe { sid_string.to_string() }.unwrap_or_else(|_| String::from("<sid>"));
+            let _ = unsafe { LocalFree(Some(HLOCAL(sid_string.0.cast()))) };
+            sid
+        } else {
+            String::from("<sid>")
+        };
+        format!(
+            "{sid}: allow mask=0x{:08x} inherited={}",
+            self.access_mask, self.inherited
+        )
+    }
+}
+
+fn read_path_security(path: &Path) -> eyre::Result<PathSecurity> {
+    let wide_path = encode_wide(&path.display().to_string());
+    let mut dacl = std::ptr::null_mut::<ACL>();
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    win32_result(
+        unsafe {
+            GetNamedSecurityInfoW(
+                PCWSTR(wide_path.as_ptr()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(&mut dacl),
+                None,
+                &mut descriptor,
+            )
+        },
+        "GetNamedSecurityInfoW",
+    )?;
+    Ok(PathSecurity {
+        _descriptor: SecurityDescriptorGuard(descriptor),
+        dacl: (!dacl.is_null()).then_some(dacl.cast_const()),
     })
 }
 
-fn acl_line_has_principal(line: &str, principal: &str) -> bool {
-    let Some(principal_end) = line.find(":(") else {
-        return false;
-    };
-    let before_access_mask = line[..principal_end].trim_end();
-    let Some(prefix) = before_access_mask.strip_suffix(principal) else {
-        return false;
-    };
-    prefix.chars().last().is_none_or(char::is_whitespace)
+fn win32_result(error: WIN32_ERROR, operation: &'static str) -> eyre::Result<()> {
+    if error.0 == 0 {
+        Ok(())
+    } else {
+        eyre::bail!("{operation} failed with Win32 error {}", error.0)
+    }
 }
 
-fn acl_line_has_access_mask(line: &str) -> bool {
-    line.contains(":(")
+fn win32_unit(result: windows::core::Result<()>, operation: &'static str) -> eyre::Result<()> {
+    result.map_err(|error| eyre::eyre!("{operation} failed: {error}"))
 }
 
 pub fn warn_if_path_protection_disabled(path: &Path, status: &PathProtectionStatus) {
@@ -303,100 +530,6 @@ pub fn print_path_protection_status(status: &PathProtectionStatus) {
         "machine-protection-inheritance-disabled={}",
         status.inheritance_disabled
     );
-}
-
-fn account_name_from_sid_string(sid: &str) -> eyre::Result<String> {
-    let wide_sid = encode_wide(sid);
-    let mut sid_ptr = PSID::default();
-    unsafe { ConvertStringSidToSidW(PCWSTR(wide_sid.as_ptr()), &mut sid_ptr) }?;
-    let _sid_guard = SidLocalFreeGuard(sid_ptr);
-
-    let mut name_len = 0u32;
-    let mut domain_len = 0u32;
-    let mut sid_name_use = SID_NAME_USE(0);
-    let _ = unsafe {
-        LookupAccountSidW(
-            PCWSTR::null(),
-            sid_ptr,
-            None,
-            &mut name_len,
-            None,
-            &mut domain_len,
-            &mut sid_name_use,
-        )
-    };
-    if name_len == 0 {
-        eyre::bail!("Failed determining account name length for SID {sid}");
-    }
-
-    let mut name = vec![0u16; name_len as usize];
-    let mut domain = vec![0u16; domain_len.max(1) as usize];
-    let domain_ptr = if domain_len == 0 {
-        None
-    } else {
-        Some(PWSTR(domain.as_mut_ptr()))
-    };
-    unsafe {
-        LookupAccountSidW(
-            PCWSTR::null(),
-            sid_ptr,
-            Some(PWSTR(name.as_mut_ptr())),
-            &mut name_len,
-            domain_ptr,
-            &mut domain_len,
-            &mut sid_name_use,
-        )
-    }?;
-
-    name.truncate(name_len as usize);
-    domain.truncate(domain_len as usize);
-    let name = String::from_utf16_lossy(&name);
-    let domain = String::from_utf16_lossy(&domain);
-    if domain.is_empty() {
-        Ok(name)
-    } else {
-        Ok(format!("{domain}\\{name}"))
-    }
-}
-
-struct SidLocalFreeGuard(PSID);
-
-impl Drop for SidLocalFreeGuard {
-    fn drop(&mut self) {
-        if !self.0.is_invalid() {
-            let _ = unsafe { LocalFree(Some(HLOCAL(self.0.0.cast()))) };
-        }
-    }
-}
-
-fn parse_icacls_failed_processing_count(output: &str) -> u64 {
-    output
-        .lines()
-        .filter_map(|line| line.split_once("Failed processing "))
-        .filter_map(|(_, remainder)| remainder.split_whitespace().next())
-        .find_map(|count| count.parse::<u64>().ok())
-        .unwrap_or(0)
-}
-
-/// # Errors
-///
-/// Returns an error if ownership of the path cannot be reassigned to administrators.
-pub fn take_ownership(path: &Path) -> eyre::Result<()> {
-    let mut command = std::process::Command::new("takeown.exe");
-    command.arg("/F").arg(path).arg("/A");
-    if path.is_dir() {
-        command.arg("/R").arg("/D").arg("Y");
-    }
-    let output = command.output()?;
-    if !output.status.success() {
-        eyre::bail!(
-            "takeown failed for {}: {}{}",
-            path.display(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
