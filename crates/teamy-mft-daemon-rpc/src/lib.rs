@@ -55,14 +55,25 @@ pub struct DaemonLogField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct DaemonLogSpan {
+    pub name: String,
+    pub target: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct DaemonLogEvent {
     pub timestamp_unix_ms: u64,
     pub level: DaemonLogLevel,
     pub target: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
     pub message: String,
     pub request_id: u64,
     pub method: String,
     pub correlation_id: Option<CorrelationId>,
+    pub spans: Vec<DaemonLogSpan>,
     pub fields: Vec<DaemonLogField>,
 }
 
@@ -75,10 +86,13 @@ pub struct DaemonLogWireEvent {
     pub timestamp_unix_ms: u64,
     pub level: DaemonLogLevel,
     pub target: String,
+    pub file: Option<String>,
+    pub line: Option<u32>,
     pub message: String,
     pub request_id: u64,
     pub method: String,
     pub correlation_id: Option<String>,
+    pub spans: Vec<DaemonLogSpan>,
     pub fields: Vec<DaemonLogField>,
 }
 
@@ -92,10 +106,13 @@ impl From<&DaemonLogEvent> for DaemonLogWireEvent {
             timestamp_unix_ms: value.timestamp_unix_ms,
             level: value.level,
             target: value.target.clone(),
+            file: value.file.clone(),
+            line: value.line,
             message: value.message.clone(),
             request_id: value.request_id,
             method: value.method.clone(),
             correlation_id: value.correlation_id.as_ref().map(ToString::to_string),
+            spans: value.spans.clone(),
             fields: value.fields.clone(),
         }
     }
@@ -109,6 +126,8 @@ impl TryFrom<DaemonLogWireEvent> for DaemonLogEvent {
             timestamp_unix_ms: value.timestamp_unix_ms,
             level: value.level,
             target: value.target,
+            file: value.file,
+            line: value.line,
             message: value.message,
             request_id: value.request_id,
             method: value.method,
@@ -116,6 +135,7 @@ impl TryFrom<DaemonLogWireEvent> for DaemonLogEvent {
                 .correlation_id
                 .map(|correlation_id| correlation_id.parse())
                 .transpose()?,
+            spans: value.spans,
             fields: value.fields,
         })
     }

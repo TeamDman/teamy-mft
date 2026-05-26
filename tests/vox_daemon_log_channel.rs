@@ -3,6 +3,7 @@ use teamy_mft_daemon_rpc::CorrelationId;
 use teamy_mft_daemon_rpc::DaemonLogEvent;
 use teamy_mft_daemon_rpc::DaemonLogField;
 use teamy_mft_daemon_rpc::DaemonLogLevel;
+use teamy_mft_daemon_rpc::DaemonLogSpan;
 use teamy_mft_daemon_rpc::DaemonLogWireEvent;
 
 #[vox::service]
@@ -30,6 +31,8 @@ fn sample_log_event() -> DaemonLogEvent {
         timestamp_unix_ms: 1,
         level: DaemonLogLevel::Info,
         target: String::from("teamy_mft::test"),
+        file: Some(String::from("src/machine/daemon.rs")),
+        line: Some(399),
         message: String::from("Daemon pong"),
         request_id: 0,
         method: String::from("ping"),
@@ -38,6 +41,12 @@ fn sample_log_event() -> DaemonLogEvent {
                 .parse::<CorrelationId>()
                 .expect("uuid should parse"),
         ),
+        spans: vec![DaemonLogSpan {
+            name: String::from("daemon_rpc"),
+            target: String::from("teamy_mft::machine::daemon"),
+            file: Some(String::from("src/machine/daemon.rs")),
+            line: Some(393),
+        }],
         fields: vec![DaemonLogField {
             key: String::from("service_name"),
             value: String::from("teamy-mft-daemon"),
@@ -91,6 +100,8 @@ async fn tx_arg_delivers_daemon_log_when_receiver_is_draining_during_call() {
     assert_eq!(response, "pong");
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0].message, "Daemon pong");
+    assert_eq!(logs[0].file.as_deref(), Some("src/machine/daemon.rs"));
+    assert_eq!(logs[0].spans[0].name, "daemon_rpc");
 }
 
 #[tokio::test]
@@ -109,4 +120,6 @@ async fn tx_arg_delivers_daemon_log_when_receiver_starts_after_call() {
     assert_eq!(response, "pong");
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0].message, "Daemon pong");
+    assert_eq!(logs[0].file.as_deref(), Some("src/machine/daemon.rs"));
+    assert_eq!(logs[0].spans[0].name, "daemon_rpc");
 }

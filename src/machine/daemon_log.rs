@@ -1,8 +1,5 @@
-use color_eyre::owo_colors::OwoColorize;
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::IsTerminal;
-use std::io::Write;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -10,6 +7,7 @@ use teamy_mft_daemon_rpc::CorrelationId;
 pub use teamy_mft_daemon_rpc::DaemonLogEvent;
 pub use teamy_mft_daemon_rpc::DaemonLogField;
 pub use teamy_mft_daemon_rpc::DaemonLogLevel;
+pub use teamy_mft_daemon_rpc::DaemonLogSpan;
 pub use teamy_mft_daemon_rpc::DaemonLogWireEvent;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -264,12 +262,15 @@ where
             timestamp_unix_ms: crate::machine::config::current_unix_ms(),
             level: map_level(*metadata.level()),
             target: metadata.target().to_string(),
+            file: metadata.file().map(ToOwned::to_owned),
+            line: metadata.line(),
             message: visitor
                 .message
                 .unwrap_or_else(|| metadata.name().to_string()),
             request_id: 0,
             method: rpc_method.unwrap_or_else(|| String::from("global")),
             correlation_id,
+            spans: span_stack_for_event(event, &ctx),
             fields: visitor.fields,
         };
         daemon_log_hub().publish(event);
@@ -302,6 +303,8 @@ where
         timestamp_unix_ms: crate::machine::config::current_unix_ms(),
         level: DaemonLogLevel::Info,
         target: span.metadata().target().to_string(),
+        file: span.metadata().file().map(ToOwned::to_owned),
+        line: span.metadata().line(),
         message: action.to_string(),
         request_id: 0,
         method: route_fields
@@ -309,11 +312,35 @@ where
             .clone()
             .unwrap_or_else(|| String::from("global")),
         correlation_id: route_fields.correlation_id.clone(),
+        spans: vec![daemon_log_span_from_metadata(span.metadata())],
         fields: vec![DaemonLogField {
             key: String::from("span_name"),
             value: span.metadata().name().to_string(),
         }],
     });
+}
+
+fn span_stack_for_event<S>(event: &Event<'_>, ctx: &Context<'_, S>) -> Vec<DaemonLogSpan>
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    ctx.event_scope(event)
+        .map(|scope| {
+            scope
+                .from_root()
+                .map(|span| daemon_log_span_from_metadata(span.metadata()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn daemon_log_span_from_metadata(metadata: &Metadata<'_>) -> DaemonLogSpan {
+    DaemonLogSpan {
+        name: metadata.name().to_string(),
+        target: metadata.target().to_string(),
+        file: metadata.file().map(ToOwned::to_owned),
+        line: metadata.line(),
+    }
 }
 
 fn should_capture_daemon_log_target(target: &str, level: tracing::Level) -> bool {
@@ -436,39 +463,110 @@ pub async fn stop_log_forwarder(mut forwarder: LogForwarderHandle) {
     let _ = tokio::time::timeout(Duration::from_secs(2), &mut forwarder.join_handle).await;
 }
 
-#[must_use]
-pub fn render_daemon_log_event(event: &DaemonLogEvent) -> String {
-    let fields = event
+fn daemon_log_fields(event: &DaemonLogEvent) -> String {
+    event
         .fields
         .iter()
         .map(|field| format!("{}={}", field.key, field.value))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(", ")
+}
+
+fn daemon_log_spans(event: &DaemonLogEvent) -> String {
+    event
+        .spans
+        .iter()
+        .map(|span| match (&span.file, span.line) {
+            (Some(file), Some(line)) => format!("{}@{}:{line}", span.name, file),
+            (Some(file), None) => format!("{}@{file}", span.name),
+            _ => span.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
+fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
+    let fields = event
+        .fields
+        .is_empty()
+        .then(String::new)
+        .unwrap_or_else(|| daemon_log_fields(event));
     let correlation_id = event
         .correlation_id
         .as_ref()
         .map_or_else(|| String::from("global"), ToString::to_string);
-    let prefix = if std::io::stderr().is_terminal() {
-        "[daemon] ".bright_blue().to_string()
-    } else {
-        String::from("[daemon] ")
-    };
-    if fields.is_empty() {
-        format!(
-            "{prefix}{} {} {} {}: {}",
-            event.level, event.method, correlation_id, event.target, event.message
-        )
-    } else {
-        format!(
-            "{prefix}{} {} {} {}: {} ({fields})",
-            event.level, event.method, correlation_id, event.target, event.message
-        )
+    let file = event.file.as_deref().unwrap_or("unknown");
+    let line = event
+        .line
+        .map_or_else(|| String::from("unknown"), |line| line.to_string());
+    let spans = daemon_log_spans(event);
+    match event.level {
+        DaemonLogLevel::Trace => tracing::trace!(
+            target: "teamy_mft::daemon_remote",
+            side = "daemon",
+            daemon_target = %event.target,
+            daemon_file = %file,
+            daemon_line = %line,
+            daemon_spans = %spans,
+            rpc_method = %event.method,
+            correlation_id = %correlation_id,
+            daemon_fields = %fields,
+            "{}",
+            event.message
+        ),
+        DaemonLogLevel::Debug => tracing::debug!(
+            target: "teamy_mft::daemon_remote",
+            side = "daemon",
+            daemon_target = %event.target,
+            daemon_file = %file,
+            daemon_line = %line,
+            daemon_spans = %spans,
+            rpc_method = %event.method,
+            correlation_id = %correlation_id,
+            daemon_fields = %fields,
+            "{}",
+            event.message
+        ),
+        DaemonLogLevel::Info => tracing::info!(
+            target: "teamy_mft::daemon_remote",
+            side = "daemon",
+            daemon_target = %event.target,
+            daemon_file = %file,
+            daemon_line = %line,
+            daemon_spans = %spans,
+            rpc_method = %event.method,
+            correlation_id = %correlation_id,
+            daemon_fields = %fields,
+            "{}",
+            event.message
+        ),
+        DaemonLogLevel::Warn => tracing::warn!(
+            target: "teamy_mft::daemon_remote",
+            side = "daemon",
+            daemon_target = %event.target,
+            daemon_file = %file,
+            daemon_line = %line,
+            daemon_spans = %spans,
+            rpc_method = %event.method,
+            correlation_id = %correlation_id,
+            daemon_fields = %fields,
+            "{}",
+            event.message
+        ),
+        DaemonLogLevel::Error => tracing::error!(
+            target: "teamy_mft::daemon_remote",
+            side = "daemon",
+            daemon_target = %event.target,
+            daemon_file = %file,
+            daemon_line = %line,
+            daemon_spans = %spans,
+            rpc_method = %event.method,
+            correlation_id = %correlation_id,
+            daemon_fields = %fields,
+            "{}",
+            event.message
+        ),
     }
-}
-
-fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "{}", render_daemon_log_event(event));
 }
 
 pub async fn drain_stderr_logs(mut rx: vox::Rx<DaemonLogWireEvent>) {
@@ -541,6 +639,8 @@ mod tests {
             timestamp_unix_ms: 1,
             level: DaemonLogLevel::Info,
             target: String::from("test"),
+            file: None,
+            line: None,
             message: String::from("event-1"),
             request_id: 0,
             method: String::from("query"),
@@ -548,12 +648,15 @@ mod tests {
                 CorrelationId::from_str("00000000-0000-0000-0000-000000000000")
                     .expect("uuid should parse"),
             ),
+            spans: Vec::new(),
             fields: Vec::new(),
         });
         hub.publish(DaemonLogEvent {
             timestamp_unix_ms: 2,
             level: DaemonLogLevel::Info,
             target: String::from("test"),
+            file: None,
+            line: None,
             message: String::from("event-2"),
             request_id: 0,
             method: String::from("query"),
@@ -561,6 +664,7 @@ mod tests {
                 CorrelationId::from_str("ffffffff-ffff-ffff-ffff-ffffffffffff")
                     .expect("uuid should parse"),
             ),
+            spans: Vec::new(),
             fields: Vec::new(),
         });
 
