@@ -385,7 +385,7 @@ fn repair_published_drive_permissions(
 impl MachineDaemonRpc for MachineDaemonService {
     async fn ping(
         &self,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<PingResponse, MachineError> {
         let correlation_id = next_correlation_id("ping");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -396,12 +396,13 @@ impl MachineDaemonRpc for MachineDaemonService {
             rpc_method = "ping"
         );
         let response = async move {
-            tracing::info!(service_name = %service_name, "Responding to daemon ping");
+            tracing::info!(service_name = %service_name, "Daemon pong");
             Ok(PingResponse {
                 service_name,
                 build: crate::machine::ipc::DaemonBuildInfo {
                     app_version: String::from(crate::APP_SEMVER),
                     git_revision: String::from(crate::APP_GIT_REVISION),
+                    build_unix_ms: crate::APP_BUILD_UNIX_MS.parse().unwrap_or(0),
                     rpc_compat_version: crate::DAEMON_RPC_COMPAT_VERSION,
                 },
             })
@@ -414,7 +415,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn shutdown(
         &self,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<(), MachineError> {
         let correlation_id = next_correlation_id("shutdown");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -441,7 +442,7 @@ impl MachineDaemonRpc for MachineDaemonService {
     async fn query(
         &self,
         request: QueryRequest,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<RpcQueryResponse, MachineError> {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -457,7 +458,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         &self,
         request: QueryRequest,
         rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<QueryStreamResponse, MachineError> {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -492,7 +493,7 @@ impl MachineDaemonRpc for MachineDaemonService {
     async fn sync(
         &self,
         request: SyncRequest,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<(), MachineError> {
         let correlation_id = next_correlation_id("sync");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -541,7 +542,7 @@ impl MachineDaemonRpc for MachineDaemonService {
     async fn status(
         &self,
         request: StatusRequest,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<StatusResponse, MachineError> {
         let correlation_id = next_correlation_id("status");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
@@ -574,7 +575,7 @@ impl MachineDaemonRpc for MachineDaemonService {
     async fn stream_logs(
         &self,
         request: LogStreamRequest,
-        logs: vox::Tx<crate::machine::daemon_log::DaemonLogEvent>,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
         mut cancel: vox::Rx<u8>,
     ) -> Result<(), MachineError> {
         tracing::info!(
@@ -584,7 +585,11 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         if request.replay_recent {
             for event in daemon_log_hub().snapshot() {
-                if logs.send(event).await.is_err() {
+                if logs
+                    .send(crate::machine::daemon_log::DaemonLogWireEvent::from(&event))
+                    .await
+                    .is_err()
+                {
                     return Ok(());
                 }
             }
@@ -606,7 +611,11 @@ impl MachineDaemonRpc for MachineDaemonService {
                     live_result = live_rx.recv() => {
                         match live_result {
                             Ok(event) => {
-                                if logs.send(event).await.is_err() {
+                                if logs
+                                    .send(crate::machine::daemon_log::DaemonLogWireEvent::from(&event))
+                                    .await
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }

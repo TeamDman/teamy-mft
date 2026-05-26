@@ -22,11 +22,14 @@ use tracing::info_span;
 /// Version string combining package version and git revision.
 pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
 pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
+pub const APP_BUILD_UNIX_MS: &str = env!("BUILD_UNIX_MS");
 pub const DAEMON_RPC_COMPAT_VERSION: u32 = 1;
 pub const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (rev ",
     env!("GIT_REVISION"),
+    ", built ",
+    env!("BUILD_UNIX_MS"),
     ")"
 );
 

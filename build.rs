@@ -1,8 +1,11 @@
 use std::process::Command;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn main() {
     add_exe_resources();
     add_git_revision();
+    add_build_unix_ms();
 }
 
 /// Embeds Windows resources (like application icon) into the executable.
@@ -29,4 +32,17 @@ fn add_git_revision() {
         .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string());
 
     println!("cargo:rustc-env=GIT_REVISION={rev}");
+}
+
+fn add_build_unix_ms() {
+    println!("cargo:rerun-if-env-changed=TEAMY_MFT_BUILD_UNIX_MS");
+    let build_unix_ms = std::env::var("TEAMY_MFT_BUILD_UNIX_MS").unwrap_or_else(|_| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_millis()
+            .to_string()
+    });
+
+    println!("cargo:rustc-env=BUILD_UNIX_MS={build_unix_ms}");
 }

@@ -64,6 +64,7 @@ pub fn uninstall_windows_service(service_name: &str) -> eyre::Result<()> {
 
     let _ = stop_service_if_running(service_name);
     run_sc_command(["delete", service_name])?;
+    wait_for_missing(service_name, std::time::Duration::from_secs(10))?;
     Ok(())
 }
 
@@ -202,6 +203,24 @@ pub fn wait_for_stopped(service_name: &str, timeout: std::time::Duration) -> eyr
     }
 
     eyre::bail!("Timed out waiting for {} to stop", service_name)
+}
+
+fn wait_for_missing(service_name: &str, timeout: std::time::Duration) -> eyre::Result<()> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if matches!(
+            query_service_state(service_name)?,
+            WindowsServiceState::Missing
+        ) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+
+    eyre::bail!(
+        "Timed out waiting for {} to be deleted from the service manager",
+        service_name
+    )
 }
 
 fn run_sc_command(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> eyre::Result<()> {

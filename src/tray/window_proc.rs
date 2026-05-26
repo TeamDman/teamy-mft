@@ -192,7 +192,8 @@ impl TrayWindowState {
                 return;
             }
 
-            let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+            let (logs_tx, logs_rx) =
+                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
             let drain_thread = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
 
             let stream_result = crate::machine::ipc::stream_logs(

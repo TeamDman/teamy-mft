@@ -1,5 +1,8 @@
+use color_eyre::owo_colors::OwoColorize;
 use std::collections::VecDeque;
 use std::fmt;
+use std::io::IsTerminal;
+use std::io::Write;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -7,10 +10,12 @@ use teamy_mft_daemon_rpc::CorrelationId;
 pub use teamy_mft_daemon_rpc::DaemonLogEvent;
 pub use teamy_mft_daemon_rpc::DaemonLogField;
 pub use teamy_mft_daemon_rpc::DaemonLogLevel;
+pub use teamy_mft_daemon_rpc::DaemonLogWireEvent;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tracing::Event;
 use tracing::Id;
+use tracing::Metadata;
 use tracing::Subscriber;
 use tracing::field::Field;
 use tracing::field::Visit;
@@ -94,6 +99,15 @@ pub fn daemon_log_hub() -> &'static DaemonLogHub {
     &DAEMON_LOG_HUB
 }
 
+#[must_use]
+pub fn snapshot_for_correlation(correlation_id: &CorrelationId) -> Vec<DaemonLogEvent> {
+    daemon_log_hub()
+        .snapshot()
+        .into_iter()
+        .filter(|event| event.correlation_id.as_ref() == Some(correlation_id))
+        .collect()
+}
+
 #[derive(Debug, Default, Clone)]
 struct RouteFields {
     correlation_id: Option<CorrelationId>,
@@ -113,7 +127,7 @@ impl TraceFieldVisitor {
         let value = strip_quotes(rendered);
         match field.name() {
             "correlation_id" => {
-                if let Ok(correlation_id) = value.parse::<CorrelationId>() {
+                if let Some(correlation_id) = parse_correlation_id(&value) {
                     self.correlation_id = Some(correlation_id);
                 } else {
                     self.fields.push(DaemonLogField {
@@ -177,6 +191,18 @@ fn strip_quotes(value: &str) -> String {
     value.trim_matches('"').to_string()
 }
 
+fn parse_correlation_id(value: &str) -> Option<CorrelationId> {
+    if let Ok(correlation_id) = value.parse::<CorrelationId>() {
+        return Some(correlation_id);
+    }
+
+    let trimmed = value
+        .strip_prefix("CorrelationId(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .unwrap_or(value);
+    trimmed.parse::<CorrelationId>().ok()
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DaemonTraceLayer;
 
@@ -184,6 +210,11 @@ impl<S> Layer<S> for DaemonTraceLayer
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
+    fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
+        should_capture_daemon_log_target(metadata.target(), *metadata.level())
+            || ctx.enabled(metadata)
+    }
+
     fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
             let mut visitor = TraceFieldVisitor::default();
@@ -243,6 +274,46 @@ where
         };
         daemon_log_hub().publish(event);
     }
+
+    fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
+        publish_span_transition(&ctx, id, "enter_span");
+    }
+
+    fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        publish_span_transition(&ctx, id, "exit_span");
+    }
+}
+
+fn publish_span_transition<S>(ctx: &Context<'_, S>, id: &Id, action: &'static str)
+where
+    S: Subscriber + for<'span> LookupSpan<'span>,
+{
+    let Some(span) = ctx.span(id) else {
+        return;
+    };
+    let Some(route_fields) = span.extensions().get::<RouteFields>().cloned() else {
+        return;
+    };
+    if route_fields.correlation_id.is_none() && route_fields.rpc_method.is_none() {
+        return;
+    }
+
+    daemon_log_hub().publish(DaemonLogEvent {
+        timestamp_unix_ms: crate::machine::config::current_unix_ms(),
+        level: DaemonLogLevel::Info,
+        target: span.metadata().target().to_string(),
+        message: action.to_string(),
+        request_id: 0,
+        method: route_fields
+            .rpc_method
+            .clone()
+            .unwrap_or_else(|| String::from("global")),
+        correlation_id: route_fields.correlation_id.clone(),
+        fields: vec![DaemonLogField {
+            key: String::from("span_name"),
+            value: span.metadata().name().to_string(),
+        }],
+    });
 }
 
 fn should_capture_daemon_log_target(target: &str, level: tracing::Level) -> bool {
@@ -277,19 +348,19 @@ impl fmt::Debug for LogForwarderHandle {
 #[must_use]
 pub fn spawn_correlation_log_forwarder(
     correlation_id: CorrelationId,
-    logs_tx: vox::Tx<DaemonLogEvent>,
+    logs_tx: vox::Tx<DaemonLogWireEvent>,
 ) -> LogForwarderHandle {
     spawn_log_forwarder(Some(correlation_id), logs_tx)
 }
 
 #[must_use]
-pub fn spawn_global_log_forwarder(logs_tx: vox::Tx<DaemonLogEvent>) -> LogForwarderHandle {
+pub fn spawn_global_log_forwarder(logs_tx: vox::Tx<DaemonLogWireEvent>) -> LogForwarderHandle {
     spawn_log_forwarder(None, logs_tx)
 }
 
 fn spawn_log_forwarder(
     correlation_id: Option<CorrelationId>,
-    logs_tx: vox::Tx<DaemonLogEvent>,
+    logs_tx: vox::Tx<DaemonLogWireEvent>,
 ) -> LogForwarderHandle {
     let mut live_rx = daemon_log_hub().subscribe();
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
@@ -304,7 +375,7 @@ fn spawn_log_forwarder(
                     match recv_result {
                         Ok(event) => {
                             if matches_correlation_id(&event, correlation_id.as_ref())
-                                && logs_tx.send(event).await.is_err()
+                                && logs_tx.send(DaemonLogWireEvent::from(&event)).await.is_err()
                             {
                                 break;
                             }
@@ -328,13 +399,16 @@ fn spawn_log_forwarder(
 async fn drain_available_events(
     live_rx: &mut broadcast::Receiver<DaemonLogEvent>,
     correlation_id: Option<&CorrelationId>,
-    logs_tx: &vox::Tx<DaemonLogEvent>,
+    logs_tx: &vox::Tx<DaemonLogWireEvent>,
 ) {
     loop {
         match live_rx.try_recv() {
             Ok(event) => {
                 if matches_correlation_id(&event, correlation_id)
-                    && logs_tx.send(event).await.is_err()
+                    && logs_tx
+                        .send(DaemonLogWireEvent::from(&event))
+                        .await
+                        .is_err()
                 {
                     break;
                 }
@@ -374,77 +448,66 @@ pub fn render_daemon_log_event(event: &DaemonLogEvent) -> String {
         .correlation_id
         .as_ref()
         .map_or_else(|| String::from("global"), ToString::to_string);
+    let prefix = if std::io::stderr().is_terminal() {
+        "[daemon] ".bright_blue().to_string()
+    } else {
+        String::from("[daemon] ")
+    };
     if fields.is_empty() {
         format!(
-            "[daemon:{}:{}:{}] {}",
-            event.level, event.method, correlation_id, event.message
+            "{prefix}{} {} {} {}: {}",
+            event.level, event.method, correlation_id, event.target, event.message
         )
     } else {
         format!(
-            "[daemon:{}:{}:{}] {} ({fields})",
-            event.level, event.method, correlation_id, event.message
+            "{prefix}{} {} {} {}: {} ({fields})",
+            event.level, event.method, correlation_id, event.target, event.message
         )
     }
 }
 
 fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
-    let fields = event
-        .fields
-        .iter()
-        .map(|field| format!("{}={}", field.key, field.value))
-        .collect::<Vec<_>>()
-        .join(", ");
-    match event.level {
-        DaemonLogLevel::Trace => tracing::trace!(
-            target: "teamy_mft::daemon_remote",
-            daemon_target = %event.target,
-            rpc_method = %event.method,
-            correlation_id = ?event.correlation_id,
-            daemon_fields = %fields,
-            "{}",
-            event.message
-        ),
-        DaemonLogLevel::Debug => tracing::debug!(
-            target: "teamy_mft::daemon_remote",
-            daemon_target = %event.target,
-            rpc_method = %event.method,
-            correlation_id = ?event.correlation_id,
-            daemon_fields = %fields,
-            "{}",
-            event.message
-        ),
-        DaemonLogLevel::Info => tracing::info!(
-            target: "teamy_mft::daemon_remote",
-            daemon_target = %event.target,
-            rpc_method = %event.method,
-            correlation_id = ?event.correlation_id,
-            daemon_fields = %fields,
-            "{}",
-            event.message
-        ),
-        DaemonLogLevel::Warn => tracing::warn!(
-            target: "teamy_mft::daemon_remote",
-            daemon_target = %event.target,
-            rpc_method = %event.method,
-            correlation_id = ?event.correlation_id,
-            daemon_fields = %fields,
-            "{}",
-            event.message
-        ),
-        DaemonLogLevel::Error => tracing::error!(
-            target: "teamy_mft::daemon_remote",
-            daemon_target = %event.target,
-            rpc_method = %event.method,
-            correlation_id = ?event.correlation_id,
-            daemon_fields = %fields,
-            "{}",
-            event.message
-        ),
+    let mut stderr = std::io::stderr().lock();
+    let _ = writeln!(stderr, "{}", render_daemon_log_event(event));
+}
+
+pub async fn drain_stderr_logs(mut rx: vox::Rx<DaemonLogWireEvent>) {
+    loop {
+        match rx.recv().await {
+            Ok(Some(event)) => match DaemonLogEvent::try_from(event.get().clone()) {
+                Ok(event) => emit_forwarded_daemon_log(&event),
+                Err(error) => tracing::warn!(error = %error, "Failed decoding daemon log event"),
+            },
+            Ok(None) => break,
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed draining daemon logs");
+                break;
+            }
+        }
+    }
+}
+
+pub async fn drain_stderr_logs_until_idle(
+    mut rx: vox::Rx<DaemonLogWireEvent>,
+    idle_timeout: Duration,
+) {
+    loop {
+        match tokio::time::timeout(idle_timeout, rx.recv()).await {
+            Ok(Ok(Some(event))) => match DaemonLogEvent::try_from(event.get().clone()) {
+                Ok(event) => emit_forwarded_daemon_log(&event),
+                Err(error) => tracing::warn!(error = %error, "Failed decoding daemon log event"),
+            },
+            Ok(Ok(None)) | Err(_) => break,
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "Failed draining daemon logs");
+                break;
+            }
+        }
     }
 }
 
 #[must_use]
-pub fn spawn_stderr_log_drain(mut rx: vox::Rx<DaemonLogEvent>) -> std::thread::JoinHandle<()> {
+pub fn spawn_stderr_log_drain(rx: vox::Rx<DaemonLogWireEvent>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -456,18 +519,7 @@ pub fn spawn_stderr_log_drain(mut rx: vox::Rx<DaemonLogEvent>) -> std::thread::J
                 return;
             }
         };
-        runtime.block_on(async move {
-            loop {
-                match rx.recv().await {
-                    Ok(Some(event)) => emit_forwarded_daemon_log(event.get()),
-                    Ok(None) => break,
-                    Err(error) => {
-                        tracing::warn!(error = %error, "Failed draining daemon logs");
-                        break;
-                    }
-                }
-            }
-        });
+        runtime.block_on(drain_stderr_logs(rx));
     })
 }
 
@@ -476,8 +528,11 @@ mod tests {
     use super::CorrelationId;
     use super::DaemonLogEvent;
     use super::DaemonLogLevel;
+    use super::DaemonTraceLayer;
     use super::daemon_log_hub;
+    use super::snapshot_for_correlation;
     use std::str::FromStr;
+    use tracing_subscriber::prelude::*;
 
     #[test]
     fn hub_keeps_only_latest_events() {
@@ -520,6 +575,30 @@ mod tests {
                 .correlation_id
                 .as_ref(),
             Some(&expected)
+        );
+    }
+
+    #[test]
+    fn trace_layer_captures_events_inside_correlation_span() {
+        let correlation_id = CorrelationId::from_str("11111111-1111-1111-1111-111111111111")
+            .expect("uuid should parse");
+        let subscriber = tracing_subscriber::registry().with(DaemonTraceLayer);
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "daemon_rpc",
+                correlation_id = %correlation_id,
+                rpc_method = "ping"
+            );
+            let _guard = span.enter();
+            tracing::info!("Daemon pong");
+        });
+
+        let events = snapshot_for_correlation(&correlation_id);
+        assert!(
+            events.iter().any(|event| event.message == "Daemon pong"
+                && event.method == "ping"
+                && event.correlation_id.as_ref() == Some(&correlation_id)),
+            "expected daemon pong to be captured for correlation id; got {events:#?}"
         );
     }
 }

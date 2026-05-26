@@ -28,22 +28,21 @@ impl ServiceStopArgs {
         let was_running = match query_service_state(service_name)? {
             WindowsServiceState::Running | WindowsServiceState::StartPending => {
                 let (logs_tx, logs_rx) =
-                    vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                    vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 match shutdown_daemon(&config, logs_tx) {
                     Ok(Ok(())) => {
-                        let _ = log_drain.join();
+                        drop(log_drain);
                         wait_for_stopped(service_name, std::time::Duration::from_secs(10))
                             .wrap_err_with(|| {
                                 format!(
-                                    "Timed out waiting for {} to stop after daemon shutdown request",
-                                    service_name
+                                    "Timed out waiting for {service_name} to stop after daemon shutdown request"
                                 )
                             })?;
                         true
                     }
                     Ok(Err(error)) => {
-                        let _ = log_drain.join();
+                        drop(log_drain);
                         warn!(
                             service_name,
                             error = %error.message,
@@ -52,7 +51,7 @@ impl ServiceStopArgs {
                         stop_service_if_running(service_name)?
                     }
                     Err(error) => {
-                        let _ = log_drain.join();
+                        drop(log_drain);
                         warn!(
                             service_name,
                             error = %error,

@@ -107,7 +107,7 @@ fn load_daemon_status_summary(
     };
 
     let runtime_status = if compatibility.rpc_compat_matches {
-        let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+        let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
         let response = crate::machine::ipc::status(
             &config,
@@ -116,7 +116,7 @@ fn load_daemon_status_summary(
             },
             logs_tx,
         );
-        let _ = log_drain.join();
+        drop(log_drain);
         match response? {
             Ok(status) => Some(status),
             Err(error) if allow_fallback => {
@@ -171,6 +171,7 @@ fn print_daemon_summary(summary: &DaemonStatusSummary, verbose: bool) {
         println!("machine-daemon-service-name={}", ping.service_name);
         println!("machine-daemon-app-version={}", ping.build.app_version);
         println!("machine-daemon-git-revision={}", ping.build.git_revision);
+        println!("machine-daemon-build-unix-ms={}", ping.build.build_unix_ms);
         println!(
             "machine-daemon-rpc-compat-version={}",
             ping.build.rpc_compat_version
@@ -189,6 +190,10 @@ fn print_daemon_summary(summary: &DaemonStatusSummary, verbose: bool) {
                 crate::APP_GIT_REVISION
             );
             println!(
+                "machine-daemon-cli-build-unix-ms={}",
+                crate::APP_BUILD_UNIX_MS
+            );
+            println!(
                 "machine-daemon-cli-rpc-compat-version={}",
                 crate::DAEMON_RPC_COMPAT_VERSION
             );
@@ -203,6 +208,10 @@ fn print_daemon_summary(summary: &DaemonStatusSummary, verbose: bool) {
             println!(
                 "machine-daemon-git-revision-match={}",
                 compatibility.git_revision_matches
+            );
+            println!(
+                "machine-daemon-build-unix-ms-match={}",
+                compatibility.build_unix_ms_matches
             );
         }
     }

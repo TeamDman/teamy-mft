@@ -1,5 +1,4 @@
 use facet::Facet;
-use std::ops::Deref;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Facet)]
@@ -10,14 +9,6 @@ impl CorrelationId {
     #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4())
-    }
-}
-
-impl Deref for CorrelationId {
-    type Target = Uuid;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -77,6 +68,57 @@ pub struct DaemonLogEvent {
 
 unsafe impl vox_types::Reborrow for DaemonLogEvent {
     type Ref<'a> = DaemonLogEvent;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Facet)]
+pub struct DaemonLogWireEvent {
+    pub timestamp_unix_ms: u64,
+    pub level: DaemonLogLevel,
+    pub target: String,
+    pub message: String,
+    pub request_id: u64,
+    pub method: String,
+    pub correlation_id: Option<String>,
+    pub fields: Vec<DaemonLogField>,
+}
+
+unsafe impl vox_types::Reborrow for DaemonLogWireEvent {
+    type Ref<'a> = DaemonLogWireEvent;
+}
+
+impl From<&DaemonLogEvent> for DaemonLogWireEvent {
+    fn from(value: &DaemonLogEvent) -> Self {
+        Self {
+            timestamp_unix_ms: value.timestamp_unix_ms,
+            level: value.level,
+            target: value.target.clone(),
+            message: value.message.clone(),
+            request_id: value.request_id,
+            method: value.method.clone(),
+            correlation_id: value.correlation_id.as_ref().map(ToString::to_string),
+            fields: value.fields.clone(),
+        }
+    }
+}
+
+impl TryFrom<DaemonLogWireEvent> for DaemonLogEvent {
+    type Error = uuid::Error;
+
+    fn try_from(value: DaemonLogWireEvent) -> Result<Self, Self::Error> {
+        Ok(Self {
+            timestamp_unix_ms: value.timestamp_unix_ms,
+            level: value.level,
+            target: value.target,
+            message: value.message,
+            request_id: value.request_id,
+            method: value.method,
+            correlation_id: value
+                .correlation_id
+                .map(|correlation_id| correlation_id.parse())
+                .transpose()?,
+            fields: value.fields,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
@@ -168,6 +210,7 @@ pub struct DegradedDriveStatus {
 pub struct DaemonBuildInfo {
     pub app_version: String,
     pub git_revision: String,
+    pub build_unix_ms: u64,
     pub rpc_compat_version: u32,
 }
 
@@ -243,39 +286,39 @@ impl MachineError {
 
 #[vox::service]
 pub trait MachineDaemonRpc {
-    async fn ping(&self, logs: vox::Tx<DaemonLogEvent>) -> Result<PingResponse, MachineError>;
+    async fn ping(&self, logs: vox::Tx<DaemonLogWireEvent>) -> Result<PingResponse, MachineError>;
 
-    async fn shutdown(&self, logs: vox::Tx<DaemonLogEvent>) -> Result<(), MachineError>;
+    async fn shutdown(&self, logs: vox::Tx<DaemonLogWireEvent>) -> Result<(), MachineError>;
 
     async fn query(
         &self,
         request: QueryRequest,
-        logs: vox::Tx<DaemonLogEvent>,
+        logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<QueryResponse, MachineError>;
 
     async fn query_stream(
         &self,
         request: QueryRequest,
         rows: vox::Tx<IndexedPathRowDto>,
-        logs: vox::Tx<DaemonLogEvent>,
+        logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<QueryStreamResponse, MachineError>;
 
     async fn sync(
         &self,
         request: SyncRequest,
-        logs: vox::Tx<DaemonLogEvent>,
+        logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<(), MachineError>;
 
     async fn status(
         &self,
         request: StatusRequest,
-        logs: vox::Tx<DaemonLogEvent>,
+        logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<StatusResponse, MachineError>;
 
     async fn stream_logs(
         &self,
         request: LogStreamRequest,
-        logs: vox::Tx<DaemonLogEvent>,
+        logs: vox::Tx<DaemonLogWireEvent>,
         cancel: vox::Rx<u8>,
     ) -> Result<(), MachineError>;
 }

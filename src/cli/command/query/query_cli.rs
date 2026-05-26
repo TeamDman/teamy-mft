@@ -550,7 +550,7 @@ impl QueryArgs {
                         let (rows_tx, rows_rx) =
                             vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                         let (logs_tx, logs_rx) =
-                            vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                            vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
                         let row_drain = spawn_streamed_query_row_drain(rows_rx);
                         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                         let query_outcome =
@@ -622,7 +622,7 @@ impl QueryArgs {
                 };
                 let (rows_tx, rows_rx) = vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                 let (logs_tx, logs_rx) =
-                    vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+                    vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
                 let row_drain = spawn_streamed_query_row_drain(rows_rx);
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 let response =

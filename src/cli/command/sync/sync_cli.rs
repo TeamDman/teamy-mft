@@ -60,7 +60,7 @@ impl SyncArgs {
             if_exists: IfExistsDto::from(self.if_exists),
         };
         crate::machine::ipc::ensure_daemon_ready(&config)?;
-        let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogEvent>();
+        let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
         let response = crate::machine::ipc::sync(&config, request, logs_tx)?;
         let _ = log_drain.join();
