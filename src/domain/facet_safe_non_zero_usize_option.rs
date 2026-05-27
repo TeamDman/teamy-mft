@@ -1,9 +1,18 @@
 use facet::Facet;
 use std::num::NonZeroUsize;
+use std::ops::Deref;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct FacetSafeNonZeroUsizeOption(Option<NonZeroUsize>);
+
+impl Deref for FacetSafeNonZeroUsizeOption {
+    type Target = Option<NonZeroUsize>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl FacetSafeNonZeroUsizeOption {
     #[must_use]
@@ -19,7 +28,7 @@ impl FacetSafeNonZeroUsizeOption {
 
 impl From<FacetSafeNonZeroUsizeOption> for usize {
     fn from(value: FacetSafeNonZeroUsizeOption) -> Self {
-        value.get().unwrap_or(0)
+        value.0.map_or(0, NonZeroUsize::get)
     }
 }
 

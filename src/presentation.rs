@@ -26,6 +26,9 @@ impl ResultListPresentation {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if rendering a row or writing to `writer` fails.
     pub fn write_result_list<T, W, Width, Render>(
         &self,
         rows: &[T],
@@ -42,16 +45,11 @@ impl ResultListPresentation {
         if use_columns {
             self.write_columns(rows, writer, display_width, render)
         } else {
-            self.write_lines(rows, writer, render)
+            Self::write_lines(rows, writer, render)
         }
     }
 
-    fn write_lines<T, W, Render>(
-        &self,
-        rows: &[T],
-        writer: &mut W,
-        render: Render,
-    ) -> io::Result<()>
+    fn write_lines<T, W, Render>(rows: &[T], writer: &mut W, render: Render) -> io::Result<()>
     where
         W: Write,
         Render: Fn(&T, &mut W) -> io::Result<()>,

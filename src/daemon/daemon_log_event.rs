@@ -41,6 +41,7 @@ pub struct DaemonLogEvent {
     pub fields: Vec<DaemonLogField>,
 }
 
+// SAFETY: `DaemonLogEvent` owns all nested fields used for vox transport.
 unsafe impl vox_types::Reborrow for DaemonLogEvent {
     type Ref<'a> = DaemonLogEvent;
 }
@@ -60,6 +61,7 @@ pub struct DaemonLogWireEvent {
     pub fields: Vec<DaemonLogField>,
 }
 
+// SAFETY: `DaemonLogWireEvent` owns all nested fields used for vox transport.
 unsafe impl vox_types::Reborrow for DaemonLogWireEvent {
     type Ref<'a> = DaemonLogWireEvent;
 }

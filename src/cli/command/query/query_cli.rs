@@ -53,7 +53,7 @@ impl QueryArgs {
     /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, limit = self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_ignored = self.plan.show_ignored, only_ignored = self.plan.only_ignored, density = ?self.density))]
+    #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_ignored = self.plan.show_ignored, only_ignored = self.plan.only_ignored, density = ?self.density))]
     pub fn invoke_and_print(self) -> eyre::Result<()> {
         let results = self.collect_rows()?;
 
@@ -63,10 +63,12 @@ impl QueryArgs {
                 || self.plan.only_deleted
                 || self.plan.show_ignored
                 || self.plan.only_ignored);
-        let result_limit = match self.plan.limit {
-            Some(limit) => limit.get().min(results.len()),
-            None => results.len(),
-        };
+        let result_limit = self
+            .plan
+            .limit
+            .map(std::convert::Into::into)
+            .unwrap_or(results.len())
+            .min(results.len());
         let display_results = &results[..result_limit];
         let presentation = ResultListPresentation::for_terminal();
         let mut stdout = std::io::stdout().lock();
@@ -108,7 +110,7 @@ impl QueryArgs {
                         rule_index = rule_index,
                         query = ?group,
                         "Query rule contains only whitespace"
-                    )
+                    );
                 }
             }
         }
@@ -127,10 +129,12 @@ impl QueryArgs {
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;
-        let rtn = match match self.no_daemon {
-            true => QueryDataSource::DiskOnly,
-            false => QueryDataSource::DaemonOnly,
-        } {
+        let source = if self.no_daemon {
+            QueryDataSource::DiskOnly
+        } else {
+            QueryDataSource::DaemonOnly
+        };
+        let rtn = match source {
             QueryDataSource::DiskOnly => {
                 let executor = DiskQueryExecutor::new(self.plan.clone())?;
                 let stream = executor.stream()?;
@@ -172,9 +176,9 @@ impl QueryArgs {
                 response_rows
             }
         };
-        if let Some(limit) = self.plan.limit {
+        if let Some(limit) = **self.plan.limit {
             ensure!(
-                rtn.len() <= limit.get(),
+                rtn.len() <= limit.into(),
                 "Collected more results ({}) than the specified limit ({})",
                 rtn.len(),
                 limit

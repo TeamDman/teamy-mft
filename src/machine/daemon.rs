@@ -28,6 +28,7 @@ use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournal;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
+use crate::query::QueryLimit;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::matching_row_indices_for_rule;
@@ -141,7 +142,18 @@ impl DaemonRuntimeState {
             .into_drive_letters()
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
         for &drive in &drive_letters {
-            match self.query_drive_rows(drive, request) {
+            let mut per_drive_request = request.clone();
+            if let Some(limit) = request.limit.get() {
+                let Some(remaining) = limit.checked_sub(rows.len()) else {
+                    break;
+                };
+                if remaining == 0 {
+                    break;
+                }
+                per_drive_request.limit = QueryLimit::from(remaining);
+            }
+
+            match self.query_drive_rows(drive, &per_drive_request) {
                 Ok(drive_rows) => {
                     if let Some(degraded) = drive_rows.degraded {
                         degraded_drives.push(degraded);
@@ -168,9 +180,6 @@ impl DaemonRuntimeState {
             );
         }
 
-        if request.limit > 0 && rows.len() > request.limit {
-            rows.truncate(request.limit);
-        }
         Ok(rows)
     }
 
@@ -197,10 +206,8 @@ impl DaemonRuntimeState {
                 ))),
             };
         }
-        let mut per_drive_request = request.clone();
-        per_drive_request.limit = 0;
         self.drive_mut(drive)?
-            .query(&per_drive_request)
+            .query(request)
             .map(|rows| DaemonDriveQueryRows {
                 rows,
                 degraded: None,
@@ -479,7 +486,7 @@ impl MachineDaemonService {
             tracing::info!(
                 query_groups = request_for_body.query.groups().len(),
                 drive_pattern = %request_for_body.drive_letter_pattern,
-                limit = request_for_body.limit,
+                limit = ?request_for_body.limit,
                 "Running daemon query"
             );
             let mut state = state.lock().await;
@@ -520,7 +527,7 @@ impl MachineDaemonService {
             tracing::info!(
                 query_groups = request_for_body.query.groups().len(),
                 drive_pattern = %request_for_body.drive_letter_pattern,
-                limit = request_for_body.limit,
+                limit = ?request_for_body.limit,
                 "Running daemon streamed query"
             );
             let mut state = state.lock().await;
@@ -554,7 +561,10 @@ impl MachineDaemonService {
                 }
                 queried_drives += 1;
                 for row in drive_rows.rows {
-                    if request_for_body.limit > 0 && emitted_rows >= request_for_body.limit {
+                    if request_for_body
+                        .limit
+                        .is_some_and(|limit| emitted_rows >= limit)
+                    {
                         break;
                     }
                     if rows.send(row).await.is_err() {
@@ -562,7 +572,10 @@ impl MachineDaemonService {
                     }
                     emitted_rows += 1;
                 }
-                if request_for_body.limit > 0 && emitted_rows >= request_for_body.limit {
+                if request_for_body
+                    .limit
+                    .is_some_and(|limit| emitted_rows >= limit)
+                {
                     break;
                 }
             }

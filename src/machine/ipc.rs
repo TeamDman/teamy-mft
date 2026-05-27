@@ -253,7 +253,7 @@ where
             .map_err(|error| eyre::eyre!("Failed connecting to daemon at {addr}: {error}"))?;
         match f(client).await {
             Ok(value) => Ok(value),
-            Err(vox::VoxError::User(error)) => Err(machine_error_report(error)),
+            Err(vox::VoxError::User(error)) => Err(machine_error_report(&error)),
             Err(error) => Err(eyre::eyre!("Daemon RPC call failed: {error}")),
         }
     })
@@ -300,7 +300,7 @@ fn shutdown_with_log_drain(config: &MachineConfig) -> eyre::Result<()> {
     })
 }
 
-fn machine_error_report(error: MachineError) -> eyre::Report {
+fn machine_error_report(error: &MachineError) -> eyre::Report {
     eyre::eyre!("Daemon RPC failed ({:?}): {}", error.kind, error.message)
 }
 

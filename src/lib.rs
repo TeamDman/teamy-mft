@@ -1,6 +1,7 @@
 pub mod cli;
 
 pub mod daemon;
+pub mod domain;
 pub mod logging_init;
 pub mod machine;
 pub mod mft;

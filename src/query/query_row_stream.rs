@@ -39,7 +39,8 @@ impl QueryRowStream {
     ) -> eyre::Result<Vec<QueryResultRow>> {
         let _span = tracing::info_span!("query_collect_results").entered();
         let mut rows = Vec::new();
-        if let Some(limit) = limit.get() {
+        if let Some(limit) = **limit {
+            let limit = limit.into();
             while let Some(row) = self.next().await? {
                 rows.push(row);
                 if rows.len() >= limit {

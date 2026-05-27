@@ -11,6 +11,12 @@ impl CorrelationId {
     }
 }
 
+impl Default for CorrelationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl From<Uuid> for CorrelationId {
     fn from(value: Uuid) -> Self {
         Self(value)
@@ -45,6 +51,8 @@ impl std::str::FromStr for CorrelationId {
     }
 }
 
+// SAFETY: `CorrelationId` is an owned UUID value with no borrowed fields, so its
+// reborrowed representation can be the same owned wire shape.
 unsafe impl vox_types::Reborrow for CorrelationId {
     type Ref<'a> = CorrelationId;
 }

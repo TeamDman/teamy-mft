@@ -224,7 +224,12 @@ impl LiveDriveState {
             .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
-        let mut rows = Vec::with_capacity(matched_row_indices.len());
+        let limit = request.limit.get();
+        let mut rows = Vec::with_capacity(
+            limit
+                .unwrap_or(matched_row_indices.len())
+                .min(matched_row_indices.len()),
+        );
         for row_index in matched_row_indices {
             let row = parsed_index
                 .row_view(row_index as usize)
@@ -241,11 +246,10 @@ impl LiveDriveState {
             };
             if let Some(row) = filter.classify_and_match(row) {
                 rows.push(row);
+                if limit.is_some_and(|limit| rows.len() >= limit) {
+                    break;
+                }
             }
-        }
-
-        if request.limit > 0 && rows.len() > request.limit {
-            rows.truncate(request.limit);
         }
         Ok(rows)
     }
@@ -901,6 +905,7 @@ mod tests {
         assert!(
             rows.iter().any(|row| row
                 .path
+                .as_str()
                 .eq_ignore_ascii_case(&created_path.to_string_lossy())),
             "expected query to include {}, rows were {:?}",
             created_path.display(),
