@@ -1,38 +1,79 @@
 use crate::query::QueryGroup;
 use crate::query::QueryRule;
+use crate::query::QueryString;
+use arbitrary::Arbitrary;
+use facet::Facet;
+use figue::{self as args};
+use teamy_windows::storage::DriveLetterPattern;
 
-#[derive(Debug, Clone)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
+#[facet(rename_all = "kebab-case")]
+// cli[impl command.query.drive-pattern-selection]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags map directly to independent query toggles"
+)]
 pub struct QueryPlan {
-    groups: Vec<QueryGroup>,
+    #[facet(flatten, default)]
+    pub query: QueryString,
+    /// Restrict results to this path. Directories include descendants; files match exactly.
+    #[facet(args::named, default)]
+    pub r#in: Option<String>,
+    /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
+    #[facet(args::named, default)]
+    pub drive_letter_pattern: DriveLetterPattern,
+    /// Maximum number of results to show
+    #[facet(args::named, default)]
+    pub limit: usize,
+    /// Include paths that contain one or more deleted MFT entries
+    #[facet(args::named, default)]
+    pub include_deleted: bool,
+    /// Show only paths that contain one or more deleted MFT entries
+    #[facet(args::named, default)]
+    pub only_deleted: bool,
+    /// Include paths hidden by `.teamymftignore` rules
+    #[facet(args::named, default)]
+    pub show_ignored: bool,
+    /// Show only paths hidden by `.teamymftignore` rules
+    #[facet(args::named, default)]
+    pub only_ignored: bool,
 }
 
 impl QueryPlan {
     /// Build a query plan from CLI positional inputs.
-    ///
-    /// Each positional argument is treated as an `OR` group, and `|` inside any
-    /// positional argument is normalized into the same `OR` grouping model.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if no non-empty query groups are present after parsing,
-    /// or if any raw query input contains Windows-invalid path characters that
-    /// are not part of the recognized query syntax.
     pub fn parse_inputs(query_inputs: &[String]) -> eyre::Result<Self> {
-        for query_input in query_inputs {
-            validate_query_input(query_input)?;
+        Ok(Self {
+            query: QueryString::parse_inputs(query_inputs)?,
+            ..Default::default()
+        })
+    }
+
+    /// Create a new `QueryPlan` with the given query pattern and all other options at their defaults.
+    pub fn new(pattern: impl Into<String>) -> Self {
+        Self::parse_inputs(&[pattern.into()]).expect("single non-empty query should parse")
+    }
+
+    #[must_use]
+    pub fn groups(&self) -> &[QueryGroup] {
+        self.query.groups()
+    }
+
+    #[must_use]
+    pub fn query_inputs(&self) -> Vec<String> {
+        self.query.to_inputs()
+    }
+
+    pub fn query_request(&self, drive_letters: Vec<char>) -> crate::machine::ipc::QueryRequest {
+        crate::machine::ipc::QueryRequest {
+            query: self.query_inputs(),
+            query_scope: self.r#in.clone(),
+            drive_letters,
+            limit: self.limit,
+            include_deleted: self.include_deleted,
+            only_deleted: self.only_deleted,
+            show_ignored: self.show_ignored,
+            only_ignored: self.only_ignored,
         }
-
-        let groups = query_inputs
-            .iter()
-            .flat_map(|query_input| query_input.split('|'))
-            .filter_map(QueryGroup::parse)
-            .collect::<Vec<_>>();
-
-        if groups.is_empty() {
-            eyre::bail!("query string required")
-        }
-
-        Ok(Self { groups })
     }
 
     #[must_use]
@@ -46,14 +87,14 @@ impl QueryPlan {
         I: Iterator<Item = (&'a str, &'a str)>,
         F: Fn() -> I,
     {
-        self.groups
+        self.groups()
             .iter()
             .any(|group| group.matches_segments_preprocessed(make_segments))
     }
 
     #[must_use]
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
-        self.groups
+        self.groups()
             .iter()
             .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
     }
@@ -68,7 +109,7 @@ impl QueryPlan {
     {
         let mut matches = Vec::new();
 
-        for group in &self.groups {
+        for group in self.groups() {
             matches.extend(group.matching_row_indices(row_indices_for_rule)?);
         }
 
@@ -76,63 +117,6 @@ impl QueryPlan {
         matches.dedup();
         Ok(matches)
     }
-}
-
-fn validate_query_input(query_input: &str) -> eyre::Result<()> {
-    let chars = query_input.chars().collect::<Vec<_>>();
-
-    for (index, ch) in chars.iter().copied().enumerate() {
-        if ch.is_control() {
-            eyre::bail!(
-                "query contains unsupported control character {:?} in {:?}",
-                ch,
-                query_input
-            );
-        }
-
-        match ch {
-            '"' | '<' | '>' | '?' | '*' => {
-                eyre::bail!(
-                    "query contains Windows-invalid path character {:?} in {:?}",
-                    ch,
-                    query_input
-                );
-            }
-            ':' if !is_drive_designator(&chars, index) => {
-                eyre::bail!(
-                    "query contains unsupported ':' outside a drive designator in {:?}",
-                    query_input
-                );
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
-}
-
-fn is_drive_designator(chars: &[char], colon_index: usize) -> bool {
-    if colon_index == 0 || !chars[colon_index - 1].is_ascii_alphabetic() {
-        return false;
-    }
-
-    let is_left_boundary = match colon_index
-        .checked_sub(2)
-        .and_then(|index| chars.get(index))
-    {
-        None => true,
-        Some(ch) => is_query_boundary(*ch),
-    };
-    let is_right_boundary = match chars.get(colon_index + 1) {
-        None => true,
-        Some(ch) => is_query_boundary(*ch),
-    };
-
-    is_left_boundary && is_right_boundary
-}
-
-fn is_query_boundary(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '|' | '/' | '\\' | '\'')
 }
 
 #[cfg(test)]
@@ -260,8 +244,17 @@ mod tests {
 
     #[test]
     fn empty_inputs_are_rejected() {
-        let query_inputs = vec!["   ".to_owned(), "|".to_owned()];
+        let query_inputs = vec![String::new(), "|".to_owned()];
         assert!(QueryPlan::parse_inputs(&query_inputs).is_err());
+    }
+
+    #[test]
+    fn whitespace_only_inputs_are_preserved_as_literal_queries() {
+        let query_inputs = vec!["   ".to_owned()];
+        let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
+
+        assert!(plan.matches("alpha   beta"));
+        assert!(!plan.matches("alphabet"));
     }
 
     #[test]

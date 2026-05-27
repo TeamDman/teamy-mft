@@ -1,12 +1,21 @@
 use crate::query::QueryRule;
+use crate::query::query_string::validate_query_input;
+use arbitrary::Arbitrary;
+use facet::Facet;
+use std::fmt::Display;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Facet)]
+#[facet(opaque, proxy = String)]
 pub struct QueryGroup {
     rules: Vec<QueryRule>,
 }
 
 impl QueryGroup {
     pub fn parse(raw_group: &str) -> Option<Self> {
+        if !raw_group.is_empty() && raw_group.trim().is_empty() {
+            return QueryRule::parse(raw_group).map(|rule| Self { rules: vec![rule] });
+        }
+
         let rules = raw_group
             .split_whitespace()
             .filter_map(QueryRule::parse)
@@ -90,6 +99,51 @@ impl QueryGroup {
         }
 
         Ok(matches)
+    }
+}
+
+impl Display for QueryGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, rule) in self.rules.iter().enumerate() {
+            if index > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{rule}")?;
+        }
+        Ok(())
+    }
+}
+
+impl TryFrom<String> for QueryGroup {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        validate_query_input(&value).map_err(|error| error.to_string())?;
+        Self::parse(&value).ok_or_else(|| "query group cannot be empty".to_owned())
+    }
+}
+
+impl From<QueryGroup> for String {
+    fn from(value: QueryGroup) -> Self {
+        value.to_string()
+    }
+}
+
+impl From<&QueryGroup> for String {
+    fn from(value: &QueryGroup) -> Self {
+        value.to_string()
+    }
+}
+
+impl<'a> Arbitrary<'a> for QueryGroup {
+    fn arbitrary(unstructured: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let input = String::arbitrary(unstructured)?;
+        Ok(if validate_query_input(&input).is_ok() {
+            Self::parse(&input)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| Self::parse("query").expect("fallback query should parse")))
     }
 }
 

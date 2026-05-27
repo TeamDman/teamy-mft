@@ -1,7 +1,8 @@
 use crate::query::QueryNeedle;
 use crate::query::query_needle::QUERY_TRIGRAM_LEN;
+use std::fmt::Display;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum QueryRule {
     ContainsCaseInsensitive(QueryNeedle),
     EndsWithCaseInsensitive(QueryNeedle),
@@ -71,6 +72,15 @@ impl QueryRule {
                 Some(needle.normalized_trigrams())
             }
             Self::ContainsCaseInsensitive(_) | Self::EndsWithCaseInsensitive(_) => None,
+        }
+    }
+}
+
+impl Display for QueryRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ContainsCaseInsensitive(needle) => write!(f, "{}", needle.normalized_str()),
+            Self::EndsWithCaseInsensitive(needle) => write!(f, "{}$", needle.normalized_str()),
         }
     }
 }

@@ -5,6 +5,7 @@ use crate::query::QueryPlan;
 use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
 use crate::query::load_and_query_drive_search_index;
+use eyre::bail;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,24 +24,34 @@ impl DiskQueryExecutor {
     #[must_use]
     pub fn new(
         sync_dir: &Path,
-        drive_letters: Vec<char>,
         request: teamy_mft_daemon_rpc::QueryRequest,
         ignore: QueryIgnoreBehavior,
-    ) -> Self {
+    ) -> eyre::Result<Self> {
         let mft_files = {
             let _span = info_span!("discover_mft_files").entered();
-            drive_letters
-                .into_iter()
-                .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
-                .filter(|(_, p)| p.is_file())
-                .collect()
+            request
+                .drive_letters
+                .iter()
+                .cloned()
+                .map(|drive_letter| (drive_letter, sync_dir.join(format!("{drive_letter}.mft"))))
+                .map(
+                    |(drive_letter, drive_mft_file_path)| match drive_mft_file_path.is_file() {
+                        true => Ok((drive_letter, drive_mft_file_path)),
+                        false => bail!(
+                            "MFT file for drive {} not found at expected path: {}",
+                            drive_letter,
+                            drive_mft_file_path.display()
+                        ),
+                    },
+                )
+                .collect::<eyre::Result<Vec<_>>>()?
         };
-        Self {
+        Ok(Self {
             sync_dir: sync_dir.to_path_buf(),
             mft_files,
             request,
             ignore,
-        }
+        })
     }
 
     /// # Errors

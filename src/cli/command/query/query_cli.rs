@@ -3,6 +3,7 @@ use crate::query::DiskQueryExecutor;
 use crate::query::IndexedPathRow;
 use crate::query::QueryDataSource;
 use crate::query::QueryIgnoreBehavior;
+use crate::query::QueryPlan;
 use crate::query::QueryRowStream;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -10,42 +11,14 @@ use figue::{self as args};
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
-use teamy_windows::storage::DriveLetterPattern;
 use tracing::debug;
 use tracing::instrument;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
-// cli[impl command.query.drive-pattern-selection]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "CLI flags map directly to independent query toggles"
-)]
 pub struct QueryArgs {
-    /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
-    #[facet(args::positional, default)]
-    pub query: Vec<String>,
-    /// Restrict results to this path. Directories include descendants; files match exactly.
-    #[facet(args::named, default)]
-    pub r#in: Option<String>,
-    /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
-    #[facet(args::named, default)]
-    pub drive_letter_pattern: DriveLetterPattern,
-    /// Maximum number of results to show
-    #[facet(args::named, default)]
-    pub limit: usize,
-    /// Include paths that contain one or more deleted MFT entries
-    #[facet(args::named, default)]
-    pub include_deleted: bool,
-    /// Show only paths that contain one or more deleted MFT entries
-    #[facet(args::named, default)]
-    pub only_deleted: bool,
-    /// Include paths hidden by `.teamymftignore` rules
-    #[facet(args::named, default)]
-    pub show_ignored: bool,
-    /// Show only paths hidden by `.teamymftignore` rules
-    #[facet(args::named, default)]
-    pub only_ignored: bool,
+    #[facet(flatten)]
+    pub plan: QueryPlan,
     /// Output density mode
     #[facet(args::named, default)]
     pub density: QueryDensity,
@@ -80,21 +53,11 @@ fn drain_query_stream(stream: QueryRowStream, limit: usize) -> eyre::Result<Vec<
     runtime.block_on(stream.collect_filtered_limit(limit))
 }
 
-fn published_machine_drive_letters(cache_root: &Path, requested: Vec<char>) -> Vec<char> {
-    requested
-        .into_iter()
-        .filter(|drive_letter| {
-            let paths = crate::machine::config::published_drive_paths(cache_root, *drive_letter);
-            paths.mft_path.is_file() && paths.base_index_path.is_file()
-        })
-        .collect()
-}
-
 impl QueryArgs {
     /// Create a new `QueryArgs` with the given query pattern and all other options at their defaults.
     pub fn new(pattern: impl Into<String>) -> Self {
         Self {
-            query: vec![pattern.into()],
+            plan: QueryPlan::new(pattern),
             ..Default::default()
         }
     }
@@ -104,19 +67,6 @@ impl QueryArgs {
             QueryDensity::Auto => stdout_is_terminal,
             QueryDensity::Lines => false,
             QueryDensity::Columns => true,
-        }
-    }
-
-    fn query_request(&self, drive_letters: Vec<char>) -> crate::machine::ipc::QueryRequest {
-        crate::machine::ipc::QueryRequest {
-            query: self.query.clone(),
-            query_scope: self.r#in.clone(),
-            drive_letters,
-            limit: self.limit,
-            include_deleted: self.include_deleted,
-            only_deleted: self.only_deleted,
-            show_ignored: self.show_ignored,
-            only_ignored: self.only_ignored,
         }
     }
 
@@ -150,14 +100,14 @@ impl QueryArgs {
     /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.query, query_scope = ?self.r#in, limit = self.limit, include_deleted = self.include_deleted, only_deleted = self.only_deleted, show_ignored = self.show_ignored, only_ignored = self.only_ignored, density = ?self.density))]
+    #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, limit = self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_ignored = self.plan.show_ignored, only_ignored = self.plan.only_ignored, density = ?self.density))]
     pub fn invoke_and_print(self) -> eyre::Result<()> {
-        let limit = self.limit;
+        let limit = self.plan.limit;
         let density = self.density;
-        let include_deleted = self.include_deleted;
-        let only_deleted = self.only_deleted;
-        let show_ignored = self.show_ignored;
-        let only_ignored = self.only_ignored;
+        let include_deleted = self.plan.include_deleted;
+        let only_deleted = self.plan.only_deleted;
+        let show_ignored = self.plan.show_ignored;
+        let only_ignored = self.plan.only_ignored;
 
         let results = self.collect_rows()?;
 
@@ -194,7 +144,11 @@ impl QueryArgs {
     )]
     pub fn collect_rows(self) -> eyre::Result<Vec<IndexedPathRow>> {
         debug!("Running query with args: {:?}", self);
-        for (index, query) in self.query.iter().enumerate() {
+        let query_inputs = self.plan.query_inputs();
+        if query_inputs.is_empty() {
+            eyre::bail!("query string required");
+        }
+        for (index, query) in query_inputs.iter().enumerate() {
             if query.is_empty() {
                 eyre::bail!("query argument {index} is empty; pass a non-empty query string");
             }
@@ -209,7 +163,13 @@ impl QueryArgs {
             }
         }
         let data_source = self.data_source();
-        let request = self.query_request(self.drive_letter_pattern.clone().into_drive_letters()?);
+        let request = self.plan.query_request(
+            self.plan
+                .drive_letter_pattern
+                .clone()
+                .into_drive_letters()?,
+        );
+        let limit = request.limit;
 
         match data_source {
             QueryDataSource::DaemonOnly => {
@@ -218,7 +178,7 @@ impl QueryArgs {
                 let (rows_tx, rows_rx) = vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                 let (logs_tx, logs_rx) =
                     vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                let row_drain = spawn_query_row_drain(QueryRowStream::Vox(rows_rx), self.limit);
+                let row_drain = spawn_query_row_drain(QueryRowStream::Vox(rows_rx), limit);
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 let response =
                     crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx)?;
@@ -238,21 +198,12 @@ impl QueryArgs {
                 }
             }
             QueryDataSource::DiskOnly => {
-                let sync_dir = crate::machine::config::load_required_cache_root()?;
-                let drive_letters =
-                    published_machine_drive_letters(&sync_dir, request.drive_letters.clone());
-                if drive_letters.is_empty() {
-                    eyre::bail!(
-                        "No machine-managed published drives matched the requested drive set"
-                    );
-                }
                 let executor = DiskQueryExecutor::new(
-                    &sync_dir,
-                    drive_letters,
+                    &crate::machine::config::load_required_cache_root()?,
                     request,
                     QueryIgnoreBehavior::AutoDiscover,
-                );
-                drain_query_stream(executor.stream()?, self.limit)
+                )?;
+                drain_query_stream(executor.stream()?, limit)
             }
         }
     }
@@ -268,7 +219,7 @@ fn format_daemon_query_error(error: &crate::machine::ipc::MachineError) -> eyre:
 
 #[cfg(test)]
 mod tests {
-    use crate::query::QueryPlan;
+    use crate::query::QueryPlan as ParsedQueryPlan;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
@@ -330,7 +281,7 @@ mod tests {
     #[test]
     fn query_plan_intersects_contains_and_suffix_candidates() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
-        let plan = QueryPlan::parse_inputs(&[String::from("flow .jar$")])?;
+        let plan = ParsedQueryPlan::parse_inputs(&[String::from("flow .jar$")])?;
 
         assert_eq!(
             plan.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(

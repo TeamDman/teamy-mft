@@ -14,6 +14,7 @@ mod query_row_sink;
 mod query_row_stream;
 mod query_rule;
 mod query_scope;
+mod query_string;
 mod search_index_query;
 
 pub use disk_query_executor::DiskQueryExecutor;
@@ -37,4 +38,5 @@ pub use query_row_stream::QueryRowStream;
 pub use query_rule::QueryRule;
 pub(crate) use query_scope::QueryScope;
 pub(crate) use query_scope::resolve_query_scope;
+pub use query_string::QueryString;
 pub(crate) use search_index_query::load_and_query_drive_search_index;

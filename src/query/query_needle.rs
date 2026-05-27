@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum QueryNeedle {
     AsciiLower(Vec<u8>),
     UnicodeLower(String),
