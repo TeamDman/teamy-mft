@@ -1,0 +1,192 @@
+use crate::query::DriveQueryResult;
+use crate::query::IndexedPathRow;
+use crate::query::QueryPath;
+use crate::query::QueryPlan;
+use crate::query::matching_row_indices_for_rule;
+use crate::search_index::load::MappedSearchIndex;
+use crate::search_index::search_index_bytes::SearchIndexBytes;
+use eyre::Context;
+use std::collections::BTreeMap;
+use std::path::Path;
+use tracing::info_span;
+
+fn should_include_indexed_row(
+    include_deleted: bool,
+    only_deleted: bool,
+    has_deleted_entries: bool,
+) -> bool {
+    // cli[impl command.query.deleted-filter]
+    if only_deleted {
+        return has_deleted_entries;
+    }
+
+    include_deleted || !has_deleted_entries
+}
+
+fn load_and_query_search_index(
+    index_path: &Path,
+    drive_letter: char,
+    index_kind: &'static str,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<DriveQueryResult> {
+    let _span = info_span!(
+        "load_drive_search_index",
+        drive = %drive_letter,
+        index_kind,
+        path = %index_path.display()
+    )
+    .entered();
+    {
+        let _span = info_span!(
+            "validate_search_index_file",
+            drive = %drive_letter,
+            index_kind
+        )
+        .entered();
+        if !index_path.is_file() {
+            eyre::bail!("Fast query requires {}.", index_path.display(),);
+        }
+    }
+
+    let mapped = {
+        let _span =
+            info_span!("map_search_index_file", drive = %drive_letter, index_kind).entered();
+        MappedSearchIndex::open(index_path).wrap_err_with(|| {
+            format!("Failed loading search index from {}", index_path.display())
+        })?
+    };
+
+    let parsed_index = {
+        let _span = info_span!(
+            "parse_search_index_for_query",
+            drive = %drive_letter,
+            index_kind,
+            bytes = mapped.bytes().len(),
+            rows = mapped.header.node_count
+        )
+        .entered();
+        SearchIndexBytes::new(mapped.bytes())
+            .parse_trusted_for_query()
+            .wrap_err_with(|| {
+                format!(
+                    "Failed preparing search index rows from {}",
+                    index_path.display()
+                )
+            })?
+    };
+
+    let loaded_rows = parsed_index.row_count();
+    let matched_row_indices = {
+        let _span = info_span!(
+            "match_search_index_postings",
+            drive = %drive_letter,
+            index_kind,
+            rows = loaded_rows
+        )
+        .entered();
+        query_plan
+            .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
+            .wrap_err_with(|| {
+                format!(
+                    "Failed matching search index rows from {}",
+                    index_path.display()
+                )
+            })?
+    };
+    let matched_rows = {
+        let _span = info_span!(
+            "materialize_matched_index_rows",
+            drive = %drive_letter,
+            index_kind,
+            matched_indices = matched_row_indices.len()
+        )
+        .entered();
+        let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
+
+        for row_index in matched_row_indices {
+            let row = parsed_index
+                .row_view(row_index as usize)
+                .wrap_err_with(|| {
+                    format!(
+                        "Failed materializing search index row {} from {}",
+                        row_index,
+                        index_path.display()
+                    )
+                })?;
+
+            if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
+                continue;
+            }
+
+            matched_rows.push(IndexedPathRow {
+                path: QueryPath::from(row.path()),
+                has_deleted_entries: row.has_deleted_entries,
+                is_ignored: false,
+            });
+        }
+
+        matched_rows
+    };
+
+    Ok(DriveQueryResult {
+        loaded_rows,
+        matched_rows,
+    })
+}
+
+pub(crate) fn load_and_query_drive_search_index(
+    drive_letter: char,
+    sync_dir: &Path,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<DriveQueryResult> {
+    let base_index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
+    let overlay_index_path = sync_dir.join(format!("{drive_letter}.mft_overlay_search_index"));
+    let mut result = load_and_query_search_index(
+        &base_index_path,
+        drive_letter,
+        "base",
+        query_plan,
+        include_deleted,
+        only_deleted,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
+            base_index_path.display(),
+            drive_letter
+        )
+    })?;
+
+    if overlay_index_path.is_file() {
+        let overlay_result = load_and_query_search_index(
+            &overlay_index_path,
+            drive_letter,
+            "overlay",
+            query_plan,
+            include_deleted,
+            only_deleted,
+        )?;
+        result.loaded_rows += overlay_result.loaded_rows;
+        result.matched_rows = merge_rows(result.matched_rows, overlay_result.matched_rows);
+    }
+
+    Ok(result)
+}
+
+pub(crate) fn merge_rows(
+    base_rows: Vec<IndexedPathRow>,
+    overlay_rows: Vec<IndexedPathRow>,
+) -> Vec<IndexedPathRow> {
+    let mut merged = BTreeMap::<QueryPath, IndexedPathRow>::new();
+    for row in base_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    for row in overlay_rows {
+        merged.insert(row.path.clone(), row);
+    }
+    merged.into_values().collect()
+}

@@ -368,7 +368,7 @@ fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<
         .rows
         .into_iter()
         .map(|row| IndexedPathRow {
-            path: row.path,
+            path: row.path.into(),
             has_deleted_entries: row.has_deleted_entries,
             is_ignored: row.is_ignored,
         })
@@ -385,7 +385,7 @@ pub fn convert_indexed_rows(
         rows: rows
             .into_iter()
             .map(|row| teamy_mft_daemon_rpc::IndexedPathRowDto {
-                path: row.path,
+                path: row.path.into_string(),
                 has_deleted_entries: row.has_deleted_entries,
                 is_ignored: row.is_ignored,
             })

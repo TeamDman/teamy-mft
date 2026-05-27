@@ -1,25 +1,18 @@
+use crate::query::DiskQueryExecutor;
 use crate::query::IndexedPathRow;
 use crate::query::QueryExecutionOptions;
-use crate::query::QueryIgnoreBehavior;
-use crate::query::QueryIgnoreRules;
-use crate::query::QueryPlan;
-use crate::query::matching_row_indices_for_rule;
-use crate::search_index::load::MappedSearchIndex;
-use crate::search_index::search_index_bytes::SearchIndexBytes;
+use crate::query::QueryRequestSpec;
+use crate::query::QueryRowStream;
+use crate::query::QuerySource;
 use arbitrary::Arbitrary;
 use color_eyre::owo_colors::OwoColorize;
-use eyre::Context;
 use facet::Facet;
 use figue::{self as args};
-use rayon::prelude::*;
-use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::path::PathBuf;
 use teamy_windows::storage::DriveLetterPattern;
 use tracing::debug;
-use tracing::info;
-use tracing::info_span;
 use tracing::instrument;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
@@ -79,58 +72,18 @@ pub enum QueryDensity {
     Columns,
 }
 
-#[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
-#[repr(u8)]
-#[strum(serialize_all = "kebab-case")]
-#[facet(rename_all = "kebab-case")]
-pub enum QuerySource {
-    #[default]
-    Auto,
-    DaemonOnly,
-    DiskOnly,
-}
-
-#[derive(Debug, Default)]
-struct DriveQueryResult {
-    loaded_rows: usize,
-    matched_rows: Vec<IndexedPathRow>,
-}
-
-#[derive(Debug, Clone)]
-struct QueryScope {
-    root: PathBuf,
-    include_descendants: bool,
-}
-
 fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
     if !colorize {
-        return row.path.clone();
+        return row.path.to_string();
     }
     if row.is_ignored {
-        return row.path.yellow().to_string();
+        return row.path.as_str().yellow().to_string();
     }
     if row.has_deleted_entries {
-        row.path.red().to_string()
+        row.path.as_str().red().to_string()
     } else {
-        row.path.green().to_string()
+        row.path.as_str().green().to_string()
     }
-}
-
-fn string_display_width(value: &str) -> usize {
-    value.chars().count()
-}
-
-fn detect_terminal_columns() -> Option<usize> {
-    crossterm::terminal::size()
-        .ok()
-        .map(|(columns, _)| usize::from(columns))
-        .filter(|value| *value > 0)
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-        })
 }
 
 fn print_results_lines(results: &[IndexedPathRow], colorize: bool) {
@@ -147,11 +100,24 @@ fn print_results_columns(results: &[IndexedPathRow], colorize: bool) {
     let gap = 2usize;
     let max_width = results
         .iter()
-        .map(|row| string_display_width(&row.path))
+        .map(|row| {
+            let value: &str = row.path.as_str();
+            value.chars().count()
+        })
         .max()
         .unwrap_or(1)
         .max(1);
-    let terminal_columns = detect_terminal_columns().unwrap_or(120usize);
+    let terminal_columns = crossterm::terminal::size()
+        .ok()
+        .map(|(columns, _)| usize::from(columns))
+        .filter(|value| *value > 0)
+        .or_else(|| {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|value| *value > 0)
+        })
+        .unwrap_or(120usize);
 
     let column_count = ((terminal_columns + gap) / (max_width + gap)).max(1);
     let row_count = results.len().div_ceil(column_count);
@@ -169,7 +135,10 @@ fn print_results_columns(results: &[IndexedPathRow], colorize: bool) {
             line.push_str(&render_indexed_path(row, colorize));
 
             if column_index + 1 < column_count {
-                let pad = (max_width + gap).saturating_sub(string_display_width(&row.path));
+                let pad = (max_width + gap).saturating_sub({
+                    let value: &str = row.path.as_str();
+                    value.chars().count()
+                });
                 line.push_str(&" ".repeat(pad));
             }
         }
@@ -178,278 +147,19 @@ fn print_results_columns(results: &[IndexedPathRow], colorize: bool) {
     }
 }
 
-fn should_include_indexed_row(
-    include_deleted: bool,
-    only_deleted: bool,
-    has_deleted_entries: bool,
-) -> bool {
-    // cli[impl command.query.deleted-filter]
-    if only_deleted {
-        return has_deleted_entries;
-    }
-
-    include_deleted || !has_deleted_entries
-}
-
-fn should_include_ignored_row(show_ignored: bool, only_ignored: bool, is_ignored: bool) -> bool {
-    if only_ignored {
-        return is_ignored;
-    }
-
-    show_ignored || !is_ignored
-}
-
-fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
-    let Some(scope) = scope else {
-        return Ok(None);
-    };
-
-    let root = dunce::canonicalize(scope)
-        .wrap_err_with(|| format!("Failed resolving query scope from {scope}"))?;
-
-    Ok(Some(QueryScope {
-        include_descendants: root.is_dir(),
-        root,
-    }))
-}
-
-fn lowercase_path_components(path: &Path) -> Vec<String> {
-    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
-    let path = path
-        .strip_prefix(r"\\?\UNC\")
-        .map_or_else(|| path.clone(), |rest| format!(r"\\{rest}"));
-    let path = path
-        .strip_prefix(r"\\?\")
-        .map_or_else(|| path.clone(), ToString::to_string);
-
-    path.split('\\')
-        .filter(|component| !component.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect()
-}
-
-fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
-    if cfg!(windows) {
-        let path_components = lowercase_path_components(path);
-        let scope_components = lowercase_path_components(&scope.root);
-
-        return if scope.include_descendants {
-            path_components.starts_with(&scope_components)
-        } else {
-            path_components == scope_components
-        };
-    }
-
-    if scope.include_descendants {
-        path.starts_with(&scope.root)
-    } else {
-        path == scope.root
-    }
-}
-
-fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
-    // cli[impl command.query.scope-filter]
-    let Some(scope) = scope else {
-        return true;
-    };
-
-    path_matches_scope(Path::new(path), scope)
-}
-
-fn load_and_query_search_index(
-    index_path: &Path,
-    drive_letter: char,
-    index_kind: &'static str,
-    query_plan: &QueryPlan,
-    include_deleted: bool,
-    only_deleted: bool,
-) -> eyre::Result<DriveQueryResult> {
-    let _span = info_span!(
-        "load_drive_search_index",
-        drive = %drive_letter,
-        index_kind,
-        path = %index_path.display()
-    )
-    .entered();
-    {
-        let _span = info_span!(
-            "validate_search_index_file",
-            drive = %drive_letter,
-            index_kind
-        )
-        .entered();
-        if !index_path.is_file() {
-            eyre::bail!("Fast query requires {}.", index_path.display(),);
-        }
-    }
-
-    let mapped = {
-        let _span =
-            info_span!("map_search_index_file", drive = %drive_letter, index_kind).entered();
-        MappedSearchIndex::open(index_path).wrap_err_with(|| {
-            format!("Failed loading search index from {}", index_path.display())
-        })?
-    };
-
-    let parsed_index = {
-        let _span = info_span!(
-            "parse_search_index_for_query",
-            drive = %drive_letter,
-            index_kind,
-            bytes = mapped.bytes().len(),
-            rows = mapped.header.node_count
-        )
-        .entered();
-        SearchIndexBytes::new(mapped.bytes())
-            .parse_trusted_for_query()
-            .wrap_err_with(|| {
-                format!(
-                    "Failed preparing search index rows from {}",
-                    index_path.display()
-                )
-            })?
-    };
-
-    let loaded_rows = parsed_index.row_count();
-    let matched_row_indices = {
-        let _span = info_span!(
-            "match_search_index_postings",
-            drive = %drive_letter,
-            index_kind,
-            rows = loaded_rows
-        )
-        .entered();
-        query_plan
-            .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
-            .wrap_err_with(|| {
-                format!(
-                    "Failed matching search index rows from {}",
-                    index_path.display()
-                )
-            })?
-    };
-    let matched_rows = {
-        let _span = info_span!(
-            "materialize_matched_index_rows",
-            drive = %drive_letter,
-            index_kind,
-            matched_indices = matched_row_indices.len()
-        )
-        .entered();
-        let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
-
-        for row_index in matched_row_indices {
-            let row = parsed_index
-                .row_view(row_index as usize)
-                .wrap_err_with(|| {
-                    format!(
-                        "Failed materializing search index row {} from {}",
-                        row_index,
-                        index_path.display()
-                    )
-                })?;
-
-            if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
-                continue;
-            }
-
-            matched_rows.push(IndexedPathRow {
-                path: row.path(),
-                has_deleted_entries: row.has_deleted_entries,
-                is_ignored: false,
-            });
-        }
-
-        matched_rows
-    };
-
-    Ok(DriveQueryResult {
-        loaded_rows,
-        matched_rows,
-    })
-}
-
-fn load_and_query_drive_search_index(
-    drive_letter: char,
-    sync_dir: &Path,
-    query_plan: &QueryPlan,
-    include_deleted: bool,
-    only_deleted: bool,
-) -> eyre::Result<DriveQueryResult> {
-    let base_index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-    let overlay_index_path = sync_dir.join(format!("{drive_letter}.mft_overlay_search_index"));
-    let mut result = load_and_query_search_index(
-        &base_index_path,
-        drive_letter,
-        "base",
-        query_plan,
-        include_deleted,
-        only_deleted,
-    )
-    .wrap_err_with(|| {
-        format!(
-            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-            base_index_path.display(),
-            drive_letter
-        )
-    })?;
-
-    if overlay_index_path.is_file() {
-        let overlay_result = load_and_query_search_index(
-            &overlay_index_path,
-            drive_letter,
-            "overlay",
-            query_plan,
-            include_deleted,
-            only_deleted,
-        )?;
-        result.loaded_rows += overlay_result.loaded_rows;
-        result.matched_rows = merge_rows(result.matched_rows, overlay_result.matched_rows);
-    }
-
-    Ok(result)
-}
-
-fn merge_rows(
-    base_rows: Vec<IndexedPathRow>,
-    overlay_rows: Vec<IndexedPathRow>,
-) -> Vec<IndexedPathRow> {
-    let mut merged = BTreeMap::<String, IndexedPathRow>::new();
-    for row in base_rows {
-        merged.insert(row.path.clone(), row);
-    }
-    for row in overlay_rows {
-        merged.insert(row.path.clone(), row);
-    }
-    merged.into_values().collect()
-}
-
 #[must_use]
-fn spawn_streamed_query_row_drain(
-    mut rows_rx: vox::Rx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+fn spawn_query_row_drain(
+    stream: QueryRowStream,
+    limit: usize,
 ) -> std::thread::JoinHandle<eyre::Result<Vec<IndexedPathRow>>> {
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        runtime.block_on(async move {
-            let mut response_rows = Vec::new();
-            loop {
-                match rows_rx.recv().await {
-                    Ok(Some(row)) => response_rows.push(IndexedPathRow {
-                        path: row.get().path.clone(),
-                        has_deleted_entries: row.get().has_deleted_entries,
-                        is_ignored: row.get().is_ignored,
-                    }),
-                    Ok(None) => break,
-                    Err(error) => {
-                        eyre::bail!("Failed receiving streamed daemon query rows: {error}")
-                    }
-                }
-            }
-            Ok(response_rows)
-        })
-    })
+    std::thread::spawn(move || drain_query_stream(stream, limit))
+}
+
+fn drain_query_stream(stream: QueryRowStream, limit: usize) -> eyre::Result<Vec<IndexedPathRow>> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(stream.collect_filtered_limit(limit))
 }
 
 fn published_machine_drive_letters(cache_root: &Path, requested: Vec<char>) -> Vec<char> {
@@ -476,6 +186,21 @@ impl QueryArgs {
             QueryDensity::Auto => stdout_is_terminal,
             QueryDensity::Lines => false,
             QueryDensity::Columns => true,
+        }
+    }
+
+    fn request_spec(&self, drive_letters: Vec<char>, source: QuerySource) -> QueryRequestSpec {
+        QueryRequestSpec {
+            query: self.query.clone(),
+            query_scope: self.r#in.clone(),
+            drive_letters,
+            limit: self.limit,
+            include_deleted: self.include_deleted,
+            only_deleted: self.only_deleted,
+            show_ignored: self.show_ignored,
+            only_ignored: self.only_ignored,
+            source,
+            allow_fallback: self.allow_fallback,
         }
     }
 
@@ -607,7 +332,8 @@ impl QueryArgs {
                             vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                         let (logs_tx, logs_rx) =
                             vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                        let row_drain = spawn_streamed_query_row_drain(rows_rx);
+                        let row_drain =
+                            spawn_query_row_drain(QueryRowStream::Vox(rows_rx), self.limit);
                         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                         let query_outcome =
                             crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx);
@@ -679,7 +405,7 @@ impl QueryArgs {
                 let (rows_tx, rows_rx) = vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
                 let (logs_tx, logs_rx) =
                     vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                let row_drain = spawn_streamed_query_row_drain(rows_rx);
+                let row_drain = spawn_query_row_drain(QueryRowStream::Vox(rows_rx), self.limit);
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 let response =
                     crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx)?;
@@ -720,94 +446,9 @@ impl QueryArgs {
         drive_letters: Vec<char>,
         options: QueryExecutionOptions,
     ) -> eyre::Result<Vec<IndexedPathRow>> {
-        let mft_files: Vec<(char, PathBuf)> = {
-            let _span = info_span!("discover_mft_files").entered();
-            drive_letters
-                .into_iter()
-                .map(|d| (d, sync_dir.join(format!("{d}.mft"))))
-                .filter(|(_, p)| p.is_file())
-                .collect()
-        };
-        self.collect_rows_from_files(mft_files, sync_dir, options)
-    }
-
-    fn collect_rows_from_files(
-        self,
-        mft_files: Vec<(char, PathBuf)>,
-        sync_dir: &Path,
-        options: QueryExecutionOptions,
-    ) -> eyre::Result<Vec<IndexedPathRow>> {
-        let query_plan = {
-            let _span = info_span!("parse_query_rules", query = ?self.query).entered();
-            QueryPlan::parse_inputs(&self.query)?
-        };
-        let query_scope = {
-            let _span = info_span!("resolve_query_scope", query_scope = ?self.r#in).entered();
-            resolve_query_scope(self.r#in.as_deref())?
-        };
-        let drive_letters = mft_files
-            .iter()
-            .map(|(drive_letter, _)| *drive_letter)
-            .collect::<Vec<_>>();
-        let ignore_rules = match options.ignore {
-            QueryIgnoreBehavior::AutoDiscover => Some(
-                QueryIgnoreRules::discover_for_drive_letters(&drive_letters, sync_dir)?,
-            ),
-            QueryIgnoreBehavior::Disabled => None,
-            QueryIgnoreBehavior::Custom(rules) => Some(rules),
-        };
-
-        let mut loaded_rows = 0usize;
-        let mut results = Vec::new();
-        {
-            let _span = info_span!("populating results", drives = mft_files.len()).entered();
-            let include_deleted = self.include_deleted;
-            let only_deleted = self.only_deleted;
-            let show_ignored = self.show_ignored;
-            let only_ignored = self.only_ignored;
-            let load_results: Vec<eyre::Result<DriveQueryResult>> = {
-                let _span = info_span!("parallel load and query", drives = mft_files.len()).entered();
-                mft_files
-                    .into_par_iter()
-                    .map(|(drive_letter, _)| {
-                        load_and_query_drive_search_index(
-                            drive_letter,
-                            sync_dir,
-                            &query_plan,
-                            include_deleted,
-                            only_deleted,
-                        )
-                    })
-                    .collect()
-            };
-
-            let _span = info_span!("applying query scope and ignore rules").entered();
-            for result in load_results {
-                let result = result?;
-                loaded_rows += result.loaded_rows;
-                results.extend(result.matched_rows.into_iter().filter_map(|mut row| {
-                    if !should_include_scope(&row.path, query_scope.as_ref()) {
-                        return None;
-                    }
-
-                    row.is_ignored = ignore_rules
-                        .as_ref()
-                        .is_some_and(|rules| rules.is_ignored_path(Path::new(&row.path)));
-
-                    should_include_ignored_row(show_ignored, only_ignored, row.is_ignored)
-                        .then_some(row)
-                }));
-            }
-        }
-
-        info!(
-            loaded_rows = loaded_rows,
-            matched = results.len(),
-            total = loaded_rows,
-            "Indexed query completed"
-        );
-
-        Ok(results)
+        let spec = self.request_spec(drive_letters.clone(), QuerySource::DiskOnly);
+        let executor = DiskQueryExecutor::new(sync_dir, drive_letters, spec, options.ignore);
+        drain_query_stream(executor.stream()?, self.limit)
     }
 }
 
@@ -821,31 +462,12 @@ fn format_daemon_query_error(error: &crate::machine::ipc::MachineError) -> eyre:
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_query_scope;
-    use super::should_include_ignored_row;
-    use super::should_include_scope;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
-    use std::path::PathBuf;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
-
-    fn current_dir_lock() -> &'static Mutex<()> {
-        static CURRENT_DIR_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        CURRENT_DIR_LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct CurrentDirRestore(PathBuf);
-
-    impl Drop for CurrentDirRestore {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
 
     fn parse_fixture_index()
     -> eyre::Result<crate::search_index::search_index_bytes::ParsedSearchIndex<'static>> {
@@ -946,101 +568,5 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn query_scope_directory_matches_descendants_but_not_sibling_prefixes() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let scope_dir = temp_dir.path().join("repo");
-        let nested_file = scope_dir.join("music").join("song.mp3");
-        let sibling_file = temp_dir.path().join("repo2").join("song.mp3");
-
-        std::fs::create_dir_all(
-            nested_file
-                .parent()
-                .expect("nested file should have parent"),
-        )?;
-        std::fs::create_dir_all(
-            sibling_file
-                .parent()
-                .expect("sibling file should have parent"),
-        )?;
-        std::fs::write(&nested_file, [])?;
-        std::fs::write(&sibling_file, [])?;
-
-        let scope = resolve_query_scope(Some(&scope_dir.to_string_lossy()))?
-            .expect("directory scope should resolve");
-
-        assert!(should_include_scope(
-            &nested_file.to_string_lossy(),
-            Some(&scope)
-        ));
-        assert!(!should_include_scope(
-            &sibling_file.to_string_lossy(),
-            Some(&scope)
-        ));
-
-        Ok(())
-    }
-
-    #[test]
-    fn query_scope_file_matches_only_exact_path() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let scope_file = temp_dir.path().join("track.flac");
-        let other_file = temp_dir.path().join("track.flac.bak");
-
-        std::fs::write(&scope_file, [])?;
-        std::fs::write(&other_file, [])?;
-
-        let scope = resolve_query_scope(Some(&scope_file.to_string_lossy()))?
-            .expect("file scope should resolve");
-
-        assert!(should_include_scope(
-            &scope_file.to_string_lossy(),
-            Some(&scope)
-        ));
-        assert!(!should_include_scope(
-            &other_file.to_string_lossy(),
-            Some(&scope)
-        ));
-
-        Ok(())
-    }
-
-    #[test]
-    fn query_scope_dot_resolves_against_current_working_directory() -> eyre::Result<()> {
-        let _lock = current_dir_lock()
-            .lock()
-            .expect("current dir test lock should not be poisoned");
-        let temp_dir = tempfile::tempdir()?;
-        let original_dir = std::env::current_dir()?;
-        let _restore = CurrentDirRestore(original_dir);
-
-        std::env::set_current_dir(temp_dir.path())?;
-
-        let scope = resolve_query_scope(Some("."))?.expect("dot scope should resolve");
-
-        assert_eq!(scope.root, dunce::canonicalize(temp_dir.path())?);
-        assert!(scope.include_descendants);
-
-        Ok(())
-    }
-
-    #[test]
-    fn ignored_rows_are_hidden_by_default() {
-        assert!(!should_include_ignored_row(false, false, true));
-        assert!(should_include_ignored_row(false, false, false));
-    }
-
-    #[test]
-    fn show_ignored_includes_both_visible_and_ignored_rows() {
-        assert!(should_include_ignored_row(true, false, true));
-        assert!(should_include_ignored_row(true, false, false));
-    }
-
-    #[test]
-    fn only_ignored_filters_to_ignored_rows() {
-        assert!(should_include_ignored_row(false, true, true));
-        assert!(!should_include_ignored_row(true, true, false));
     }
 }

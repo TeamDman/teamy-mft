@@ -13,8 +13,10 @@ use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
 use crate::query::IndexedPathRow;
+use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
+use crate::query::QueryRequestSpec;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
@@ -207,11 +209,12 @@ impl LiveDriveState {
 
         let query_plan = QueryPlan::parse_inputs(&request.query)
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
-        let query_scope = resolve_query_scope(request.query_scope.as_deref())
-            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
         let ignore_rules =
             QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.cache_root)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
+        let spec = QueryRequestSpec::from(request);
+        let filter = QueryFilter::new(&spec, Some(ignore_rules))
+            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
         let current_index_bytes = self
             .current_index_bytes_cache
             .as_deref()
@@ -229,29 +232,19 @@ impl LiveDriveState {
             let row = parsed_index
                 .row_view(row_index as usize)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
-            if !should_include_indexed_row(
-                request.include_deleted,
-                request.only_deleted,
-                row.has_deleted_entries,
-            ) {
+            if !filter.include_deleted_state(row.has_deleted_entries) {
                 continue;
             }
 
             let path = row.path();
-            if !should_include_scope(&path, query_scope.as_ref()) {
-                continue;
-            }
-
-            let is_ignored = ignore_rules.is_ignored_path(Path::new(&path));
-            if !should_include_ignored_row(request.show_ignored, request.only_ignored, is_ignored) {
-                continue;
-            }
-
-            rows.push(IndexedPathRow {
-                path,
+            let row = IndexedPathRow {
+                path: path.into(),
                 has_deleted_entries: row.has_deleted_entries,
-                is_ignored,
-            });
+                is_ignored: false,
+            };
+            if let Some(row) = filter.classify_and_match(row) {
+                rows.push(row);
+            }
         }
 
         if request.limit > 0 && rows.len() > request.limit {
@@ -730,83 +723,6 @@ fn namespace_rank(namespace: u8) -> u8 {
         2 => 3,
         _ => 4,
     }
-}
-
-#[derive(Debug, Clone)]
-struct QueryScope {
-    root: PathBuf,
-    include_descendants: bool,
-}
-
-fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
-    let Some(scope) = scope else {
-        return Ok(None);
-    };
-
-    let root = dunce::canonicalize(scope)
-        .wrap_err_with(|| format!("Failed resolving query scope from {scope}"))?;
-    Ok(Some(QueryScope {
-        include_descendants: root.is_dir(),
-        root,
-    }))
-}
-
-fn lowercase_path_components(path: &Path) -> Vec<String> {
-    let path = path.as_os_str().to_string_lossy().replace('/', "\\");
-    let path = path
-        .strip_prefix(r"\\?\UNC\")
-        .map_or_else(|| path.clone(), |rest| format!(r"\\{rest}"));
-    let path = path
-        .strip_prefix(r"\\?\")
-        .map_or_else(|| path.clone(), ToString::to_string);
-
-    path.split('\\')
-        .filter(|component| !component.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect()
-}
-
-fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
-    if cfg!(windows) {
-        let path_components = lowercase_path_components(path);
-        let scope_components = lowercase_path_components(&scope.root);
-        return if scope.include_descendants {
-            path_components.starts_with(&scope_components)
-        } else {
-            path_components == scope_components
-        };
-    }
-
-    if scope.include_descendants {
-        path.starts_with(&scope.root)
-    } else {
-        path == scope.root
-    }
-}
-
-fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
-    let Some(scope) = scope else {
-        return true;
-    };
-    path_matches_scope(Path::new(path), scope)
-}
-
-fn should_include_indexed_row(
-    include_deleted: bool,
-    only_deleted: bool,
-    has_deleted_entries: bool,
-) -> bool {
-    if only_deleted {
-        return has_deleted_entries;
-    }
-    include_deleted || !has_deleted_entries
-}
-
-fn should_include_ignored_row(show_ignored: bool, only_ignored: bool, is_ignored: bool) -> bool {
-    if only_ignored {
-        return is_ignored;
-    }
-    show_ignored || !is_ignored
 }
 
 #[cfg(test)]

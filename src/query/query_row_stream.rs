@@ -1,0 +1,53 @@
+use crate::query::IndexedPathRow;
+
+pub enum QueryRowStream {
+    Local(tokio::sync::mpsc::Receiver<eyre::Result<IndexedPathRow>>),
+    Vox(vox::Rx<teamy_mft_daemon_rpc::IndexedPathRowDto>),
+}
+
+impl std::fmt::Debug for QueryRowStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(_) => f.write_str("QueryRowStream::Local(..)"),
+            Self::Vox(_) => f.write_str("QueryRowStream::Vox(..)"),
+        }
+    }
+}
+
+impl QueryRowStream {
+    /// # Errors
+    ///
+    /// Returns an error if the local producer failed or the daemon row channel failed.
+    pub async fn next(&mut self) -> eyre::Result<Option<IndexedPathRow>> {
+        match self {
+            Self::Local(rx) => rx.recv().await.transpose(),
+            Self::Vox(rx) => match rx.recv().await {
+                Ok(Some(row)) => Ok(Some(IndexedPathRow {
+                    path: row.get().path.clone().into(),
+                    has_deleted_entries: row.get().has_deleted_entries,
+                    is_ignored: row.get().is_ignored,
+                })),
+                Ok(None) => Ok(None),
+                Err(error) => eyre::bail!("Failed receiving streamed query row: {error}"),
+            },
+        }
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if receiving from the underlying stream fails.
+    pub async fn collect_filtered_limit(
+        mut self,
+        limit: usize,
+    ) -> eyre::Result<Vec<IndexedPathRow>> {
+        let _span = tracing::info_span!("query_collect_results", limit).entered();
+        let mut rows = Vec::new();
+        while let Some(row) = self.next().await? {
+            rows.push(row);
+            if limit > 0 && rows.len() >= limit {
+                break;
+            }
+        }
+        Ok(rows)
+    }
+}
