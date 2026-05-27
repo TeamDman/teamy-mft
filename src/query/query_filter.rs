@@ -84,7 +84,7 @@ impl QueryFilter {
 mod tests {
     use super::QueryFilter;
     use crate::query::IndexedPathRow;
-    use crate::query::QueryPath;
+    use crate::query::QueryResultPath;
     use crate::query::QueryRequestSpec;
     use crate::query::QuerySource;
 
@@ -105,7 +105,7 @@ mod tests {
 
     fn row(has_deleted_entries: bool) -> IndexedPathRow {
         IndexedPathRow {
-            path: QueryPath::from(String::from(r"C:\music\track.flac")),
+            path: QueryResultPath::from(String::from(r"C:\music\track.flac")),
             has_deleted_entries,
             is_ignored: false,
         }

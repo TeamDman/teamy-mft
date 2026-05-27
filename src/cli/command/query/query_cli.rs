@@ -1,3 +1,4 @@
+use crate::presentation::ResultListPresentation;
 use crate::query::DiskQueryExecutor;
 use crate::query::IndexedPathRow;
 use crate::query::QueryExecutionOptions;
@@ -5,7 +6,6 @@ use crate::query::QueryRequestSpec;
 use crate::query::QueryRowStream;
 use crate::query::QuerySource;
 use arbitrary::Arbitrary;
-use color_eyre::owo_colors::OwoColorize;
 use facet::Facet;
 use figue::{self as args};
 use std::io::IsTerminal;
@@ -70,81 +70,6 @@ pub enum QueryDensity {
     Auto,
     Lines,
     Columns,
-}
-
-fn render_indexed_path(row: &IndexedPathRow, colorize: bool) -> String {
-    if !colorize {
-        return row.path.to_string();
-    }
-    if row.is_ignored {
-        return row.path.as_str().yellow().to_string();
-    }
-    if row.has_deleted_entries {
-        row.path.as_str().red().to_string()
-    } else {
-        row.path.as_str().green().to_string()
-    }
-}
-
-fn print_results_lines(results: &[IndexedPathRow], colorize: bool) {
-    for row in results {
-        println!("{}", render_indexed_path(row, colorize));
-    }
-}
-
-fn print_results_columns(results: &[IndexedPathRow], colorize: bool) {
-    if results.is_empty() {
-        return;
-    }
-
-    let gap = 2usize;
-    let max_width = results
-        .iter()
-        .map(|row| {
-            let value: &str = row.path.as_str();
-            value.chars().count()
-        })
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let terminal_columns = crossterm::terminal::size()
-        .ok()
-        .map(|(columns, _)| usize::from(columns))
-        .filter(|value| *value > 0)
-        .or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .filter(|value| *value > 0)
-        })
-        .unwrap_or(120usize);
-
-    let column_count = ((terminal_columns + gap) / (max_width + gap)).max(1);
-    let row_count = results.len().div_ceil(column_count);
-
-    for row_index in 0..row_count {
-        let mut line = String::new();
-
-        for column_index in 0..column_count {
-            let index = row_index + column_index * row_count;
-            if index >= results.len() {
-                continue;
-            }
-
-            let row = &results[index];
-            line.push_str(&render_indexed_path(row, colorize));
-
-            if column_index + 1 < column_count {
-                let pad = (max_width + gap).saturating_sub({
-                    let value: &str = row.path.as_str();
-                    value.chars().count()
-                });
-                line.push_str(&" ".repeat(pad));
-            }
-        }
-
-        println!("{line}");
-    }
 }
 
 #[must_use]
@@ -268,12 +193,15 @@ impl QueryArgs {
             limit.min(results.len())
         };
         let display_results = &results[..result_limit];
-
-        if Self::use_columns(density, stdout_is_terminal) {
-            print_results_columns(display_results, colorize);
-        } else {
-            print_results_lines(display_results, colorize);
-        }
+        let presentation = ResultListPresentation::for_terminal();
+        let mut stdout = std::io::stdout().lock();
+        presentation.write_result_list(
+            display_results,
+            &mut stdout,
+            Self::use_columns(density, stdout_is_terminal),
+            |row| row.path.as_str().chars().count(),
+            |row, writer| row.render_path(writer, colorize),
+        )?;
 
         Ok(())
     }

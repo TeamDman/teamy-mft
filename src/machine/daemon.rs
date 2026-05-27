@@ -451,7 +451,7 @@ fn merge_index_rows(
     base_rows: Vec<crate::query::IndexedPathRow>,
     overlay_rows: Vec<crate::query::IndexedPathRow>,
 ) -> Vec<crate::query::IndexedPathRow> {
-    let mut merged = BTreeMap::<crate::query::QueryPath, crate::query::IndexedPathRow>::new();
+    let mut merged = BTreeMap::<crate::query::QueryResultPath, crate::query::IndexedPathRow>::new();
     for row in base_rows {
         merged.insert(row.path.clone(), row);
     }

@@ -1,6 +1,6 @@
 use crate::query::DriveQueryResult;
 use crate::query::IndexedPathRow;
-use crate::query::QueryPath;
+use crate::query::QueryResultPath;
 use crate::query::QueryPlan;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::load::MappedSearchIndex;
@@ -90,7 +90,7 @@ fn load_and_query_search_index(
             }
 
             matched_rows.push(IndexedPathRow {
-                path: QueryPath::from(row.path()),
+                path: QueryResultPath::from(row.path()),
                 has_deleted_entries: row.has_deleted_entries,
                 is_ignored: false,
             });
@@ -150,7 +150,7 @@ pub(crate) fn merge_rows(
     base_rows: Vec<IndexedPathRow>,
     overlay_rows: Vec<IndexedPathRow>,
 ) -> Vec<IndexedPathRow> {
-    let mut merged = BTreeMap::<QueryPath, IndexedPathRow>::new();
+    let mut merged = BTreeMap::<QueryResultPath, IndexedPathRow>::new();
     for row in base_rows {
         merged.insert(row.path.clone(), row);
     }

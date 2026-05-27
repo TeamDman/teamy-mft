@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct QueryPath(String);
+pub struct QueryResultPath(String);
 
-impl QueryPath {
+impl QueryResultPath {
     #[must_use]
     pub fn new(path: String) -> Self {
         Self(path)
@@ -34,25 +34,25 @@ impl QueryPath {
     }
 }
 
-impl From<String> for QueryPath {
+impl From<String> for QueryResultPath {
     fn from(value: String) -> Self {
         Self::new(value)
     }
 }
 
-impl From<QueryPath> for String {
-    fn from(value: QueryPath) -> Self {
+impl From<QueryResultPath> for String {
+    fn from(value: QueryResultPath) -> Self {
         value.0
     }
 }
 
-impl From<QueryPath> for PathBuf {
-    fn from(value: QueryPath) -> Self {
+impl From<QueryResultPath> for PathBuf {
+    fn from(value: QueryResultPath) -> Self {
         Self::from(value.0)
     }
 }
 
-impl Deref for QueryPath {
+impl Deref for QueryResultPath {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -60,19 +60,19 @@ impl Deref for QueryPath {
     }
 }
 
-impl AsRef<Path> for QueryPath {
+impl AsRef<Path> for QueryResultPath {
     fn as_ref(&self) -> &Path {
         self.as_path()
     }
 }
 
-impl AsRef<str> for QueryPath {
+impl AsRef<str> for QueryResultPath {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
 
-impl std::fmt::Display for QueryPath {
+impl std::fmt::Display for QueryResultPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
@@ -80,16 +80,16 @@ impl std::fmt::Display for QueryPath {
 
 #[allow(
     clippy::unnecessary_wraps,
-    reason = "facet proxy conversion ABI requires Result even though QueryPath cannot fail"
+    reason = "facet proxy conversion ABI requires Result even though QueryResultPath cannot fail"
 )]
 unsafe fn query_path_proxy_convert_out(
     target_ptr: facet::PtrConst,
     proxy_ptr: facet::PtrUninit,
 ) -> Result<facet::PtrMut, String> {
-    // SAFETY: `target_ptr` points at a valid `QueryPath` and `proxy_ptr` points at
+    // SAFETY: `target_ptr` points at a valid `QueryResultPath` and `proxy_ptr` points at
     // facet-managed storage for a `String` proxy with the correct layout.
     unsafe {
-        let path = target_ptr.get::<QueryPath>();
+        let path = target_ptr.get::<QueryResultPath>();
         #[allow(
             clippy::cast_ptr_alignment,
             reason = "facet allocates proxy storage with the alignment required by the proxy type"
@@ -102,22 +102,22 @@ unsafe fn query_path_proxy_convert_out(
 
 #[allow(
     clippy::unnecessary_wraps,
-    reason = "facet proxy conversion ABI requires Result even though QueryPath cannot fail"
+    reason = "facet proxy conversion ABI requires Result even though QueryResultPath cannot fail"
 )]
 unsafe fn query_path_proxy_convert_in(
     proxy_ptr: facet::PtrConst,
     target_ptr: facet::PtrUninit,
 ) -> Result<facet::PtrMut, String> {
     // SAFETY: `proxy_ptr` points at a valid `String` proxy and `target_ptr` points at
-    // facet-managed storage for a `QueryPath` destination with the correct layout.
+    // facet-managed storage for a `QueryResultPath` destination with the correct layout.
     unsafe {
         let path = proxy_ptr.read::<String>();
         #[allow(
             clippy::cast_ptr_alignment,
             reason = "facet allocates target storage with the alignment required by the target type"
         )]
-        let target_mut = target_ptr.as_mut_byte_ptr().cast::<QueryPath>();
-        target_mut.write(QueryPath(path));
+        let target_mut = target_ptr.as_mut_byte_ptr().cast::<QueryResultPath>();
+        target_mut.write(QueryResultPath(path));
         Ok(facet::PtrMut::new(target_mut.cast::<u8>()))
     }
 }
@@ -128,11 +128,11 @@ const QUERY_PATH_PROXY: facet::ProxyDef = facet::ProxyDef {
     convert_out: query_path_proxy_convert_out,
 };
 
-// SAFETY: `QueryPath` is serialized through an owned `String` proxy, preserving
+// SAFETY: `QueryResultPath` is serialized through an owned `String` proxy, preserving
 // the index-produced path representation without converting through `PathBuf`.
-unsafe impl Facet<'_> for QueryPath {
+unsafe impl Facet<'_> for QueryResultPath {
     const SHAPE: &'static facet::Shape = &const {
-        facet::ShapeBuilder::for_sized::<QueryPath>("QueryPath")
+        facet::ShapeBuilder::for_sized::<QueryResultPath>("QueryResultPath")
             .module_path("teamy_mft::query")
             .ty(facet::Type::User(facet::UserType::Opaque))
             .def(facet::Def::Scalar)
@@ -143,11 +143,11 @@ unsafe impl Facet<'_> for QueryPath {
 
 #[cfg(test)]
 mod tests {
-    use super::QueryPath;
+    use super::QueryResultPath;
 
     #[test]
     fn wraps_index_path_string_without_pathbuf_conversion() {
-        let path = QueryPath::from(String::from(r"C:\music\track.flac"));
+        let path = QueryResultPath::from(String::from(r"C:\music\track.flac"));
 
         assert_eq!(path.as_str(), r"C:\music\track.flac");
         assert_eq!(path.as_path(), std::path::Path::new(r"C:\music\track.flac"));

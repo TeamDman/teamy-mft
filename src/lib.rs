@@ -5,6 +5,7 @@ pub mod machine;
 pub mod mft;
 pub mod ntfs;
 pub mod paths;
+pub mod presentation;
 pub mod query;
 pub mod read;
 pub mod search_index;
