@@ -25,48 +25,29 @@ fn should_include_indexed_row(
 
 fn load_and_query_search_index(
     index_path: &Path,
-    drive_letter: char,
-    index_kind: &'static str,
+    _drive_letter: char,
+    _index_kind: &'static str,
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<DriveQueryResult> {
-    let _span = info_span!(
-        "load_drive_search_index",
-        drive = %drive_letter,
-        index_kind,
-        path = %index_path.display()
-    )
-    .entered();
+    let _span = info_span!("load_drive_search_index").entered();
     {
-        let _span = info_span!(
-            "validate_search_index_file",
-            drive = %drive_letter,
-            index_kind
-        )
-        .entered();
+        let _span = info_span!("validate_search_index_file").entered();
         if !index_path.is_file() {
             eyre::bail!("Fast query requires {}.", index_path.display(),);
         }
     }
 
     let mapped = {
-        let _span =
-            info_span!("map_search_index_file", drive = %drive_letter, index_kind).entered();
+        let _span = info_span!("map_search_index_file").entered();
         MappedSearchIndex::open(index_path).wrap_err_with(|| {
             format!("Failed loading search index from {}", index_path.display())
         })?
     };
 
     let parsed_index = {
-        let _span = info_span!(
-            "parse_search_index_for_query",
-            drive = %drive_letter,
-            index_kind,
-            bytes = mapped.bytes().len(),
-            rows = mapped.header.node_count
-        )
-        .entered();
+        let _span = info_span!("parse_search_index_for_query").entered();
         SearchIndexBytes::new(mapped.bytes())
             .parse_trusted_for_query()
             .wrap_err_with(|| {
@@ -79,13 +60,7 @@ fn load_and_query_search_index(
 
     let loaded_rows = parsed_index.row_count();
     let matched_row_indices = {
-        let _span = info_span!(
-            "match_search_index_postings",
-            drive = %drive_letter,
-            index_kind,
-            rows = loaded_rows
-        )
-        .entered();
+        let _span = info_span!("match_search_index_postings").entered();
         query_plan
             .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
             .wrap_err_with(|| {
@@ -96,13 +71,7 @@ fn load_and_query_search_index(
             })?
     };
     let matched_rows = {
-        let _span = info_span!(
-            "materialize_matched_index_rows",
-            drive = %drive_letter,
-            index_kind,
-            matched_indices = matched_row_indices.len()
-        )
-        .entered();
+        let _span = info_span!("materialize_matched_index_rows").entered();
         let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
 
         for row_index in matched_row_indices {

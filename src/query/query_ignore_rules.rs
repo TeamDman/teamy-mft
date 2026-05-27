@@ -62,8 +62,7 @@ impl QueryIgnoreRules {
         sync_dir: &Path,
     ) -> eyre::Result<Self> {
         let discovered = {
-            let _span =
-                info_span!("discover_query_ignore_files", drives = drive_letters.len()).entered();
+            let _span = info_span!("discover_query_ignore_files").entered();
             let results: Vec<eyre::Result<Vec<DiscoveredIgnoreFile>>> = drive_letters
                 .par_iter()
                 .map(|drive_letter| discover_ignore_files_for_drive(*drive_letter, sync_dir))

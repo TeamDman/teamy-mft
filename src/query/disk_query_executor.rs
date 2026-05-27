@@ -48,7 +48,7 @@ impl DiskQueryExecutor {
     ///
     /// Returns an error if query parsing, scope resolution, or ignore discovery fails.
     pub fn stream(self) -> eyre::Result<QueryRowStream> {
-        let _span = info_span!("query_execute", source = "disk").entered();
+        let _span = info_span!("query_execute").entered();
         let query_plan = Arc::new(QueryPlan::parse_inputs(&self.spec.query)?);
         let drive_letters = self
             .mft_files
@@ -56,7 +56,7 @@ impl DiskQueryExecutor {
             .map(|(drive_letter, _)| *drive_letter)
             .collect::<Vec<_>>();
         let ignore_rules = {
-            let _span = info_span!("query_prepare_filters", drives = drive_letters.len()).entered();
+            let _span = info_span!("query_prepare_filters").entered();
             match self.ignore {
                 QueryIgnoreBehavior::AutoDiscover => Some(
                     QueryIgnoreRules::discover_for_drive_letters(&drive_letters, &self.sync_dir)?,
@@ -74,7 +74,7 @@ impl DiskQueryExecutor {
         let only_deleted = self.spec.only_deleted;
 
         std::thread::spawn(move || {
-            let _span = info_span!("query_disk_producers", drives = drive_count).entered();
+            let _span = info_span!("query_disk_producers").entered();
             let mut handles = Vec::with_capacity(drive_count);
             for (drive_letter, _) in self.mft_files {
                 let sink = sink.clone();
@@ -82,7 +82,7 @@ impl DiskQueryExecutor {
                 let filter = Arc::clone(&filter);
                 let sync_dir = Arc::clone(&sync_dir);
                 handles.push(std::thread::spawn(move || {
-                    let _span = info_span!("query_drive_task", drive = %drive_letter).entered();
+                    let _span = info_span!("query_drive_task").entered();
                     let result = load_and_query_drive_search_index(
                         drive_letter,
                         &sync_dir,

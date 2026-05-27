@@ -40,7 +40,7 @@ impl QueryRowStream {
         mut self,
         limit: usize,
     ) -> eyre::Result<Vec<IndexedPathRow>> {
-        let _span = tracing::info_span!("query_collect_results", limit).entered();
+        let _span = tracing::info_span!("query_collect_results").entered();
         let mut rows = Vec::new();
         while let Some(row) = self.next().await? {
             rows.push(row);
