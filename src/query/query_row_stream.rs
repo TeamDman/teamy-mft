@@ -4,7 +4,7 @@ use crate::query::QueryResultRow;
 
 pub enum QueryRowStream {
     Local(tokio::sync::mpsc::Receiver<eyre::Result<QueryResultRow>>),
-    Vox(vox::Rx<crate::daemon::IndexedPathRowDto>),
+    Vox(vox::Rx<QueryResultRow>),
 }
 
 impl std::fmt::Debug for QueryRowStream {
@@ -24,11 +24,7 @@ impl QueryRowStream {
         match self {
             Self::Local(rx) => rx.recv().await.transpose(),
             Self::Vox(rx) => match rx.recv().await {
-                Ok(Some(row)) => Ok(Some(QueryResultRow {
-                    path: row.get().path.clone().into(),
-                    has_deleted_entries: row.get().has_deleted_entries,
-                    is_ignored: row.get().is_ignored,
-                })),
+                Ok(Some(row)) => Ok(Some(row.get().clone())),
                 Ok(None) => Ok(None),
                 Err(error) => eyre::bail!("Failed receiving streamed query row: {error}"),
             },

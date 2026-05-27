@@ -1,14 +1,14 @@
+use crate::daemon::CorrelationId;
 use crate::daemon::DaemonLogWireEvent;
-use crate::daemon::IndexedPathRowDto;
 use crate::daemon::LogStreamRequest;
 use crate::daemon::MachineError;
 use crate::daemon::PingResponse;
 use crate::daemon::QueryResponse;
-use crate::daemon::QueryStreamResponse;
 use crate::daemon::StatusRequest;
 use crate::daemon::StatusResponse;
 use crate::daemon::SyncRequest;
 use crate::query::QueryPlan;
+use crate::query::QueryResultRow;
 
 #[vox::service]
 pub trait MachineDaemonRpc {
@@ -25,9 +25,9 @@ pub trait MachineDaemonRpc {
     async fn query_stream(
         &self,
         request: QueryPlan,
-        rows: vox::Tx<IndexedPathRowDto>,
+        rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<DaemonLogWireEvent>,
-    ) -> Result<QueryStreamResponse, MachineError>;
+    ) -> Result<CorrelationId, MachineError>;
 
     async fn sync(
         &self,

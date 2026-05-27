@@ -11,6 +11,11 @@ pub struct QueryResultRow {
     pub has_deleted_entries: bool,
     pub is_ignored: bool,
 }
+
+unsafe impl vox_types::Reborrow for QueryResultRow {
+    type Ref<'a> = QueryResultRow;
+}
+
 impl Deref for QueryResultRow {
     type Target = Path;
 

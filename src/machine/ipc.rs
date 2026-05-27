@@ -1,8 +1,6 @@
 pub use crate::daemon::CorrelationId;
 pub use crate::daemon::DaemonBuildInfo;
 pub use crate::daemon::DegradedDriveStatus;
-pub use crate::daemon::IfExistsDto;
-pub use crate::daemon::IndexedPathRowDto;
 pub use crate::daemon::LogStreamRequest;
 pub use crate::daemon::MachineDaemonRpc;
 pub use crate::daemon::MachineDaemonRpcClient;
@@ -12,7 +10,6 @@ pub use crate::daemon::MachineErrorKind;
 pub use crate::daemon::PingResponse;
 pub use crate::daemon::PublishedDriveStatus;
 pub use crate::daemon::QueryResponse as RpcQueryResponse;
-pub use crate::daemon::QueryStreamResponse;
 pub use crate::daemon::StatusRequest;
 pub use crate::daemon::StatusResponse;
 pub use crate::daemon::SyncModeDto;
@@ -68,7 +65,7 @@ pub fn query(
         client
             .query(request, logs)
             .await
-            .map(convert_query_response)
+            .map(|response| response.rows)
     })
 }
 
@@ -79,9 +76,9 @@ pub fn query(
 pub fn query_stream(
     config: &MachineConfig,
     request: QueryPlan,
-    rows: vox::Tx<IndexedPathRowDto>,
+    rows: vox::Tx<QueryResultRow>,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<QueryStreamResponse> {
+) -> eyre::Result<CorrelationId> {
     with_client(config, move |client| async move {
         client.query_stream(request, rows, logs).await
     })
@@ -354,36 +351,6 @@ fn compare_semver(left: &str, right: &str) -> Option<Ordering> {
 fn compare_build_unix_ms(left: &str, right: u64) -> Option<Ordering> {
     let left = left.parse::<u64>().ok()?;
     Some(left.cmp(&right))
-}
-
-fn convert_query_response(response: RpcQueryResponse) -> Vec<QueryResultRow> {
-    response
-        .rows
-        .into_iter()
-        .map(|row| QueryResultRow {
-            path: row.path.into(),
-            has_deleted_entries: row.has_deleted_entries,
-            is_ignored: row.is_ignored,
-        })
-        .collect()
-}
-
-#[must_use]
-pub fn convert_indexed_rows(
-    rows: Vec<QueryResultRow>,
-    correlation_id: CorrelationId,
-) -> RpcQueryResponse {
-    RpcQueryResponse {
-        correlation_id,
-        rows: rows
-            .into_iter()
-            .map(|row| IndexedPathRowDto {
-                path: row.path.into_string(),
-                has_deleted_entries: row.has_deleted_entries,
-                is_ignored: row.is_ignored,
-            })
-            .collect(),
-    }
 }
 
 #[cfg(test)]

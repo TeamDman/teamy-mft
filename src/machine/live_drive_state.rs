@@ -732,9 +732,9 @@ mod tests {
     use super::diff_overlay_rows;
     use super::join_windows_path;
     use super::validate_active_cursor;
+    use crate::cli::command::sync::IfExistsOutputBehaviour;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
-    use crate::machine::ipc::IfExistsDto;
     use crate::machine::ipc::SyncModeDto;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
@@ -872,7 +872,7 @@ mod tests {
             cache_dir.path(),
             &[drive_letter],
             SyncModeDto::Both,
-            IfExistsDto::Overwrite,
+            IfExistsOutputBehaviour::Overwrite,
         )?;
 
         let mut state = LiveDriveState::load(

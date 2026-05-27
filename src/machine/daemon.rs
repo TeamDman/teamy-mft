@@ -14,13 +14,10 @@ use crate::machine::daemon_log::spawn_correlation_log_forwarder;
 use crate::machine::daemon_log::stop_log_forwarder;
 use crate::machine::ipc::CorrelationId;
 use crate::machine::ipc::DegradedDriveStatus;
-use crate::machine::ipc::IfExistsDto;
-use crate::machine::ipc::IndexedPathRowDto;
 use crate::machine::ipc::LogStreamRequest;
 use crate::machine::ipc::MachineDaemonRpc;
 use crate::machine::ipc::MachineError;
 use crate::machine::ipc::PingResponse;
-use crate::machine::ipc::QueryStreamResponse;
 use crate::machine::ipc::RpcQueryResponse;
 use crate::machine::ipc::StatusRequest;
 use crate::machine::ipc::StatusResponse;
@@ -509,7 +506,7 @@ impl MachineDaemonService {
     async fn run_query_stream_in_span(
         &self,
         request: QueryPlan,
-        rows: &vox::Tx<IndexedPathRowDto>,
+        rows: &vox::Tx<QueryResultRow>,
         correlation_id: &CorrelationId,
     ) -> Result<(), MachineError> {
         let state = Arc::clone(&self.state);
@@ -560,15 +557,7 @@ impl MachineDaemonService {
                     if request_for_body.limit > 0 && emitted_rows >= request_for_body.limit {
                         break;
                     }
-                    if rows
-                        .send(IndexedPathRowDto {
-                            path: row.path.into_string(),
-                            has_deleted_entries: row.has_deleted_entries,
-                            is_ignored: row.is_ignored,
-                        })
-                        .await
-                        .is_err()
-                    {
+                    if rows.send(row).await.is_err() {
                         return Ok(());
                     }
                     emitted_rows += 1;
@@ -694,7 +683,10 @@ impl MachineDaemonRpc for MachineDaemonService {
         let response = self
             .run_query_in_span(request, &correlation_id)
             .await
-            .map(|rows| crate::machine::ipc::convert_indexed_rows(rows, correlation_id.clone()));
+            .map(|rows| RpcQueryResponse {
+                correlation_id: correlation_id.clone(),
+                rows,
+            });
         stop_log_forwarder(log_forwarder).await;
         response
     }
@@ -702,9 +694,9 @@ impl MachineDaemonRpc for MachineDaemonService {
     async fn query_stream(
         &self,
         request: QueryPlan,
-        rows: vox::Tx<IndexedPathRowDto>,
+        rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
-    ) -> Result<QueryStreamResponse, MachineError> {
+    ) -> Result<CorrelationId, MachineError> {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let response = self
@@ -714,7 +706,7 @@ impl MachineDaemonRpc for MachineDaemonService {
             Ok(()) => {
                 let _ = rows.close(Vec::default()).await;
                 stop_log_forwarder(log_forwarder).await;
-                Ok(QueryStreamResponse { correlation_id })
+                Ok(correlation_id)
             }
             Err(error) => {
                 let _ = rows.close(Vec::default()).await;
@@ -1127,7 +1119,7 @@ pub fn sync_machine_cache(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     mode: SyncModeDto,
-    if_exists: IfExistsDto,
+    if_exists: IfExistsOutputBehaviour,
 ) -> eyre::Result<MachineCacheSyncResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1144,7 +1136,7 @@ async fn sync_machine_cache_async(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     mode: SyncModeDto,
-    if_exists: IfExistsDto,
+    if_exists: IfExistsOutputBehaviour,
 ) -> eyre::Result<MachineCacheSyncResult> {
     std::fs::create_dir_all(sync_dir)?;
     let effective_mode = if matches!(mode, SyncModeDto::Mft) {
@@ -1160,11 +1152,6 @@ async fn sync_machine_cache_async(
         collect_supported_drives_for_machine_sync(drive_letters, effective_mode);
     let drive_infos =
         resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
-    let if_exists = match if_exists {
-        IfExistsDto::Skip => IfExistsOutputBehaviour::Skip,
-        IfExistsDto::Overwrite => IfExistsOutputBehaviour::Overwrite,
-        IfExistsDto::Abort => IfExistsOutputBehaviour::Abort,
-    };
     let sync_command = match effective_mode {
         SyncModeDto::Index => SyncCommand::Index(SyncIndexArgs),
         SyncModeDto::Both => SyncCommand::Both,

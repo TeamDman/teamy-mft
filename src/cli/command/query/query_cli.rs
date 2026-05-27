@@ -142,7 +142,7 @@ impl QueryArgs {
             QueryDataSource::DaemonOnly => {
                 let config = crate::machine::ipc::load_machine_daemon_client_config()?;
                 crate::machine::ipc::ensure_daemon_ready(&config)?;
-                let (rows_tx, rows_rx) = vox::channel::<crate::daemon::IndexedPathRowDto>();
+                let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
                 let (logs_tx, logs_rx) =
                     vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
                 let row_drain = {
@@ -166,7 +166,7 @@ impl QueryArgs {
                     eyre::eyre!("Daemon log drain thread panicked: {join_error:?}")
                 })?;
                 debug!(
-                    correlation_id = %response.correlation_id,
+                    correlation_id = %response,
                     "Daemon-only streamed query completed"
                 );
                 response_rows

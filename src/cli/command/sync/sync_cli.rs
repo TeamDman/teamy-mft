@@ -3,7 +3,6 @@ use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::cli::command::sync::index::SyncIndexArgs;
 use crate::cli::command::sync::mft::SyncMftArgs;
 use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
-use crate::machine::ipc::IfExistsDto;
 use crate::machine::ipc::SyncModeDto;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -57,7 +56,7 @@ impl SyncArgs {
         let request = crate::machine::ipc::SyncRequest {
             drive_letters,
             mode: SyncModeDto::from(self.command.unwrap_or_default()),
-            if_exists: IfExistsDto::from(self.if_exists),
+            if_exists: self.if_exists,
         };
         crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
@@ -87,16 +86,6 @@ impl From<SyncCommand> for SyncModeDto {
             SyncCommand::Mft(_) => Self::Mft,
             SyncCommand::Index(_) => Self::Index,
             SyncCommand::Both => Self::Both,
-        }
-    }
-}
-
-impl From<IfExistsOutputBehaviour> for IfExistsDto {
-    fn from(value: IfExistsOutputBehaviour) -> Self {
-        match value {
-            IfExistsOutputBehaviour::Skip => Self::Skip,
-            IfExistsOutputBehaviour::Overwrite => Self::Overwrite,
-            IfExistsOutputBehaviour::Abort => Self::Abort,
         }
     }
 }
