@@ -12,6 +12,8 @@ pub struct QueryResultRow {
     pub is_ignored: bool,
 }
 
+// SAFETY: `QueryResultRow` owns all of its fields and does not expose borrowed
+// data in its wire representation, so reborrowing can use the same shape.
 unsafe impl vox_types::Reborrow for QueryResultRow {
     type Ref<'a> = QueryResultRow;
 }
@@ -25,6 +27,9 @@ impl Deref for QueryResultRow {
 }
 
 impl QueryResultRow {
+    /// # Errors
+    ///
+    /// Returns an error if writing the rendered path to `writer` fails.
     pub fn render_path<W>(&self, writer: &mut W, colorize: bool) -> io::Result<()>
     where
         W: Write,

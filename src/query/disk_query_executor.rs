@@ -20,7 +20,10 @@ pub struct DiskQueryExecutor {
 }
 
 impl DiskQueryExecutor {
-    #[must_use]
+    /// # Errors
+    ///
+    /// Returns an error if drive letters cannot be resolved, the sync directory
+    /// cannot be loaded, or a selected drive has no published MFT snapshot.
     pub fn new(request: QueryPlan) -> eyre::Result<Self> {
         let drive_letters = request.drive_letter_pattern.into_drive_letters()?;
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
@@ -28,18 +31,19 @@ impl DiskQueryExecutor {
             let _span = info_span!("discover_mft_files").entered();
             drive_letters
                 .iter()
-                .cloned()
+                .copied()
                 .map(|drive_letter| (drive_letter, sync_dir.join(format!("{drive_letter}.mft"))))
-                .map(
-                    |(drive_letter, drive_mft_file_path)| match drive_mft_file_path.is_file() {
-                        true => Ok((drive_letter, drive_mft_file_path)),
-                        false => bail!(
+                .map(|(drive_letter, drive_mft_file_path)| {
+                    if drive_mft_file_path.is_file() {
+                        Ok((drive_letter, drive_mft_file_path))
+                    } else {
+                        bail!(
                             "MFT file for drive {} not found at expected path: {}",
                             drive_letter,
                             drive_mft_file_path.display()
-                        ),
-                    },
-                )
+                        )
+                    }
+                })
                 .collect::<eyre::Result<Vec<_>>>()?
         };
 

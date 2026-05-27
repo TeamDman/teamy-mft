@@ -1,5 +1,4 @@
-use std::num::NonZeroUsize;
-
+use crate::query::QueryLimit;
 use crate::query::QueryString;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -24,7 +23,7 @@ pub struct QueryPlan {
     pub drive_letter_pattern: DriveLetterPattern,
     /// Maximum number of results to show
     #[facet(args::named, default)]
-    pub limit: Option<NonZeroUsize>,
+    pub limit: QueryLimit,
     /// Include paths that contain one or more deleted MFT entries
     #[facet(args::named, default)]
     pub include_deleted: bool,
@@ -41,6 +40,11 @@ pub struct QueryPlan {
 
 impl QueryPlan {
     /// Build a query plan from CLI positional inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any query input cannot be parsed into a valid query
+    /// string.
     pub fn parse_inputs(query_inputs: &[String]) -> eyre::Result<Self> {
         Ok(Self {
             query: QueryString::parse_inputs(query_inputs)?,
@@ -49,6 +53,10 @@ impl QueryPlan {
     }
 
     /// Create a new `QueryPlan` with the given query pattern and all other options at their defaults.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provided pattern is not a valid single query.
     pub fn new(pattern: impl Into<String>) -> Self {
         Self::parse_inputs(&[pattern.into()]).expect("single non-empty query should parse")
     }

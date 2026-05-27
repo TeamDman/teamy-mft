@@ -1,5 +1,4 @@
-use std::num::NonZeroUsize;
-
+use crate::query::QueryLimit;
 use crate::query::QueryResultRow;
 
 pub enum QueryRowStream {
@@ -36,14 +35,14 @@ impl QueryRowStream {
     /// Returns an error if receiving from the underlying stream fails.
     pub async fn collect_filtered_limit(
         mut self,
-        limit: Option<NonZeroUsize>,
+        limit: QueryLimit,
     ) -> eyre::Result<Vec<QueryResultRow>> {
         let _span = tracing::info_span!("query_collect_results").entered();
         let mut rows = Vec::new();
-        if let Some(limit) = limit {
+        if let Some(limit) = limit.get() {
             while let Some(row) = self.next().await? {
                 rows.push(row);
-                if rows.len() >= limit.get() {
+                if rows.len() >= limit {
                     break;
                 }
             }

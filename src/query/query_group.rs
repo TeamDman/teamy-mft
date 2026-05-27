@@ -141,8 +141,8 @@ impl From<&QueryGroup> for String {
 }
 
 impl<'a> Arbitrary<'a> for QueryGroup {
-    fn arbitrary(unstructured: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let input = String::arbitrary(unstructured)?;
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let input = String::arbitrary(u)?;
         Ok(if validate_query_input(&input).is_ok() {
             Self::parse(&input)
         } else {
