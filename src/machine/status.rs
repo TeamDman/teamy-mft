@@ -11,7 +11,7 @@ use crate::machine::service::query_service_state;
 use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Debug, Clone)]
 pub struct MachineDriveStatus {

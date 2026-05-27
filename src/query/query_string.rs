@@ -1,4 +1,5 @@
 use crate::query::QueryGroup;
+use crate::query::QueryRule;
 use facet::Facet;
 use figue::{self as args};
 
@@ -46,6 +47,48 @@ impl QueryString {
     #[must_use]
     pub fn to_inputs(&self) -> Vec<String> {
         self.groups.iter().map(ToString::to_string).collect()
+    }
+
+    #[must_use]
+    pub fn matches(&self, haystack: &str) -> bool {
+        self.matches_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_segments_preprocessed<'a, I, F>(&self, make_segments: &F) -> bool
+    where
+        I: Iterator<Item = (&'a str, &'a str)>,
+        F: Fn() -> I,
+    {
+        self.groups
+            .iter()
+            .any(|group| group.matches_segments_preprocessed(make_segments))
+    }
+
+    #[must_use]
+    pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
+        self.groups
+            .iter()
+            .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
+    }
+
+    /// # Errors
+    ///
+    /// Returns any error produced while looking up candidate rows for the
+    /// rules in this query string.
+    pub fn matching_row_indices<F>(&self, row_indices_for_rule: &F) -> eyre::Result<Vec<u32>>
+    where
+        F: Fn(&QueryRule) -> eyre::Result<Vec<u32>>,
+    {
+        let mut matches = Vec::new();
+
+        for group in &self.groups {
+            matches.extend(group.matching_row_indices(row_indices_for_rule)?);
+        }
+
+        matches.sort_unstable();
+        matches.dedup();
+        Ok(matches)
     }
 }
 

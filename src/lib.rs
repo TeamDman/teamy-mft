@@ -1,5 +1,6 @@
 pub mod cli;
 
+pub mod daemon;
 pub mod logging_init;
 pub mod machine;
 pub mod mft;
@@ -11,9 +12,10 @@ pub mod read;
 pub mod search_index;
 pub mod status;
 pub mod tray;
+pub mod windows_utils;
 
 use crate::cli::Cli;
-use teamy_windows::console::console_attach;
+use crate::windows_utils::console::console_attach;
 use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::info_span;
@@ -60,9 +62,9 @@ pub fn main() -> eyre::Result<()> {
     #[cfg(windows)]
     {
         // This can fail when stdout/stderr are redirected, so keep startup permissive.
-        let _ = teamy_windows::console::enable_ansi_support();
+        let _ = crate::windows_utils::console::enable_ansi_support();
 
-        teamy_windows::string::warn_if_utf8_not_enabled();
+        crate::windows_utils::string::warn_if_utf8_not_enabled();
     };
 
     // cli[impl parser.args-consistent]

@@ -16,7 +16,7 @@ use tracing::info_span;
 pub struct DiskQueryExecutor {
     sync_dir: PathBuf,
     mft_files: Vec<(char, PathBuf)>,
-    request: teamy_mft_daemon_rpc::QueryRequest,
+    request: QueryPlan,
     ignore: QueryIgnoreBehavior,
 }
 
@@ -24,13 +24,13 @@ impl DiskQueryExecutor {
     #[must_use]
     pub fn new(
         sync_dir: &Path,
-        request: teamy_mft_daemon_rpc::QueryRequest,
+        request: QueryPlan,
         ignore: QueryIgnoreBehavior,
     ) -> eyre::Result<Self> {
+        let drive_letters = request.drive_letter_pattern.clone().into_drive_letters()?;
         let mft_files = {
             let _span = info_span!("discover_mft_files").entered();
-            request
-                .drive_letters
+            drive_letters
                 .iter()
                 .cloned()
                 .map(|drive_letter| (drive_letter, sync_dir.join(format!("{drive_letter}.mft"))))
@@ -59,7 +59,7 @@ impl DiskQueryExecutor {
     /// Returns an error if query parsing, scope resolution, or ignore discovery fails.
     pub fn stream(self) -> eyre::Result<QueryRowStream> {
         let _span = info_span!("query_execute").entered();
-        let query_plan = Arc::new(QueryPlan::parse_inputs(&self.request.query)?);
+        let query_plan = Arc::new(self.request.clone());
         let drive_letters = self
             .mft_files
             .iter()

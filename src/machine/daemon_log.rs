@@ -1,14 +1,14 @@
+use crate::daemon::CorrelationId;
+pub use crate::daemon::DaemonLogEvent;
+pub use crate::daemon::DaemonLogField;
+pub use crate::daemon::DaemonLogLevel;
+pub use crate::daemon::DaemonLogSpan;
+pub use crate::daemon::DaemonLogWireEvent;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
-use teamy_mft_daemon_rpc::CorrelationId;
-pub use teamy_mft_daemon_rpc::DaemonLogEvent;
-pub use teamy_mft_daemon_rpc::DaemonLogField;
-pub use teamy_mft_daemon_rpc::DaemonLogLevel;
-pub use teamy_mft_daemon_rpc::DaemonLogSpan;
-pub use teamy_mft_daemon_rpc::DaemonLogWireEvent;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use tracing::Event;
@@ -344,7 +344,7 @@ fn daemon_log_span_from_metadata(metadata: &Metadata<'_>) -> DaemonLogSpan {
 }
 
 fn should_capture_daemon_log_target(target: &str, level: tracing::Level) -> bool {
-    if target.starts_with("teamy_mft") || target.starts_with("teamy_windows") {
+    if target.starts_with("teamy_mft") {
         return true;
     }
 

@@ -1,6 +1,6 @@
 use arbitrary::Arbitrary;
 use facet::Facet;
-use teamy_windows::elevation::ensure_elevated;
+use crate::windows_utils::elevation::ensure_elevated;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ProtectionDisableArgs;

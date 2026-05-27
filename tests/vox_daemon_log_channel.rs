@@ -1,10 +1,10 @@
 use std::time::Duration;
-use teamy_mft_daemon_rpc::CorrelationId;
-use teamy_mft_daemon_rpc::DaemonLogEvent;
-use teamy_mft_daemon_rpc::DaemonLogField;
-use teamy_mft_daemon_rpc::DaemonLogLevel;
-use teamy_mft_daemon_rpc::DaemonLogSpan;
-use teamy_mft_daemon_rpc::DaemonLogWireEvent;
+use teamy_mft::daemon::CorrelationId;
+use teamy_mft::daemon::DaemonLogEvent;
+use teamy_mft::daemon::DaemonLogField;
+use teamy_mft::daemon::DaemonLogLevel;
+use teamy_mft::daemon::DaemonLogSpan;
+use teamy_mft::daemon::DaemonLogWireEvent;
 
 #[vox::service]
 trait LogProbe {

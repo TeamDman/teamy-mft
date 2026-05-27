@@ -95,9 +95,7 @@ fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
     }
 
     let own_level = if global_args.debug { "debug" } else { "info" };
-    let filter = format!(
-        "warn,teamy_mft={own_level},teamy_windows={own_level},teamy_mft_daemon_rpc={own_level}"
-    );
+    let filter = format!("warn,teamy_mft={own_level}");
     EnvFilter::builder().parse(filter).map_err(Into::into)
 }
 
@@ -123,7 +121,7 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
         .with_file(cfg!(debug_assertions))
         .with_line_number(cfg!(debug_assertions))
         .with_target(true)
-        .with_writer(std::io::stderr.and(teamy_windows::log::LOG_BUFFER.clone()))
+        .with_writer(std::io::stderr.and(crate::windows_utils::log::LOG_BUFFER.clone()))
         .event_format(SourceAwareEventFormat {
             inner: tracing_subscriber::fmt::format()
                 .pretty()

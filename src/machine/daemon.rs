@@ -15,11 +15,11 @@ use crate::machine::daemon_log::stop_log_forwarder;
 use crate::machine::ipc::CorrelationId;
 use crate::machine::ipc::DegradedDriveStatus;
 use crate::machine::ipc::IfExistsDto;
+use crate::machine::ipc::IndexedPathRowDto;
 use crate::machine::ipc::LogStreamRequest;
 use crate::machine::ipc::MachineDaemonRpc;
 use crate::machine::ipc::MachineError;
 use crate::machine::ipc::PingResponse;
-use crate::machine::ipc::QueryRequest;
 use crate::machine::ipc::QueryStreamResponse;
 use crate::machine::ipc::RpcQueryResponse;
 use crate::machine::ipc::StatusRequest;
@@ -133,12 +133,17 @@ impl DaemonRuntimeState {
 
     fn query(
         &mut self,
-        request: &QueryRequest,
+        request: &QueryPlan,
     ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
         let mut degraded_drives = Vec::new();
-        for &drive in &request.drive_letters {
+        let drive_letters = request
+            .drive_letter_pattern
+            .clone()
+            .into_drive_letters()
+            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
+        for &drive in &drive_letters {
             match self.query_drive_rows(drive, request) {
                 Ok(drive_rows) => {
                     if let Some(degraded) = drive_rows.degraded {
@@ -175,7 +180,7 @@ impl DaemonRuntimeState {
     fn query_drive_rows(
         &mut self,
         drive: char,
-        request: &QueryRequest,
+        request: &QueryPlan,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
         if let Err(error) = self.refresh_drive(drive) {
             return match self.query_published_drive(drive, request) {
@@ -196,7 +201,6 @@ impl DaemonRuntimeState {
             };
         }
         let mut per_drive_request = request.clone();
-        per_drive_request.drive_letters = vec![drive];
         per_drive_request.limit = 0;
         self.drive_mut(drive)?
             .query(&per_drive_request)
@@ -209,10 +213,10 @@ impl DaemonRuntimeState {
     fn query_published_drive(
         &self,
         drive: char,
-        request: &QueryRequest,
+        request: &QueryPlan,
     ) -> eyre::Result<Vec<IndexedPathRow>> {
         let paths = published_drive_paths(&self.cache_root, drive);
-        let query_plan = QueryPlan::parse_inputs(&request.query)?;
+        let query_plan = request.clone();
         let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
             &[drive],
             &self.cache_root,
@@ -432,6 +436,7 @@ fn query_published_index_path(
     let bytes = std::fs::read(path)?;
     let parsed_index = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
     let matched_row_indices = query_plan
+        .query
         .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))?;
     let mut rows = Vec::with_capacity(matched_row_indices.len());
     for row_index in matched_row_indices {
@@ -467,7 +472,7 @@ impl MachineDaemonService {
 
     async fn run_query_in_span(
         &self,
-        request: QueryRequest,
+        request: QueryPlan,
         correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
         let state = Arc::clone(&self.state);
@@ -479,8 +484,8 @@ impl MachineDaemonService {
         );
         async move {
             tracing::info!(
-                query_groups = request_for_body.query.len(),
-                drive_count = request_for_body.drive_letters.len(),
+                query_groups = request_for_body.query.groups().len(),
+                drive_pattern = %request_for_body.drive_letter_pattern,
                 limit = request_for_body.limit,
                 "Running daemon query"
             );
@@ -507,8 +512,8 @@ impl MachineDaemonService {
 
     async fn run_query_stream_in_span(
         &self,
-        request: QueryRequest,
-        rows: &vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+        request: QueryPlan,
+        rows: &vox::Tx<IndexedPathRowDto>,
         correlation_id: &CorrelationId,
     ) -> Result<(), MachineError> {
         let state = Arc::clone(&self.state);
@@ -520,8 +525,8 @@ impl MachineDaemonService {
         );
         async move {
             tracing::info!(
-                query_groups = request_for_body.query.len(),
-                drive_count = request_for_body.drive_letters.len(),
+                query_groups = request_for_body.query.groups().len(),
+                drive_pattern = %request_for_body.drive_letter_pattern,
                 limit = request_for_body.limit,
                 "Running daemon streamed query"
             );
@@ -529,7 +534,12 @@ impl MachineDaemonService {
             let mut emitted_rows = 0usize;
             let mut queried_drives = 0usize;
             let mut degraded_drives = Vec::new();
-            for &drive in &request_for_body.drive_letters {
+            let drive_letters = request_for_body
+                .drive_letter_pattern
+                .clone()
+                .into_drive_letters()
+                .map_err(|error| MachineError::request_invalid(error.to_string()))?;
+            for &drive in &drive_letters {
                 let drive_rows = match std::panic::catch_unwind(AssertUnwindSafe(|| {
                     state.query_drive_rows(drive, &request_for_body)
                 })) {
@@ -555,7 +565,7 @@ impl MachineDaemonService {
                         break;
                     }
                     if rows
-                        .send(teamy_mft_daemon_rpc::IndexedPathRowDto {
+                        .send(IndexedPathRowDto {
                             path: row.path.into_string(),
                             has_deleted_entries: row.has_deleted_entries,
                             is_ignored: row.is_ignored,
@@ -680,7 +690,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn query(
         &self,
-        request: QueryRequest,
+        request: QueryPlan,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<RpcQueryResponse, MachineError> {
         let correlation_id = next_correlation_id("query");
@@ -695,8 +705,8 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn query_stream(
         &self,
-        request: QueryRequest,
-        rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+        request: QueryPlan,
+        rows: vox::Tx<IndexedPathRowDto>,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<QueryStreamResponse, MachineError> {
         let correlation_id = next_correlation_id("query");
@@ -930,7 +940,7 @@ fn collect_published_drive_summaries_for_letters(
         .map(|drive_letter| {
             crate::machine::status::collect_published_drive_summaries(
                 cache_root,
-                &teamy_windows::storage::DriveLetterPattern(drive_letter.to_string()),
+                &crate::windows_utils::storage::DriveLetterPattern(drive_letter.to_string()),
             )
         })
         .collect::<eyre::Result<Vec<_>>>()

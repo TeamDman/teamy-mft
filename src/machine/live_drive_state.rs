@@ -4,7 +4,6 @@ use crate::machine::config::current_unix_ms;
 use crate::machine::config::load_checkpoint;
 use crate::machine::config::save_checkpoint;
 use crate::machine::ipc::MachineError;
-use crate::machine::ipc::QueryRequest;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::UsnEvent;
 use crate::machine::usn::VolumeUsnJournal;
@@ -202,12 +201,11 @@ impl LiveDriveState {
     ///
     /// Returns an error if the current in-memory index cannot be built or queried.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, query = ?request.query))]
-    pub fn query(&mut self, request: &QueryRequest) -> Result<Vec<IndexedPathRow>, MachineError> {
+    pub fn query(&mut self, request: &QueryPlan) -> Result<Vec<IndexedPathRow>, MachineError> {
         self.ensure_query_cache()
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
-        let query_plan = QueryPlan::parse_inputs(&request.query)
-            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
+        let query_plan = request.clone();
         let ignore_rules =
             QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.cache_root)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
@@ -222,6 +220,7 @@ impl LiveDriveState {
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
         let matched_row_indices = query_plan
+            .query
             .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
@@ -736,10 +735,10 @@ mod tests {
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
     use crate::machine::ipc::IfExistsDto;
-    use crate::machine::ipc::QueryRequest;
     use crate::machine::ipc::SyncModeDto;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
+    use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexPathRow;
     use rustc_hash::FxHashMap;
     use std::time::Duration;
@@ -880,15 +879,11 @@ mod tests {
             cache_dir.path(),
             published_drive_paths(cache_dir.path(), drive_letter),
         )?;
-        let base_request = QueryRequest {
-            query: vec![needle.clone()],
-            query_scope: Some(scope_dir.path().to_string_lossy().into_owned()),
-            drive_letters: vec![drive_letter],
-            limit: 0,
+        let base_request = QueryPlan {
+            r#in: Some(scope_dir.path().to_string_lossy().into_owned()),
             include_deleted: true,
-            only_deleted: false,
             show_ignored: true,
-            only_ignored: false,
+            ..QueryPlan::new(needle.clone())
         };
         assert!(
             state

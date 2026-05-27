@@ -2,7 +2,7 @@ use eyre::bail;
 use std::fs::create_dir_all;
 use std::path::Path;
 use std::path::PathBuf;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 use tracing::info;
 
 #[derive(Debug, Clone)]

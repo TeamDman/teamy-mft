@@ -11,7 +11,7 @@ use crate::machine::service::uninstall_windows_service;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use teamy_windows::elevation::ensure_elevated;
+use crate::windows_utils::elevation::ensure_elevated;
 use tracing::info;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]

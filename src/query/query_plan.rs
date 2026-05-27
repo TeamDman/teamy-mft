@@ -1,10 +1,8 @@
-use crate::query::QueryGroup;
-use crate::query::QueryRule;
 use crate::query::QueryString;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
@@ -52,71 +50,6 @@ impl QueryPlan {
     pub fn new(pattern: impl Into<String>) -> Self {
         Self::parse_inputs(&[pattern.into()]).expect("single non-empty query should parse")
     }
-
-    #[must_use]
-    pub fn groups(&self) -> &[QueryGroup] {
-        self.query.groups()
-    }
-
-    #[must_use]
-    pub fn query_inputs(&self) -> Vec<String> {
-        self.query.to_inputs()
-    }
-
-    pub fn query_request(&self, drive_letters: Vec<char>) -> crate::machine::ipc::QueryRequest {
-        crate::machine::ipc::QueryRequest {
-            query: self.query_inputs(),
-            query_scope: self.r#in.clone(),
-            drive_letters,
-            limit: self.limit,
-            include_deleted: self.include_deleted,
-            only_deleted: self.only_deleted,
-            show_ignored: self.show_ignored,
-            only_ignored: self.only_ignored,
-        }
-    }
-
-    #[must_use]
-    pub fn matches(&self, haystack: &str) -> bool {
-        self.matches_preprocessed(haystack, None)
-    }
-
-    #[must_use]
-    pub fn matches_segments_preprocessed<'a, I, F>(&self, make_segments: &F) -> bool
-    where
-        I: Iterator<Item = (&'a str, &'a str)>,
-        F: Fn() -> I,
-    {
-        self.groups()
-            .iter()
-            .any(|group| group.matches_segments_preprocessed(make_segments))
-    }
-
-    #[must_use]
-    pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
-        self.groups()
-            .iter()
-            .any(|group| group.matches_preprocessed(haystack, normalized_haystack))
-    }
-
-    /// # Errors
-    ///
-    /// Returns any error produced while looking up candidate rows for the
-    /// rules in this plan.
-    pub fn matching_row_indices<F>(&self, row_indices_for_rule: &F) -> eyre::Result<Vec<u32>>
-    where
-        F: Fn(&QueryRule) -> eyre::Result<Vec<u32>>,
-    {
-        let mut matches = Vec::new();
-
-        for group in self.groups() {
-            matches.extend(group.matching_row_indices(row_indices_for_rule)?);
-        }
-
-        matches.sort_unstable();
-        matches.dedup();
-        Ok(matches)
-    }
 }
 
 #[cfg(test)]
@@ -132,7 +65,7 @@ mod tests {
         paths
             .iter()
             .copied()
-            .filter(|path| plan.matches(path))
+            .filter(|path| plan.query.matches(path))
             .map(str::to_owned)
             .collect()
     }
@@ -227,6 +160,7 @@ mod tests {
             .expect("query should parse");
 
         let candidates = plan
+            .query
             .matching_row_indices(&|rule| {
                 Ok(match format!("{rule:?}").as_str() {
                     "ContainsCaseInsensitive(AsciiLower([97, 108, 112, 104, 97]))" => {
@@ -253,8 +187,8 @@ mod tests {
         let query_inputs = vec!["   ".to_owned()];
         let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
 
-        assert!(plan.matches("alpha   beta"));
-        assert!(!plan.matches("alphabet"));
+        assert!(plan.query.matches("alpha   beta"));
+        assert!(!plan.query.matches("alphabet"));
     }
 
     #[test]
@@ -262,8 +196,15 @@ mod tests {
         let query_inputs = vec!["FLOWER .jar$".to_owned()];
         let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
 
-        assert!(plan.matches_preprocessed("Flower.JAR", Some("flower.jar")));
-        assert!(!plan.matches_preprocessed("Flower.ZIP", Some("flower.zip")));
+        assert!(
+            plan.query
+                .matches_preprocessed("Flower.JAR", Some("flower.jar"))
+        );
+        assert!(
+            !plan
+                .query
+                .matches_preprocessed("Flower.ZIP", Some("flower.zip"))
+        );
     }
 
     #[test]

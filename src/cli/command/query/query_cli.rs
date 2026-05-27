@@ -9,7 +9,6 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use std::io::IsTerminal;
-use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
 use tracing::instrument;
@@ -21,7 +20,7 @@ pub struct QueryArgs {
     pub plan: QueryPlan,
     /// Output density mode
     #[facet(args::named, default)]
-    pub density: QueryDensity,
+    pub density: QueryResultsOutputDensity,
     /// Bypass the machine daemon and read published indexes directly
     #[facet(args::named, default)]
     pub no_daemon: bool,
@@ -31,26 +30,11 @@ pub struct QueryArgs {
 #[repr(u8)]
 #[strum(serialize_all = "kebab-case")]
 #[facet(rename_all = "kebab-case")]
-pub enum QueryDensity {
+pub enum QueryResultsOutputDensity {
     #[default]
     Auto,
     Lines,
     Columns,
-}
-
-#[must_use]
-fn spawn_query_row_drain(
-    stream: QueryRowStream,
-    limit: usize,
-) -> std::thread::JoinHandle<eyre::Result<Vec<IndexedPathRow>>> {
-    std::thread::spawn(move || drain_query_stream(stream, limit))
-}
-
-fn drain_query_stream(stream: QueryRowStream, limit: usize) -> eyre::Result<Vec<IndexedPathRow>> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(stream.collect_filtered_limit(limit))
 }
 
 impl QueryArgs {
@@ -62,19 +46,11 @@ impl QueryArgs {
         }
     }
 
-    fn use_columns(density: QueryDensity, stdout_is_terminal: bool) -> bool {
+    fn use_columns(density: QueryResultsOutputDensity, stdout_is_terminal: bool) -> bool {
         match density {
-            QueryDensity::Auto => stdout_is_terminal,
-            QueryDensity::Lines => false,
-            QueryDensity::Columns => true,
-        }
-    }
-
-    fn data_source(&self) -> QueryDataSource {
-        if self.no_daemon {
-            QueryDataSource::DiskOnly
-        } else {
-            QueryDataSource::DaemonOnly
+            QueryResultsOutputDensity::Auto => stdout_is_terminal,
+            QueryResultsOutputDensity::Lines => false,
+            QueryResultsOutputDensity::Columns => true,
         }
     }
 
@@ -122,10 +98,11 @@ impl QueryArgs {
         let display_results = &results[..result_limit];
         let presentation = ResultListPresentation::for_terminal();
         let mut stdout = std::io::stdout().lock();
+        let use_columns = Self::use_columns(density, stdout_is_terminal);
         presentation.write_result_list(
             display_results,
             &mut stdout,
-            Self::use_columns(density, stdout_is_terminal),
+            use_columns,
             |row| row.path.as_str().chars().count(),
             |row, writer| row.render_path(writer, colorize),
         )?;
@@ -144,7 +121,7 @@ impl QueryArgs {
     )]
     pub fn collect_rows(self) -> eyre::Result<Vec<IndexedPathRow>> {
         debug!("Running query with args: {:?}", self);
-        let query_inputs = self.plan.query_inputs();
+        let query_inputs = self.plan.query.to_inputs();
         if query_inputs.is_empty() {
             eyre::bail!("query string required");
         }
@@ -162,23 +139,28 @@ impl QueryArgs {
                 );
             }
         }
-        let data_source = self.data_source();
-        let request = self.plan.query_request(
-            self.plan
-                .drive_letter_pattern
-                .clone()
-                .into_drive_letters()?,
-        );
+        let request = self.plan;
         let limit = request.limit;
 
-        match data_source {
+        match match self.no_daemon {
+            true => QueryDataSource::DiskOnly,
+            false => QueryDataSource::DaemonOnly,
+        } {
             QueryDataSource::DaemonOnly => {
                 let config = crate::machine::ipc::load_machine_daemon_client_config()?;
                 crate::machine::ipc::ensure_daemon_ready(&config)?;
-                let (rows_tx, rows_rx) = vox::channel::<teamy_mft_daemon_rpc::IndexedPathRowDto>();
+                let (rows_tx, rows_rx) = vox::channel::<crate::daemon::IndexedPathRowDto>();
                 let (logs_tx, logs_rx) =
                     vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                let row_drain = spawn_query_row_drain(QueryRowStream::Vox(rows_rx), limit);
+                let row_drain = {
+                    let stream = QueryRowStream::Vox(rows_rx);
+                    std::thread::spawn(move || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()?;
+                        runtime.block_on(stream.collect_filtered_limit(limit))
+                    })
+                };
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 let response =
                     crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx)?;
@@ -203,7 +185,13 @@ impl QueryArgs {
                     request,
                     QueryIgnoreBehavior::AutoDiscover,
                 )?;
-                drain_query_stream(executor.stream()?, limit)
+                {
+                    let stream = executor.stream()?;
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    runtime.block_on(stream.collect_filtered_limit(limit))
+                }
             }
         }
     }
@@ -284,9 +272,9 @@ mod tests {
         let plan = ParsedQueryPlan::parse_inputs(&[String::from("flow .jar$")])?;
 
         assert_eq!(
-            plan.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(
-                &parsed, rule
-            ))?,
+            plan.query.matching_row_indices(
+                &|rule| crate::query::matching_row_indices_for_rule(&parsed, rule)
+            )?,
             vec![0]
         );
 

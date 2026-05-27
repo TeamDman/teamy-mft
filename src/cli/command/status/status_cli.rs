@@ -2,7 +2,7 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use std::time::SystemTime;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 
 /// Show freshness information for cached `.mft` and `.mft_search_index` files.
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
@@ -49,7 +49,7 @@ impl StatusArgs {
             machine_status.service_state = crate::machine::service::WindowsServiceState::Running;
         }
         let include_direct_drive_details =
-            self.no_daemon && self.verbose && teamy_windows::elevation::is_elevated();
+            self.no_daemon && self.verbose && crate::windows_utils::elevation::is_elevated();
         print_machine_summary(&machine_status, self.verbose, include_direct_drive_details);
         print_daemon_summary(&daemon_status, self.verbose);
         let now = SystemTime::now();

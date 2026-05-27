@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 use tracing::info;
 use tracing::warn;
 use winstructs::ntfs::mft_reference::MftReference;

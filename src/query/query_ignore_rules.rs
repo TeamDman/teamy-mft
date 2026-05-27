@@ -175,6 +175,7 @@ fn discover_ignore_files_for_drive(
         })?;
     let ignore_query = QueryPlan::parse_inputs(&[IGNORE_FILE_EXTENSION.to_owned()])?;
     let ignore_rows = ignore_query
+        .query
         .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
         .wrap_err_with(|| {
             format!(
@@ -407,7 +408,7 @@ mod tests {
             .parse_trusted_for_query()?;
         let plan = QueryPlan::parse_inputs(&[IGNORE_FILE_EXTENSION.to_owned()])?;
 
-        let indices = plan.matching_row_indices(&|rule| {
+        let indices = plan.query.matching_row_indices(&|rule| {
             crate::query::matching_row_indices_for_rule(&parsed, rule)
         })?;
 

@@ -2,7 +2,7 @@ use crate::query::IndexedPathRow;
 
 pub enum QueryRowStream {
     Local(tokio::sync::mpsc::Receiver<eyre::Result<IndexedPathRow>>),
-    Vox(vox::Rx<teamy_mft_daemon_rpc::IndexedPathRowDto>),
+    Vox(vox::Rx<crate::daemon::IndexedPathRowDto>),
 }
 
 impl std::fmt::Debug for QueryRowStream {

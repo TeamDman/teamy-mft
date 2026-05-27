@@ -5,7 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 
 /// Cached status for a single drive's `.mft` and `.mft_search_index` files.
 #[derive(Clone, Debug, Eq, PartialEq)]

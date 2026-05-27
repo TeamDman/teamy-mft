@@ -6,7 +6,7 @@ use crate::machine::service::uninstall_windows_service;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use teamy_windows::elevation::ensure_elevated;
+use crate::windows_utils::elevation::ensure_elevated;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ServiceUninstallArgs {

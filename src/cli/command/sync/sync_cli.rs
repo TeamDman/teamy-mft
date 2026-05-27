@@ -11,7 +11,7 @@ use figue::{self as args};
 use futures::TryStreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 use tokio_stream::StreamExt;
 use tracing::info_span;
 

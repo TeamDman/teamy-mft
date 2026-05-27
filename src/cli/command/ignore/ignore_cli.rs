@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use teamy_windows::storage::DriveLetterPattern;
+use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct IgnoreArgs {

@@ -6,7 +6,7 @@ use crate::mft::mft_record_size::MftRecordSize;
 use bytes::Bytes;
 use eyre::bail;
 use std::ops::Deref;
-use teamy_windows::storage::HandleReadExt;
+use crate::windows_utils::storage::HandleReadExt;
 use tracing::instrument;
 use uom::si::information::byte;
 

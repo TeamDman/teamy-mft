@@ -62,6 +62,7 @@ fn load_and_query_search_index(
     let matched_row_indices = {
         let _span = info_span!("match_search_index_postings").entered();
         query_plan
+            .query
             .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
             .wrap_err_with(|| {
                 format!(

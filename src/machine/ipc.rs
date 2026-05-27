@@ -1,27 +1,28 @@
+pub use crate::daemon::CorrelationId;
+pub use crate::daemon::DaemonBuildInfo;
+pub use crate::daemon::DegradedDriveStatus;
+pub use crate::daemon::IfExistsDto;
+pub use crate::daemon::IndexedPathRowDto;
+pub use crate::daemon::LogStreamRequest;
+pub use crate::daemon::MachineDaemonRpc;
+pub use crate::daemon::MachineDaemonRpcClient;
+pub use crate::daemon::MachineDaemonRpcDispatcher;
+pub use crate::daemon::MachineError;
+pub use crate::daemon::MachineErrorKind;
+pub use crate::daemon::PingResponse;
+pub use crate::daemon::PublishedDriveStatus;
+pub use crate::daemon::QueryResponse as RpcQueryResponse;
+pub use crate::daemon::QueryStreamResponse;
+pub use crate::daemon::StatusRequest;
+pub use crate::daemon::StatusResponse;
+pub use crate::daemon::SyncModeDto;
+pub use crate::daemon::SyncRequest;
 use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::query::IndexedPathRow;
+use crate::query::QueryPlan;
 use std::cmp::Ordering;
 use std::time::Duration;
-pub use teamy_mft_daemon_rpc::CorrelationId;
-pub use teamy_mft_daemon_rpc::DaemonBuildInfo;
-pub use teamy_mft_daemon_rpc::DegradedDriveStatus;
-pub use teamy_mft_daemon_rpc::IfExistsDto;
-pub use teamy_mft_daemon_rpc::LogStreamRequest;
-pub use teamy_mft_daemon_rpc::MachineDaemonRpc;
-pub use teamy_mft_daemon_rpc::MachineDaemonRpcClient;
-pub use teamy_mft_daemon_rpc::MachineDaemonRpcDispatcher;
-pub use teamy_mft_daemon_rpc::MachineError;
-pub use teamy_mft_daemon_rpc::MachineErrorKind;
-pub use teamy_mft_daemon_rpc::PingResponse;
-pub use teamy_mft_daemon_rpc::PublishedDriveStatus;
-pub use teamy_mft_daemon_rpc::QueryRequest;
-pub use teamy_mft_daemon_rpc::QueryResponse as RpcQueryResponse;
-pub use teamy_mft_daemon_rpc::QueryStreamResponse;
-pub use teamy_mft_daemon_rpc::StatusRequest;
-pub use teamy_mft_daemon_rpc::StatusResponse;
-pub use teamy_mft_daemon_rpc::SyncModeDto;
-pub use teamy_mft_daemon_rpc::SyncRequest;
 
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -60,7 +61,7 @@ impl DaemonCompatibility {
 /// the daemon's structured machine error contract.
 pub fn query(
     config: &MachineConfig,
-    request: QueryRequest,
+    request: QueryPlan,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<Result<Vec<IndexedPathRow>, MachineError>> {
     with_client(config, move |client| async move {
@@ -77,8 +78,8 @@ pub fn query(
 /// the daemon's structured machine error contract.
 pub fn query_stream(
     config: &MachineConfig,
-    request: QueryRequest,
-    rows: vox::Tx<teamy_mft_daemon_rpc::IndexedPathRowDto>,
+    request: QueryPlan,
+    rows: vox::Tx<IndexedPathRowDto>,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<Result<QueryStreamResponse, MachineError>> {
     with_client(config, move |client| async move {
@@ -363,7 +364,7 @@ fn compare_build_unix_ms(left: &str, right: u64) -> Option<Ordering> {
     Some(left.cmp(&right))
 }
 
-fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<IndexedPathRow> {
+fn convert_query_response(response: RpcQueryResponse) -> Vec<IndexedPathRow> {
     response
         .rows
         .into_iter()
@@ -379,12 +380,12 @@ fn convert_query_response(response: teamy_mft_daemon_rpc::QueryResponse) -> Vec<
 pub fn convert_indexed_rows(
     rows: Vec<IndexedPathRow>,
     correlation_id: CorrelationId,
-) -> teamy_mft_daemon_rpc::QueryResponse {
-    teamy_mft_daemon_rpc::QueryResponse {
+) -> RpcQueryResponse {
+    RpcQueryResponse {
         correlation_id,
         rows: rows
             .into_iter()
-            .map(|row| teamy_mft_daemon_rpc::IndexedPathRowDto {
+            .map(|row| IndexedPathRowDto {
                 path: row.path.into_string(),
                 has_deleted_entries: row.has_deleted_entries,
                 is_ignored: row.is_ignored,

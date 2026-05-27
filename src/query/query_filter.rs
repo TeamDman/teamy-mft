@@ -1,5 +1,6 @@
 use crate::query::IndexedPathRow;
 use crate::query::QueryIgnoreRules;
+use crate::query::QueryPlan;
 use crate::query::QueryScope;
 use crate::query::resolve_query_scope;
 use std::path::Path;
@@ -22,12 +23,9 @@ impl QueryFilter {
     /// # Errors
     ///
     /// Returns an error if the query scope cannot be canonicalized.
-    pub fn new(
-        request: &teamy_mft_daemon_rpc::QueryRequest,
-        ignore_rules: Option<QueryIgnoreRules>,
-    ) -> eyre::Result<Self> {
+    pub fn new(request: &QueryPlan, ignore_rules: Option<QueryIgnoreRules>) -> eyre::Result<Self> {
         Ok(Self {
-            scope: resolve_query_scope(request.query_scope.as_deref())?,
+            scope: resolve_query_scope(request.r#in.as_deref())?,
             ignore_rules,
             include_deleted: request.include_deleted,
             only_deleted: request.only_deleted,
@@ -83,19 +81,11 @@ impl QueryFilter {
 mod tests {
     use super::QueryFilter;
     use crate::query::IndexedPathRow;
+    use crate::query::QueryPlan;
     use crate::query::QueryResultPath;
 
-    fn request() -> teamy_mft_daemon_rpc::QueryRequest {
-        teamy_mft_daemon_rpc::QueryRequest {
-            query: vec![String::from("music")],
-            query_scope: None,
-            drive_letters: vec!['C'],
-            limit: 0,
-            include_deleted: false,
-            only_deleted: false,
-            show_ignored: false,
-            only_ignored: false,
-        }
+    fn request() -> QueryPlan {
+        QueryPlan::new("music")
     }
 
     fn row(has_deleted_entries: bool) -> IndexedPathRow {
@@ -117,7 +107,7 @@ mod tests {
     #[test]
     fn only_deleted_filters_to_deleted_rows() {
         let filter = QueryFilter::new(
-            &teamy_mft_daemon_rpc::QueryRequest {
+            &QueryPlan {
                 only_deleted: true,
                 ..request()
             },
@@ -140,7 +130,7 @@ mod tests {
     #[test]
     fn show_ignored_includes_both_visible_and_ignored_rows() {
         let filter = QueryFilter::new(
-            &teamy_mft_daemon_rpc::QueryRequest {
+            &QueryPlan {
                 show_ignored: true,
                 ..request()
             },
@@ -155,7 +145,7 @@ mod tests {
     #[test]
     fn only_ignored_filters_to_ignored_rows() {
         let filter = QueryFilter::new(
-            &teamy_mft_daemon_rpc::QueryRequest {
+            &QueryPlan {
                 only_ignored: true,
                 ..request()
             },
