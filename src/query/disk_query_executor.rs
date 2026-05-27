@@ -2,7 +2,6 @@ use crate::query::QueryFilter;
 use crate::query::QueryIgnoreBehavior;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
-use crate::query::QueryRequestSpec;
 use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
 use crate::query::load_and_query_drive_search_index;
@@ -16,7 +15,7 @@ use tracing::info_span;
 pub struct DiskQueryExecutor {
     sync_dir: PathBuf,
     mft_files: Vec<(char, PathBuf)>,
-    spec: QueryRequestSpec,
+    request: teamy_mft_daemon_rpc::QueryRequest,
     ignore: QueryIgnoreBehavior,
 }
 
@@ -25,7 +24,7 @@ impl DiskQueryExecutor {
     pub fn new(
         sync_dir: &Path,
         drive_letters: Vec<char>,
-        spec: QueryRequestSpec,
+        request: teamy_mft_daemon_rpc::QueryRequest,
         ignore: QueryIgnoreBehavior,
     ) -> Self {
         let mft_files = {
@@ -39,7 +38,7 @@ impl DiskQueryExecutor {
         Self {
             sync_dir: sync_dir.to_path_buf(),
             mft_files,
-            spec,
+            request,
             ignore,
         }
     }
@@ -49,7 +48,7 @@ impl DiskQueryExecutor {
     /// Returns an error if query parsing, scope resolution, or ignore discovery fails.
     pub fn stream(self) -> eyre::Result<QueryRowStream> {
         let _span = info_span!("query_execute").entered();
-        let query_plan = Arc::new(QueryPlan::parse_inputs(&self.spec.query)?);
+        let query_plan = Arc::new(QueryPlan::parse_inputs(&self.request.query)?);
         let drive_letters = self
             .mft_files
             .iter()
@@ -65,13 +64,13 @@ impl DiskQueryExecutor {
                 QueryIgnoreBehavior::Custom(rules) => Some(rules),
             }
         };
-        let filter = Arc::new(QueryFilter::new(&self.spec, ignore_rules)?);
+        let filter = Arc::new(QueryFilter::new(&self.request, ignore_rules)?);
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         let sink = QueryRowSink::new(tx);
         let drive_count = self.mft_files.len();
         let sync_dir = Arc::new(self.sync_dir);
-        let include_deleted = self.spec.include_deleted;
-        let only_deleted = self.spec.only_deleted;
+        let include_deleted = self.request.include_deleted;
+        let only_deleted = self.request.only_deleted;
 
         std::thread::spawn(move || {
             let _span = info_span!("query_disk_producers").entered();

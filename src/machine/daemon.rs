@@ -33,7 +33,6 @@ use crate::query::IndexedPathRow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
-use crate::query::QueryRequestSpec;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
@@ -228,8 +227,7 @@ impl DaemonRuntimeState {
                 None
             }
         };
-        let spec = QueryRequestSpec::from(request);
-        let filter = QueryFilter::new(&spec, ignore_rules)?;
+        let filter = QueryFilter::new(request, ignore_rules)?;
         let mut rows = query_published_index_path(&paths.base_index_path, &query_plan)?;
 
         if paths.overlay_index_path.is_file() {

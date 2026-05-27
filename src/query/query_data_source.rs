@@ -5,9 +5,8 @@ use facet::Facet;
 #[repr(u8)]
 #[strum(serialize_all = "kebab-case")]
 #[facet(rename_all = "kebab-case")]
-pub enum QuerySource {
+pub enum QueryDataSource {
     #[default]
-    Auto,
     DaemonOnly,
     DiskOnly,
 }

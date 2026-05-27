@@ -16,7 +16,6 @@ use crate::query::IndexedPathRow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
-use crate::query::QueryRequestSpec;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
@@ -212,8 +211,7 @@ impl LiveDriveState {
         let ignore_rules =
             QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.cache_root)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
-        let spec = QueryRequestSpec::from(request);
-        let filter = QueryFilter::new(&spec, Some(ignore_rules))
+        let filter = QueryFilter::new(request, Some(ignore_rules))
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
         let current_index_bytes = self
             .current_index_bytes_cache

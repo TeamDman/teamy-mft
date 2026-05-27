@@ -1,6 +1,5 @@
 use crate::query::IndexedPathRow;
 use crate::query::QueryIgnoreRules;
-use crate::query::QueryRequestSpec;
 use crate::query::QueryScope;
 use crate::query::resolve_query_scope;
 use std::path::Path;
@@ -24,16 +23,16 @@ impl QueryFilter {
     ///
     /// Returns an error if the query scope cannot be canonicalized.
     pub fn new(
-        spec: &QueryRequestSpec,
+        request: &teamy_mft_daemon_rpc::QueryRequest,
         ignore_rules: Option<QueryIgnoreRules>,
     ) -> eyre::Result<Self> {
         Ok(Self {
-            scope: resolve_query_scope(spec.query_scope.as_deref())?,
+            scope: resolve_query_scope(request.query_scope.as_deref())?,
             ignore_rules,
-            include_deleted: spec.include_deleted,
-            only_deleted: spec.only_deleted,
-            show_ignored: spec.show_ignored,
-            only_ignored: spec.only_ignored,
+            include_deleted: request.include_deleted,
+            only_deleted: request.only_deleted,
+            show_ignored: request.show_ignored,
+            only_ignored: request.only_ignored,
         })
     }
 
@@ -84,12 +83,10 @@ impl QueryFilter {
 mod tests {
     use super::QueryFilter;
     use crate::query::IndexedPathRow;
-    use crate::query::QueryRequestSpec;
     use crate::query::QueryResultPath;
-    use crate::query::QuerySource;
 
-    fn spec() -> QueryRequestSpec {
-        QueryRequestSpec {
+    fn request() -> teamy_mft_daemon_rpc::QueryRequest {
+        teamy_mft_daemon_rpc::QueryRequest {
             query: vec![String::from("music")],
             query_scope: None,
             drive_letters: vec!['C'],
@@ -98,8 +95,6 @@ mod tests {
             only_deleted: false,
             show_ignored: false,
             only_ignored: false,
-            source: QuerySource::DiskOnly,
-            allow_fallback: false,
         }
     }
 
@@ -113,7 +108,7 @@ mod tests {
 
     #[test]
     fn hides_deleted_rows_by_default() {
-        let filter = QueryFilter::new(&spec(), None).expect("filter should build");
+        let filter = QueryFilter::new(&request(), None).expect("filter should build");
 
         assert!(filter.classify_and_match(row(false)).is_some());
         assert!(filter.classify_and_match(row(true)).is_none());
@@ -122,9 +117,9 @@ mod tests {
     #[test]
     fn only_deleted_filters_to_deleted_rows() {
         let filter = QueryFilter::new(
-            &QueryRequestSpec {
+            &teamy_mft_daemon_rpc::QueryRequest {
                 only_deleted: true,
-                ..spec()
+                ..request()
             },
             None,
         )
@@ -136,7 +131,7 @@ mod tests {
 
     #[test]
     fn ignored_rows_are_hidden_by_default() {
-        let filter = QueryFilter::new(&spec(), None).expect("filter should build");
+        let filter = QueryFilter::new(&request(), None).expect("filter should build");
 
         assert!(!filter.include_ignored_state(true));
         assert!(filter.include_ignored_state(false));
@@ -145,9 +140,9 @@ mod tests {
     #[test]
     fn show_ignored_includes_both_visible_and_ignored_rows() {
         let filter = QueryFilter::new(
-            &QueryRequestSpec {
+            &teamy_mft_daemon_rpc::QueryRequest {
                 show_ignored: true,
-                ..spec()
+                ..request()
             },
             None,
         )
@@ -160,9 +155,9 @@ mod tests {
     #[test]
     fn only_ignored_filters_to_ignored_rows() {
         let filter = QueryFilter::new(
-            &QueryRequestSpec {
+            &teamy_mft_daemon_rpc::QueryRequest {
                 only_ignored: true,
-                ..spec()
+                ..request()
             },
             None,
         )
