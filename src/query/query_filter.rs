@@ -1,6 +1,6 @@
-use crate::query::IndexedPathRow;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
+use crate::query::QueryResultRow;
 use crate::query::QueryScope;
 use crate::query::resolve_query_scope;
 use std::path::Path;
@@ -60,7 +60,7 @@ impl QueryFilter {
     }
 
     #[must_use]
-    pub fn classify_and_match(&self, mut row: IndexedPathRow) -> Option<IndexedPathRow> {
+    pub fn classify_and_match(&self, mut row: QueryResultRow) -> Option<QueryResultRow> {
         if !self.include_deleted_state(row.has_deleted_entries) {
             return None;
         }
@@ -80,17 +80,17 @@ impl QueryFilter {
 #[cfg(test)]
 mod tests {
     use super::QueryFilter;
-    use crate::query::IndexedPathRow;
+    use crate::query::Pathlike;
     use crate::query::QueryPlan;
-    use crate::query::QueryResultPath;
+    use crate::query::QueryResultRow;
 
     fn request() -> QueryPlan {
         QueryPlan::new("music")
     }
 
-    fn row(has_deleted_entries: bool) -> IndexedPathRow {
-        IndexedPathRow {
-            path: QueryResultPath::from(String::from(r"C:\music\track.flac")),
+    fn row(has_deleted_entries: bool) -> QueryResultRow {
+        QueryResultRow {
+            path: Pathlike::from(String::from(r"C:\music\track.flac")),
             has_deleted_entries,
             is_ignored: false,
         }

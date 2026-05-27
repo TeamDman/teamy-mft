@@ -8,10 +8,10 @@ use crate::machine::config::published_drive_paths;
 use crate::machine::security::current_user_sid_string;
 use crate::machine::service::WindowsServiceState;
 use crate::machine::service::query_service_state;
+use crate::windows_utils::storage::DriveLetterPattern;
 use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
-use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Debug, Clone)]
 pub struct MachineDriveStatus {
@@ -79,7 +79,7 @@ pub fn load_machine_status(
             .into_drive_letters()?
             .into_iter()
             .map(|drive_letter| {
-                let paths = published_drive_paths(&config.cache_root, drive_letter);
+                let paths = published_drive_paths(&config.sync_dir, drive_letter);
                 let (mft_modified_at, mft_warning) =
                     modified_at(&paths.mft_path, "mft snapshot metadata")?;
                 let (base_index_modified_at, base_index_warning) =
@@ -184,14 +184,14 @@ fn load_checkpoint_status(path: &std::path::Path) -> (Option<PublishedCheckpoint
 ///
 /// Returns an error if selected drive letters cannot be resolved or if non-permission filesystem errors occur.
 pub fn collect_published_drive_summaries(
-    cache_root: &std::path::Path,
+    sync_dir: &std::path::Path,
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<Vec<PublishedDriveSummary>> {
     drive_letter_pattern
         .into_drive_letters()?
         .into_iter()
         .map(|drive_letter| {
-            let paths = published_drive_paths(cache_root, drive_letter);
+            let paths = published_drive_paths(sync_dir, drive_letter);
             let (mft_modified_at, mft_warning) =
                 modified_at(&paths.mft_path, "mft snapshot metadata")?;
             let (base_index_modified_at, base_index_warning) =

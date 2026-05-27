@@ -1,7 +1,9 @@
-use crate::query::IndexedPathRow;
+use std::num::NonZeroUsize;
+
+use crate::query::QueryResultRow;
 
 pub enum QueryRowStream {
-    Local(tokio::sync::mpsc::Receiver<eyre::Result<IndexedPathRow>>),
+    Local(tokio::sync::mpsc::Receiver<eyre::Result<QueryResultRow>>),
     Vox(vox::Rx<crate::daemon::IndexedPathRowDto>),
 }
 
@@ -18,11 +20,11 @@ impl QueryRowStream {
     /// # Errors
     ///
     /// Returns an error if the local producer failed or the daemon row channel failed.
-    pub async fn next(&mut self) -> eyre::Result<Option<IndexedPathRow>> {
+    pub async fn next(&mut self) -> eyre::Result<Option<QueryResultRow>> {
         match self {
             Self::Local(rx) => rx.recv().await.transpose(),
             Self::Vox(rx) => match rx.recv().await {
-                Ok(Some(row)) => Ok(Some(IndexedPathRow {
+                Ok(Some(row)) => Ok(Some(QueryResultRow {
                     path: row.get().path.clone().into(),
                     has_deleted_entries: row.get().has_deleted_entries,
                     is_ignored: row.get().is_ignored,
@@ -38,14 +40,20 @@ impl QueryRowStream {
     /// Returns an error if receiving from the underlying stream fails.
     pub async fn collect_filtered_limit(
         mut self,
-        limit: usize,
-    ) -> eyre::Result<Vec<IndexedPathRow>> {
+        limit: Option<NonZeroUsize>,
+    ) -> eyre::Result<Vec<QueryResultRow>> {
         let _span = tracing::info_span!("query_collect_results").entered();
         let mut rows = Vec::new();
-        while let Some(row) = self.next().await? {
-            rows.push(row);
-            if limit > 0 && rows.len() >= limit {
-                break;
+        if let Some(limit) = limit {
+            while let Some(row) = self.next().await? {
+                rows.push(row);
+                if rows.len() >= limit.get() {
+                    break;
+                }
+            }
+        } else {
+            while let Some(row) = self.next().await? {
+                rows.push(row);
             }
         }
         Ok(rows)

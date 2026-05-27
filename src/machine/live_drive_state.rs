@@ -11,10 +11,10 @@ use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
-use crate::query::IndexedPathRow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
+use crate::query::QueryResultRow;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
@@ -63,7 +63,7 @@ struct ProjectedPath {
 #[derive(Debug)]
 pub struct LiveDriveState {
     pub drive_letter: char,
-    cache_root: PathBuf,
+    sync_dir: PathBuf,
     pub paths: PublishedDrivePaths,
     volume_serial_number: Option<u32>,
     snapshot_usn: u64,
@@ -87,7 +87,7 @@ impl LiveDriveState {
     /// Returns an error if the published snapshot/checkpoint cannot be loaded or the
     /// USN journal continuity check fails.
     #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
-    pub fn load(cache_root: &Path, paths: PublishedDrivePaths) -> eyre::Result<Self> {
+    pub fn load(sync_dir: &Path, paths: PublishedDrivePaths) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?.ok_or_else(|| {
             eyre::eyre!(
                 "Missing checkpoint for drive {} at {}",
@@ -138,7 +138,7 @@ impl LiveDriveState {
 
         let mut state = Self {
             drive_letter: paths.drive_letter,
-            cache_root: cache_root.to_path_buf(),
+            sync_dir: sync_dir.to_path_buf(),
             paths,
             volume_serial_number: checkpoint.volume_serial_number,
             snapshot_usn,
@@ -201,13 +201,13 @@ impl LiveDriveState {
     ///
     /// Returns an error if the current in-memory index cannot be built or queried.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, query = ?request.query))]
-    pub fn query(&mut self, request: &QueryPlan) -> Result<Vec<IndexedPathRow>, MachineError> {
+    pub fn query(&mut self, request: &QueryPlan) -> Result<Vec<QueryResultRow>, MachineError> {
         self.ensure_query_cache()
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
         let query_plan = request.clone();
         let ignore_rules =
-            QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.cache_root)
+            QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.sync_dir)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
         let filter = QueryFilter::new(request, Some(ignore_rules))
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
@@ -234,7 +234,7 @@ impl LiveDriveState {
             }
 
             let path = row.path();
-            let row = IndexedPathRow {
+            let row = QueryResultRow {
                 path: path.into(),
                 has_deleted_entries: row.has_deleted_entries,
                 is_ignored: false,

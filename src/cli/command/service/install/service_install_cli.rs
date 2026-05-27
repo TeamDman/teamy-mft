@@ -8,10 +8,10 @@ use crate::machine::service::WindowsServiceState;
 use crate::machine::service::install_windows_service;
 use crate::machine::service::query_service_state;
 use crate::machine::service::uninstall_windows_service;
+use crate::windows_utils::elevation::ensure_elevated;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use crate::windows_utils::elevation::ensure_elevated;
 use tracing::info;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
@@ -38,11 +38,11 @@ impl ServiceInstallArgs {
                 let current_exe = std::env::current_exe()?;
                 reject_development_target_exe(&current_exe)?;
                 let owner_sid = current_user_sid_string()?;
-                let cache_root = requested_sync_dir
+                let sync_dir = requested_sync_dir
                     .clone()
-                    .map(resolve_cache_root)
+                    .map(resolve_sync_dir)
                     .transpose()?;
-                let config = MachineConfig::new(owner_sid.clone(), cache_root);
+                let config = MachineConfig::new(owner_sid.clone(), sync_dir);
                 uninstall_windows_service(&config.service_name)?;
             }
             _ => {
@@ -57,29 +57,26 @@ impl ServiceInstallArgs {
         let current_exe = std::env::current_exe()?;
         reject_development_target_exe(&current_exe)?;
         let owner_sid = current_user_sid_string()?;
-        let cache_root = requested_sync_dir.map(resolve_cache_root).transpose()?;
-        let config = MachineConfig::new(owner_sid.clone(), cache_root);
+        let sync_dir = requested_sync_dir.map(resolve_sync_dir).transpose()?;
+        let config = MachineConfig::new(owner_sid.clone(), sync_dir);
         let machine_root = machine_root_dir();
         std::fs::create_dir_all(&machine_root)?;
-        std::fs::create_dir_all(&config.cache_root)?;
+        std::fs::create_dir_all(&config.sync_dir)?;
         restrict_path_to_owner(&machine_root, &owner_sid)?;
-        restrict_path_to_owner(&config.cache_root, &owner_sid)?;
+        restrict_path_to_owner(&config.sync_dir, &owner_sid)?;
         save_machine_config(&config)?;
         install_windows_service(&current_exe, &config)?;
-        info!(
-            "Installed machine daemon at {}",
-            config.cache_root.display()
-        );
+        info!("Installed machine daemon at {}", config.sync_dir.display());
         println!(
             "Installed machine daemon cache at {}",
-            config.cache_root.display()
+            config.sync_dir.display()
         );
         println!("Run `teamy-mft sync` to publish initial machine-managed snapshots.");
         Ok(())
     }
 }
 
-fn resolve_cache_root(path: String) -> eyre::Result<std::path::PathBuf> {
+fn resolve_sync_dir(path: String) -> eyre::Result<std::path::PathBuf> {
     let path = std::path::PathBuf::from(path);
     if path.is_absolute() {
         return Ok(path);

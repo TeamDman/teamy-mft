@@ -1,16 +1,25 @@
-use crate::query::QueryResultPath;
+use crate::query::Pathlike;
 use color_eyre::owo_colors::OwoColorize;
 use std::io;
 use std::io::Write;
+use std::ops::Deref;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq, facet::Facet)]
-pub struct IndexedPathRow {
-    pub path: QueryResultPath,
+pub struct QueryResultRow {
+    pub path: Pathlike,
     pub has_deleted_entries: bool,
     pub is_ignored: bool,
 }
+impl Deref for QueryResultRow {
+    type Target = Path;
 
-impl IndexedPathRow {
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+impl QueryResultRow {
     pub fn render_path<W>(&self, writer: &mut W, colorize: bool) -> io::Result<()>
     where
         W: Write,

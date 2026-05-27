@@ -1,4 +1,5 @@
 use crate::mft::mft_file::MftFile;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use eyre::Context;
 use facet::Facet;
@@ -11,7 +12,6 @@ use rustc_hash::FxHashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
-use crate::windows_utils::storage::DriveLetterPattern;
 use tracing::info;
 use tracing::warn;
 use winstructs::ntfs::mft_reference::MftReference;
@@ -48,7 +48,7 @@ impl ListPathsArgs {
         reason = "function processes MFT data in a single pass for performance"
     )]
     pub fn invoke(self) -> eyre::Result<()> {
-        let sync_dir = crate::machine::config::load_required_cache_root()?;
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         // Resolve drive letters from pattern
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         // Build list of existing cached MFT files for matching drives

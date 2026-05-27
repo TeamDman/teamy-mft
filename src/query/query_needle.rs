@@ -22,6 +22,14 @@ impl QueryNeedle {
     }
 
     #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::AsciiLower(needle) => needle.is_empty(),
+            Self::UnicodeLower(needle) => needle.is_empty(),
+        }
+    }
+
+    #[must_use]
     pub fn normalized_str(&self) -> &str {
         match self {
             // SAFETY: `AsciiLower` is constructed only from ASCII bytes,

@@ -1,9 +1,5 @@
 use crate::tray::current_tray_icon;
 use crate::tray::set_tray_icon;
-use eyre::Result;
-use eyre::eyre;
-use std::io::Write;
-use std::sync::OnceLock;
 use crate::windows_utils::console::console_attach;
 use crate::windows_utils::console::console_create;
 use crate::windows_utils::console::console_detach;
@@ -12,6 +8,10 @@ use crate::windows_utils::tray::WM_TASKBAR_CREATED;
 use crate::windows_utils::tray::WM_USER_TRAY_CALLBACK;
 use crate::windows_utils::tray::delete_tray_icon;
 use crate::windows_utils::tray::re_add_tray_icon;
+use eyre::Result;
+use eyre::eyre;
+use std::io::Write;
+use std::sync::OnceLock;
 use tracing::error;
 use tracing::info;
 use windows::Win32::Foundation::HWND;
@@ -205,12 +205,8 @@ impl TrayWindowState {
                 logs_tx,
                 cancel_rx,
             );
-            match stream_result {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    tracing::error!(error = %error, "Daemon log stream ended with daemon error");
-                }
-                Err(error) => tracing::error!(error = %error, "Daemon log stream failed"),
+            if let Err(error) = stream_result {
+                tracing::error!(error = %error, "Daemon log stream failed");
             }
 
             let _ = drain_thread.join();

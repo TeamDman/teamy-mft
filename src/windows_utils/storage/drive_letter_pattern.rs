@@ -1,5 +1,5 @@
-use eyre::ensure;
 use arbitrary::Arbitrary;
+use eyre::ensure;
 use facet::Facet;
 use std::fmt;
 use std::str::FromStr;

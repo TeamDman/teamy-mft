@@ -29,10 +29,10 @@ use crate::machine::ipc::SyncRequest;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournal;
-use crate::query::IndexedPathRow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
+use crate::query::QueryResultRow;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
@@ -104,7 +104,7 @@ type SupportedDriveSyncOutcome = (
 #[derive(Debug)]
 struct DaemonRuntimeState {
     owner_sid: String,
-    cache_root: std::path::PathBuf,
+    sync_dir: std::path::PathBuf,
     drives: FxHashMap<char, LiveDriveState>,
     degraded: FxHashMap<char, String>,
 }
@@ -117,7 +117,7 @@ struct MachineDaemonService {
 
 #[derive(Debug)]
 struct DaemonDriveQueryRows {
-    rows: Vec<crate::query::IndexedPathRow>,
+    rows: Vec<crate::query::QueryResultRow>,
     degraded: Option<(char, String)>,
 }
 
@@ -125,7 +125,7 @@ impl DaemonRuntimeState {
     fn new(config: &MachineConfig) -> Self {
         Self {
             owner_sid: config.owner_sid.clone(),
-            cache_root: config.cache_root.clone().into_inner(),
+            sync_dir: config.sync_dir.clone().into_inner(),
             drives: FxHashMap::default(),
             degraded: FxHashMap::default(),
         }
@@ -134,7 +134,7 @@ impl DaemonRuntimeState {
     fn query(
         &mut self,
         request: &QueryPlan,
-    ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
+    ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
         let mut degraded_drives = Vec::new();
@@ -214,12 +214,12 @@ impl DaemonRuntimeState {
         &self,
         drive: char,
         request: &QueryPlan,
-    ) -> eyre::Result<Vec<IndexedPathRow>> {
-        let paths = published_drive_paths(&self.cache_root, drive);
+    ) -> eyre::Result<Vec<QueryResultRow>> {
+        let paths = published_drive_paths(&self.sync_dir, drive);
         let query_plan = request.clone();
         let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
             &[drive],
-            &self.cache_root,
+            &self.sync_dir,
         ) {
             Ok(rules) => Some(rules),
             Err(error) => {
@@ -249,7 +249,7 @@ impl DaemonRuntimeState {
 
     fn status_response(&self, buffered_log_count: usize, drive_letters: &[char]) -> StatusResponse {
         let published_drives =
-            collect_published_drive_summaries_for_letters(&self.cache_root, drive_letters)
+            collect_published_drive_summaries_for_letters(&self.sync_dir, drive_letters)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|drive| crate::machine::ipc::PublishedDriveStatus {
@@ -284,7 +284,7 @@ impl DaemonRuntimeState {
                 })
                 .collect();
         StatusResponse {
-            cache_root: self.cache_root.display().to_string(),
+            sync_dir: self.sync_dir.display().to_string(),
             owner_sid: self.owner_sid.clone(),
             loaded_drive_letters: self.drives.keys().copied().collect(),
             degraded_drives: self
@@ -308,16 +308,12 @@ impl DaemonRuntimeState {
             if_exists = ?request.if_exists,
             "daemon sync request starting"
         );
-        crate::machine::security::restrict_path_to_owner(&self.cache_root, &self.owner_sid)
+        crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
-        repair_published_drive_permissions(
-            &self.cache_root,
-            &self.owner_sid,
-            &request.drive_letters,
-        )
-        .map_err(|error| MachineError::degraded(error.to_string()))?;
+        repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &request.drive_letters)
+            .map_err(|error| MachineError::degraded(error.to_string()))?;
         let sync_result = sync_machine_cache_async(
-            &self.cache_root,
+            &self.sync_dir,
             &request.drive_letters,
             request.mode,
             request.if_exists,
@@ -402,7 +398,7 @@ impl DaemonRuntimeState {
     }
 
     fn load_drive_state(&self, drive: char) -> eyre::Result<LiveDriveState> {
-        let paths = published_drive_paths(&self.cache_root, drive);
+        let paths = published_drive_paths(&self.sync_dir, drive);
         if !paths.mft_path.is_file() {
             eyre::bail!(
                 "Drive {} has no published MFT snapshot at {}",
@@ -417,7 +413,7 @@ impl DaemonRuntimeState {
                 paths.base_index_path.display()
             );
         }
-        LiveDriveState::load(&self.cache_root, paths)
+        LiveDriveState::load(&self.sync_dir, paths)
     }
 }
 
@@ -432,7 +428,7 @@ fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
 fn query_published_index_path(
     path: &Path,
     query_plan: &QueryPlan,
-) -> eyre::Result<Vec<crate::query::IndexedPathRow>> {
+) -> eyre::Result<Vec<crate::query::QueryResultRow>> {
     let bytes = std::fs::read(path)?;
     let parsed_index = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
     let matched_row_indices = query_plan
@@ -441,7 +437,7 @@ fn query_published_index_path(
     let mut rows = Vec::with_capacity(matched_row_indices.len());
     for row_index in matched_row_indices {
         let row = parsed_index.row_view(row_index as usize)?;
-        rows.push(crate::query::IndexedPathRow {
+        rows.push(crate::query::QueryResultRow {
             path: row.path().into(),
             has_deleted_entries: row.has_deleted_entries,
             is_ignored: false,
@@ -451,10 +447,10 @@ fn query_published_index_path(
 }
 
 fn merge_index_rows(
-    base_rows: Vec<crate::query::IndexedPathRow>,
-    overlay_rows: Vec<crate::query::IndexedPathRow>,
-) -> Vec<crate::query::IndexedPathRow> {
-    let mut merged = BTreeMap::<crate::query::QueryResultPath, crate::query::IndexedPathRow>::new();
+    base_rows: Vec<crate::query::QueryResultRow>,
+    overlay_rows: Vec<crate::query::QueryResultRow>,
+) -> Vec<crate::query::QueryResultRow> {
+    let mut merged = BTreeMap::<crate::query::Pathlike, crate::query::QueryResultRow>::new();
     for row in base_rows {
         merged.insert(row.path.clone(), row);
     }
@@ -474,7 +470,7 @@ impl MachineDaemonService {
         &self,
         request: QueryPlan,
         correlation_id: &CorrelationId,
-    ) -> Result<Vec<crate::query::IndexedPathRow>, MachineError> {
+    ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
         let state = Arc::clone(&self.state);
         let request_for_body = request.clone();
         let span = tracing::info_span!(
@@ -610,12 +606,12 @@ fn next_correlation_id(method: &str) -> CorrelationId {
 }
 
 fn repair_published_drive_permissions(
-    cache_root: &std::path::Path,
+    sync_dir: &std::path::Path,
     owner_sid: &str,
     drive_letters: &[char],
 ) -> eyre::Result<()> {
     for &drive in drive_letters {
-        let paths = published_drive_paths(cache_root, drive);
+        let paths = published_drive_paths(sync_dir, drive);
         for artifact_path in [
             &paths.mft_path,
             &paths.base_index_path,
@@ -931,7 +927,7 @@ fn create_named_pipe_server(
 }
 
 fn collect_published_drive_summaries_for_letters(
-    cache_root: &std::path::Path,
+    sync_dir: &std::path::Path,
     drive_letters: &[char],
 ) -> eyre::Result<Vec<crate::machine::status::PublishedDriveSummary>> {
     drive_letters
@@ -939,7 +935,7 @@ fn collect_published_drive_summaries_for_letters(
         .copied()
         .map(|drive_letter| {
             crate::machine::status::collect_published_drive_summaries(
-                cache_root,
+                sync_dir,
                 &crate::windows_utils::storage::DriveLetterPattern(drive_letter.to_string()),
             )
         })
@@ -1059,7 +1055,7 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        crate::machine::security::restrict_path_to_owner(&config.cache_root, &config.owner_sid)?;
+        crate::machine::security::restrict_path_to_owner(&config.sync_dir, &config.owner_sid)?;
         let service = MachineDaemonService::new(config.clone());
         let mut last_activity = std::time::Instant::now();
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
@@ -1128,7 +1124,7 @@ fn machine_error_from_panic(
 ///
 /// Returns an error if sync fails or if overlay/checkpoint sidecars cannot be written.
 pub fn sync_machine_cache(
-    cache_root: &std::path::Path,
+    sync_dir: &std::path::Path,
     drive_letters: &[char],
     mode: SyncModeDto,
     if_exists: IfExistsDto,
@@ -1137,7 +1133,7 @@ pub fn sync_machine_cache(
         .enable_all()
         .build()?;
     runtime.block_on(sync_machine_cache_async(
-        cache_root,
+        sync_dir,
         drive_letters,
         mode,
         if_exists,
@@ -1145,12 +1141,12 @@ pub fn sync_machine_cache(
 }
 
 async fn sync_machine_cache_async(
-    cache_root: &std::path::Path,
+    sync_dir: &std::path::Path,
     drive_letters: &[char],
     mode: SyncModeDto,
     if_exists: IfExistsDto,
 ) -> eyre::Result<MachineCacheSyncResult> {
-    std::fs::create_dir_all(cache_root)?;
+    std::fs::create_dir_all(sync_dir)?;
     let effective_mode = if matches!(mode, SyncModeDto::Mft) {
         info!(
             drives = ?drive_letters,
@@ -1163,7 +1159,7 @@ async fn sync_machine_cache_async(
     let (live_drives, snapshot_cursors, skipped_drives) =
         collect_supported_drives_for_machine_sync(drive_letters, effective_mode);
     let drive_infos =
-        resolve_drive_infos_in_dir_for_letters(cache_root, drive_letters.iter().copied())?;
+        resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
     let if_exists = match if_exists {
         IfExistsDto::Skip => IfExistsOutputBehaviour::Skip,
         IfExistsDto::Overwrite => IfExistsOutputBehaviour::Overwrite,
@@ -1177,7 +1173,7 @@ async fn sync_machine_cache_async(
     sync_command.invoke(drive_infos.clone(), &if_exists).await?;
 
     for info in drive_infos {
-        let paths = published_drive_paths(cache_root, info.drive_letter);
+        let paths = published_drive_paths(sync_dir, info.drive_letter);
         if !paths.overlay_index_path.is_file() {
             crate::search_index::search_index_bytes::SearchIndexBytesMut::from_rows(
                 crate::search_index::format::SearchIndexHeader::new(info.drive_letter, 0, 0),

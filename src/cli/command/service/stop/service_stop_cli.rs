@@ -31,7 +31,7 @@ impl ServiceStopArgs {
                     vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
                 let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
                 match shutdown_daemon(&config, logs_tx) {
-                    Ok(Ok(())) => {
+                    Ok(()) => {
                         drop(log_drain);
                         wait_for_stopped(service_name, std::time::Duration::from_secs(10))
                             .wrap_err_with(|| {
@@ -41,21 +41,12 @@ impl ServiceStopArgs {
                             })?;
                         true
                     }
-                    Ok(Err(error)) => {
-                        drop(log_drain);
-                        warn!(
-                            service_name,
-                            error = %error.message,
-                            "Daemon shutdown RPC failed; falling back to service stop"
-                        );
-                        stop_service_if_running(service_name)?
-                    }
                     Err(error) => {
                         drop(log_drain);
                         warn!(
                             service_name,
                             error = %error,
-                            "Daemon shutdown transport failed; falling back to service stop"
+                            "Daemon shutdown failed; falling back to service stop"
                         );
                         stop_service_if_running(service_name)?
                     }

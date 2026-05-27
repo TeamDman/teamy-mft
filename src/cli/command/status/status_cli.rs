@@ -1,8 +1,8 @@
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use std::time::SystemTime;
-use crate::windows_utils::storage::DriveLetterPattern;
 
 /// Show freshness information for cached `.mft` and `.mft_search_index` files.
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
@@ -117,17 +117,17 @@ fn load_daemon_status_summary(
             logs_tx,
         );
         drop(log_drain);
-        match response? {
+        match response {
             Ok(status) => Some(status),
             Err(error) if allow_fallback => {
                 return Ok(DaemonStatusSummary {
                     ping: Some(ping),
                     compatibility: Some(compatibility),
                     runtime_status: None,
-                    warning: Some(format!("daemon status failed: {}", error.message)),
+                    warning: Some(format!("daemon status failed: {error}")),
                 });
             }
-            Err(error) => eyre::bail!(error.message),
+            Err(error) => return Err(error),
         }
     } else {
         None
@@ -253,7 +253,7 @@ fn print_machine_summary(
     }
 
     if let Some(config) = &machine_status.config {
-        println!("machine-cache-root={}", config.cache_root.display());
+        println!("machine-cache-root={}", config.sync_dir.display());
         print_protection_summary(config);
         if verbose {
             println!("machine-service-name={}", config.service_name);
@@ -364,11 +364,11 @@ fn print_machine_summary(
 
 fn print_protection_summary(config: &crate::machine::config::MachineConfig) {
     match crate::machine::security::query_path_protection_status(
-        &config.cache_root,
+        &config.sync_dir,
         &config.owner_sid,
     ) {
         Ok(status) => {
-            crate::machine::security::warn_if_path_protection_disabled(&config.cache_root, &status);
+            crate::machine::security::warn_if_path_protection_disabled(&config.sync_dir, &status);
             crate::machine::security::print_path_protection_status(&status);
         }
         Err(error) => {
@@ -526,7 +526,7 @@ fn print_cache_summary_from_daemon(
         return;
     }
 
-    println!("machine-cache-root={}", daemon_status.cache_root);
+    println!("machine-sync-dir={}", daemon_status.sync_dir);
     println!("machine-owner-sid={}", daemon_status.owner_sid);
     println!(
         "machine-cache-oldest-query-ready-at={}",

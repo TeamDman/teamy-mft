@@ -3,10 +3,10 @@ use crate::mft::mft_record_flags::MftRecordFlags;
 use crate::mft::mft_record_location::MftRecordLocationOnDisk;
 use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::mft_record_size::MftRecordSize;
+use crate::windows_utils::storage::HandleReadExt;
 use bytes::Bytes;
 use eyre::bail;
 use std::ops::Deref;
-use crate::windows_utils::storage::HandleReadExt;
 use tracing::instrument;
 use uom::si::information::byte;
 

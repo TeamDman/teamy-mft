@@ -18,7 +18,7 @@ pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 pub struct MachineConfig {
     pub version: u32,
     pub owner_sid: String,
-    pub cache_root: FacetPathBuf,
+    pub sync_dir: FacetPathBuf,
     pub pipe_name: String,
     pub service_name: String,
     pub idle_timeout_secs: u64,
@@ -26,11 +26,11 @@ pub struct MachineConfig {
 
 impl MachineConfig {
     #[must_use]
-    pub fn new(owner_sid: String, cache_root: Option<PathBuf>) -> Self {
+    pub fn new(owner_sid: String, sync_dir: Option<PathBuf>) -> Self {
         Self {
             version: 1,
             owner_sid,
-            cache_root: cache_root.unwrap_or_else(default_cache_root).into(),
+            sync_dir: sync_dir.unwrap_or_else(default_sync_dir).into(),
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
@@ -206,18 +206,18 @@ pub fn machine_config_path() -> PathBuf {
 }
 
 #[must_use]
-pub fn default_cache_root() -> PathBuf {
+pub fn default_sync_dir() -> PathBuf {
     machine_root_dir().join("cache")
 }
 
 #[must_use]
-pub fn published_drive_paths(cache_root: &Path, drive_letter: char) -> PublishedDrivePaths {
+pub fn published_drive_paths(sync_dir: &Path, drive_letter: char) -> PublishedDrivePaths {
     PublishedDrivePaths {
         drive_letter,
-        mft_path: cache_root.join(format!("{drive_letter}.mft")),
-        base_index_path: cache_root.join(format!("{drive_letter}.mft_search_index")),
-        overlay_index_path: cache_root.join(format!("{drive_letter}.mft_overlay_search_index")),
-        checkpoint_path: cache_root.join(format!("{drive_letter}.mft_checkpoint.json")),
+        mft_path: sync_dir.join(format!("{drive_letter}.mft")),
+        base_index_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
+        overlay_index_path: sync_dir.join(format!("{drive_letter}.mft_overlay_search_index")),
+        checkpoint_path: sync_dir.join(format!("{drive_letter}.mft_checkpoint.json")),
     }
 }
 
@@ -306,7 +306,7 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
         Ok(None) => Ok(MachineConfig {
             version: 1,
             owner_sid: String::new(),
-            cache_root: default_cache_root().into(),
+            sync_dir: default_sync_dir().into(),
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
@@ -314,7 +314,7 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
         Err(error) if is_access_denied_error(&error) => Ok(MachineConfig {
             version: 1,
             owner_sid: String::new(),
-            cache_root: default_cache_root().into(),
+            sync_dir: default_sync_dir().into(),
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
@@ -327,10 +327,10 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
 ///
 /// Returns an error if the machine cache root is unavailable because install has not been run.
 #[instrument(level = "debug")]
-pub fn load_required_cache_root() -> eyre::Result<PathBuf> {
+pub fn load_sync_dir_from_config() -> eyre::Result<PathBuf> {
     let config = load_required_machine_config()?;
-    debug!(cache_root = %config.cache_root.display(), "Resolved machine cache root");
-    Ok(config.cache_root.into_inner())
+    debug!(sync_dir = %config.sync_dir.display(), "Resolved machine sync directory");
+    Ok(config.sync_dir.into_inner())
 }
 
 /// # Errors

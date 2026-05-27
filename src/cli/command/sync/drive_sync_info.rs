@@ -1,8 +1,8 @@
+use crate::windows_utils::storage::DriveLetterPattern;
 use eyre::bail;
 use std::fs::create_dir_all;
 use std::path::Path;
 use std::path::PathBuf;
-use crate::windows_utils::storage::DriveLetterPattern;
 use tracing::info;
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct DriveSyncInfo {
 pub fn resolve_drive_infos(
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<Vec<DriveSyncInfo>> {
-    let sync_dir = crate::machine::config::load_required_cache_root()?;
+    let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
     resolve_drive_infos_in_dir(sync_dir.as_path(), drive_letter_pattern)
 }
 

@@ -26,6 +26,15 @@ impl QueryRule {
     }
 
     #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::ContainsCaseInsensitive(needle) | Self::EndsWithCaseInsensitive(needle) => {
+                needle.is_empty()
+            }
+        }
+    }
+
+    #[must_use]
     pub fn matches(&self, haystack: &str) -> bool {
         self.matches_preprocessed(haystack, None)
     }

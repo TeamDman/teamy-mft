@@ -1,3 +1,4 @@
+use crate::windows_utils::storage::DriveLetterPattern;
 use chrono::DateTime;
 use chrono::Utc;
 use std::fs;
@@ -5,7 +6,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::SystemTime;
-use crate::windows_utils::storage::DriveLetterPattern;
 
 /// Cached status for a single drive's `.mft` and `.mft_search_index` files.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,7 +61,7 @@ impl TeamyMftStatus {
     /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or file metadata cannot be read.
     pub fn load(drive_letter_pattern: &DriveLetterPattern) -> eyre::Result<Self> {
-        let sync_dir = crate::machine::config::load_required_cache_root()?;
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let drive_letters = drive_letter_pattern.into_drive_letters()?;
         Self::from_sync_dir_and_drive_letters(&sync_dir, drive_letters)
     }

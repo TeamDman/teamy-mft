@@ -1,17 +1,17 @@
-use crate::query::IndexedPathRow;
+use crate::query::QueryResultRow;
 
 #[derive(Debug, Clone)]
 pub struct QueryRowSink {
-    tx: tokio::sync::mpsc::Sender<eyre::Result<IndexedPathRow>>,
+    tx: tokio::sync::mpsc::Sender<eyre::Result<QueryResultRow>>,
 }
 
 impl QueryRowSink {
     #[must_use]
-    pub fn new(tx: tokio::sync::mpsc::Sender<eyre::Result<IndexedPathRow>>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::Sender<eyre::Result<QueryResultRow>>) -> Self {
         Self { tx }
     }
 
-    pub async fn send(&self, row: IndexedPathRow) -> bool {
+    pub async fn send(&self, row: QueryResultRow) -> bool {
         self.tx.send(Ok(row)).await.is_ok()
     }
 
@@ -22,7 +22,7 @@ impl QueryRowSink {
     /// # Errors
     ///
     /// Returns the row when the receiving stream has been dropped.
-    pub fn blocking_send(&self, row: IndexedPathRow) -> Result<(), IndexedPathRow> {
+    pub fn blocking_send(&self, row: QueryResultRow) -> Result<(), QueryResultRow> {
         self.tx
             .blocking_send(Ok(row))
             .map_err(|error| match error.0 {

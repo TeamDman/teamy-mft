@@ -18,7 +18,8 @@ fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     // `.git$` means "path ends with .git" — matches dirs named exactly `.git`
-    for path in QueryArgs::new(".git$").invoke()? {
+    let rows = QueryArgs::new(".git$").collect_rows()?;
+    for path in rows {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = path.parent() {
             println!("{} ({})", repo_root.display(), path.display());

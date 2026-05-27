@@ -1,5 +1,6 @@
 use crate::query::QueryIgnoreRules;
 use crate::query::SYNCED_IGNORE_FILE_NAME;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -7,7 +8,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct IgnoreArgs {
@@ -54,7 +54,7 @@ impl IgnoreAddArgs {
             eyre::bail!("ignore pattern cannot be empty");
         }
 
-        let sync_dir = crate::machine::config::load_required_cache_root()?;
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         fs::create_dir_all(&sync_dir)?;
         let ignore_path = sync_dir.join(SYNCED_IGNORE_FILE_NAME);
         let existing = if ignore_path.is_file() {
@@ -92,7 +92,7 @@ impl IgnoreListArgs {
     /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or discovered ignore files cannot be parsed.
     pub fn invoke(self) -> eyre::Result<()> {
-        let sync_dir = crate::machine::config::load_required_cache_root()?;
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let mut seen_paths = BTreeSet::<PathBuf>::new();
 

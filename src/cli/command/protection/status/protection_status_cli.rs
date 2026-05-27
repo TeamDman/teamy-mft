@@ -11,13 +11,13 @@ impl ProtectionStatusArgs {
     pub fn invoke(self) -> eyre::Result<()> {
         let config = crate::machine::config::load_required_machine_config()?;
         let status = crate::machine::security::query_path_protection_status(
-            &config.cache_root,
+            &config.sync_dir,
             &config.owner_sid,
         )?;
 
-        crate::machine::security::warn_if_path_protection_disabled(&config.cache_root, &status);
+        crate::machine::security::warn_if_path_protection_disabled(&config.sync_dir, &status);
 
-        println!("machine-cache-root={}", config.cache_root.display());
+        println!("machine-cache-root={}", config.sync_dir.display());
         crate::machine::security::print_path_protection_status(&status);
         Ok(())
     }

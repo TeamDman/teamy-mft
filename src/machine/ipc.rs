@@ -19,8 +19,8 @@ pub use crate::daemon::SyncModeDto;
 pub use crate::daemon::SyncRequest;
 use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
-use crate::query::IndexedPathRow;
 use crate::query::QueryPlan;
+use crate::query::QueryResultRow;
 use std::cmp::Ordering;
 use std::time::Duration;
 
@@ -63,7 +63,7 @@ pub fn query(
     config: &MachineConfig,
     request: QueryPlan,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<Vec<IndexedPathRow>, MachineError>> {
+) -> eyre::Result<Vec<QueryResultRow>> {
     with_client(config, move |client| async move {
         client
             .query(request, logs)
@@ -81,7 +81,7 @@ pub fn query_stream(
     request: QueryPlan,
     rows: vox::Tx<IndexedPathRowDto>,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<QueryStreamResponse, MachineError>> {
+) -> eyre::Result<QueryStreamResponse> {
     with_client(config, move |client| async move {
         client.query_stream(request, rows, logs).await
     })
@@ -95,7 +95,7 @@ pub fn sync(
     config: &MachineConfig,
     request: SyncRequest,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<(), MachineError>> {
+) -> eyre::Result<()> {
     with_client(config, move |client| async move {
         client.sync(request, logs).await
     })
@@ -109,7 +109,7 @@ pub fn status(
     config: &MachineConfig,
     request: StatusRequest,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<StatusResponse, MachineError>> {
+) -> eyre::Result<StatusResponse> {
     with_client(config, move |client| async move {
         client.status(request, logs).await
     })
@@ -122,7 +122,7 @@ pub fn status(
 pub fn ping(
     config: &MachineConfig,
     logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<PingResponse, MachineError>> {
+) -> eyre::Result<PingResponse> {
     with_client(config, move |client| async move { client.ping(logs).await })
 }
 
@@ -130,10 +130,7 @@ pub fn ping(
 ///
 /// Returns an error if the daemon transport cannot be reached or the call fails outside
 /// the daemon's structured machine error contract.
-pub fn shutdown(
-    config: &MachineConfig,
-    logs: vox::Tx<DaemonLogWireEvent>,
-) -> eyre::Result<Result<(), MachineError>> {
+pub fn shutdown(config: &MachineConfig, logs: vox::Tx<DaemonLogWireEvent>) -> eyre::Result<()> {
     with_client(
         config,
         move |client| async move { client.shutdown(logs).await },
@@ -236,13 +233,13 @@ pub fn stream_logs(
     request: LogStreamRequest,
     logs: vox::Tx<DaemonLogWireEvent>,
     cancel: vox::Rx<u8>,
-) -> eyre::Result<Result<(), MachineError>> {
+) -> eyre::Result<()> {
     with_client(config, move |client| async move {
         client.stream_logs(request, logs, cancel).await
     })
 }
 
-fn with_client<F, Fut, T>(config: &MachineConfig, f: F) -> eyre::Result<Result<T, MachineError>>
+fn with_client<F, Fut, T>(config: &MachineConfig, f: F) -> eyre::Result<T>
 where
     F: FnOnce(MachineDaemonRpcClient) -> Fut,
     Fut: std::future::Future<Output = Result<T, vox::VoxError<MachineError>>>,
@@ -258,15 +255,15 @@ where
             .await
             .map_err(|error| eyre::eyre!("Failed connecting to daemon at {addr}: {error}"))?;
         match f(client).await {
-            Ok(value) => Ok(Ok(value)),
-            Err(vox::VoxError::User(error)) => Ok(Err(error)),
+            Ok(value) => Ok(value),
+            Err(vox::VoxError::User(error)) => Err(machine_error_report(error)),
             Err(error) => Err(eyre::eyre!("Daemon RPC call failed: {error}")),
         }
     })
 }
 
 fn ping_without_restart(config: &MachineConfig) -> eyre::Result<PingResponse> {
-    let ping_response = with_client(config, move |client| async move {
+    with_client(config, move |client| async move {
         let (logs_tx, logs_rx) = vox::channel::<DaemonLogWireEvent>();
         let ping_response = client.ping(logs_tx).await;
         crate::machine::daemon_log::drain_stderr_logs_until_idle(
@@ -275,25 +272,16 @@ fn ping_without_restart(config: &MachineConfig) -> eyre::Result<PingResponse> {
         )
         .await;
         ping_response
-    });
-    let ping_response = ping_response?;
-    ping_response.map_err(|error| eyre::eyre!(error.message))
+    })
 }
 
 fn restart_daemon(config: &MachineConfig) -> eyre::Result<()> {
     match shutdown_with_log_drain(config) {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            tracing::warn!(
-                error = %error.message,
-                "Daemon shutdown RPC failed during restart; falling back to service stop"
-            );
-            let _ = crate::machine::service::stop_service_if_running(&config.service_name)?;
-        }
+        Ok(()) => {}
         Err(error) => {
             tracing::warn!(
                 error = %error,
-                "Daemon shutdown transport failed during restart; falling back to service stop"
+                "Daemon shutdown failed during restart; falling back to service stop"
             );
             let _ = crate::machine::service::stop_service_if_running(&config.service_name)?;
         }
@@ -302,7 +290,7 @@ fn restart_daemon(config: &MachineConfig) -> eyre::Result<()> {
     crate::machine::service::start_service_if_needed(&config.service_name)
 }
 
-fn shutdown_with_log_drain(config: &MachineConfig) -> eyre::Result<Result<(), MachineError>> {
+fn shutdown_with_log_drain(config: &MachineConfig) -> eyre::Result<()> {
     with_client(config, move |client| async move {
         let (logs_tx, logs_rx) = vox::channel::<DaemonLogWireEvent>();
         let shutdown_response = client.shutdown(logs_tx).await;
@@ -313,6 +301,10 @@ fn shutdown_with_log_drain(config: &MachineConfig) -> eyre::Result<Result<(), Ma
         .await;
         shutdown_response
     })
+}
+
+fn machine_error_report(error: MachineError) -> eyre::Report {
+    eyre::eyre!("Daemon RPC failed ({:?}): {}", error.kind, error.message)
 }
 
 fn should_restart_for_local_build(ping: &PingResponse) -> bool {
@@ -364,11 +356,11 @@ fn compare_build_unix_ms(left: &str, right: u64) -> Option<Ordering> {
     Some(left.cmp(&right))
 }
 
-fn convert_query_response(response: RpcQueryResponse) -> Vec<IndexedPathRow> {
+fn convert_query_response(response: RpcQueryResponse) -> Vec<QueryResultRow> {
     response
         .rows
         .into_iter()
-        .map(|row| IndexedPathRow {
+        .map(|row| QueryResultRow {
             path: row.path.into(),
             has_deleted_entries: row.has_deleted_entries,
             is_ignored: row.is_ignored,
@@ -378,7 +370,7 @@ fn convert_query_response(response: RpcQueryResponse) -> Vec<IndexedPathRow> {
 
 #[must_use]
 pub fn convert_indexed_rows(
-    rows: Vec<IndexedPathRow>,
+    rows: Vec<QueryResultRow>,
     correlation_id: CorrelationId,
 ) -> RpcQueryResponse {
     RpcQueryResponse {

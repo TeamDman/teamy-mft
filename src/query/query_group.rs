@@ -7,7 +7,7 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[facet(opaque, proxy = String)]
 pub struct QueryGroup {
-    rules: Vec<QueryRule>,
+    pub rules: Vec<QueryRule>,
 }
 
 impl QueryGroup {
@@ -26,6 +26,11 @@ impl QueryGroup {
         }
 
         Some(Self { rules })
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
     }
 
     #[must_use]

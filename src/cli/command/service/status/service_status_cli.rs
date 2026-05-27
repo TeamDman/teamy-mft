@@ -38,7 +38,7 @@ impl ServiceStatusArgs {
         );
         println!("machine-daemon-reachable={}", daemon_ready.is_some());
         if let Some(config) = config {
-            println!("machine-cache-root={}", config.cache_root.display());
+            println!("machine-cache-root={}", config.sync_dir.display());
             println!("machine-pipe-name={}", config.pipe_name);
         }
         if let Some(ready_daemon) = daemon_ready {

@@ -153,3 +153,84 @@ fn intersect_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
 
     intersection
 }
+
+#[cfg(test)]
+mod tests {
+    use super::matching_row_indices_for_rule;
+    use crate::query::QueryRule;
+    use crate::search_index::format::SearchIndexHeader;
+    use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::ParsedSearchIndex;
+    use crate::search_index::search_index_bytes::SearchIndexBytes;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+
+    fn parse_index(rows: &[SearchIndexPathRow]) -> eyre::Result<ParsedSearchIndex<'static>> {
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            rows,
+        )?
+        .into_inner()?;
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        SearchIndexBytes::new(bytes).parse_trusted_for_query()
+    }
+
+    fn parse_fixture_index() -> eyre::Result<ParsedSearchIndex<'static>> {
+        parse_index(&[
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\flowchart.txt"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.zip"),
+                has_deleted_entries: false,
+            },
+        ])
+    }
+
+    #[test]
+    fn contains_rules_return_rows_from_trigram_candidates() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = QueryRule::parse("ower").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn short_contains_rules_still_match_without_trigrams() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = QueryRule::parse("fl").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn suffix_rules_match_only_terminal_segments_in_indexed_queries() -> eyre::Result<()> {
+        let parsed = parse_index(&[
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\project.git"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main"),
+                has_deleted_entries: false,
+            },
+        ])?;
+        let rule = QueryRule::parse(".git$").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+}

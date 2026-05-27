@@ -14,15 +14,15 @@ impl UninstallArgs {
     ///
     /// Returns an error if service removal fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        let cache_root = crate::machine::config::load_machine_config()?
-            .map(|config| config.cache_root.into_inner());
+        let sync_dir = crate::machine::config::load_machine_config()?
+            .map(|config| config.sync_dir.into_inner());
         crate::cli::command::service::ServiceUninstallArgs { purge: self.purge }.invoke()?;
         if !self.purge
-            && let Some(cache_root) = cache_root
+            && let Some(sync_dir) = sync_dir
         {
             println!(
                 "Cache contents were preserved. Delete them manually if desired: {}",
-                cache_root.display()
+                sync_dir.display()
             );
         }
         Ok(())

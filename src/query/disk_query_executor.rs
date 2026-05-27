@@ -6,7 +6,6 @@ use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
 use crate::query::load_and_query_drive_search_index;
 use eyre::bail;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -14,20 +13,17 @@ use tracing::info_span;
 
 #[derive(Debug)]
 pub struct DiskQueryExecutor {
-    sync_dir: PathBuf,
-    mft_files: Vec<(char, PathBuf)>,
-    request: QueryPlan,
-    ignore: QueryIgnoreBehavior,
+    pub sync_dir: PathBuf,
+    pub mft_files: Vec<(char, PathBuf)>,
+    pub request: QueryPlan,
+    pub ignore: QueryIgnoreBehavior,
 }
 
 impl DiskQueryExecutor {
     #[must_use]
-    pub fn new(
-        sync_dir: &Path,
-        request: QueryPlan,
-        ignore: QueryIgnoreBehavior,
-    ) -> eyre::Result<Self> {
-        let drive_letters = request.drive_letter_pattern.clone().into_drive_letters()?;
+    pub fn new(request: QueryPlan) -> eyre::Result<Self> {
+        let drive_letters = request.drive_letter_pattern.into_drive_letters()?;
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let mft_files = {
             let _span = info_span!("discover_mft_files").entered();
             drive_letters
@@ -46,11 +42,12 @@ impl DiskQueryExecutor {
                 )
                 .collect::<eyre::Result<Vec<_>>>()?
         };
+
         Ok(Self {
-            sync_dir: sync_dir.to_path_buf(),
+            sync_dir,
             mft_files,
             request,
-            ignore,
+            ignore: QueryIgnoreBehavior::AutoDiscover,
         })
     }
 

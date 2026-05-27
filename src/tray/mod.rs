@@ -1,15 +1,15 @@
 mod window_proc;
 
-use eyre::Context;
-use std::ffi::c_void;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 use crate::windows_utils::console::hide_default_console_or_attach_ctrl_handler;
 use crate::windows_utils::event_loop::run_message_loop;
 use crate::windows_utils::hicon::application_icon::get_application_icon;
 use crate::windows_utils::tray::TRAY_ICON_ID;
 use crate::windows_utils::tray::add_tray_icon;
 use crate::windows_utils::window::create_window_for_tray;
+use eyre::Context;
+use std::ffi::c_void;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use tracing::info;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Shell::NIF_ICON;

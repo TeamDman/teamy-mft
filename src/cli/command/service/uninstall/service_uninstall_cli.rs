@@ -3,10 +3,10 @@ use crate::machine::config::load_machine_config;
 use crate::machine::config::machine_config_path;
 use crate::machine::config::machine_root_dir;
 use crate::machine::service::uninstall_windows_service;
+use crate::windows_utils::elevation::ensure_elevated;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use crate::windows_utils::elevation::ensure_elevated;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ServiceUninstallArgs {

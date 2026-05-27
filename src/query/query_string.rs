@@ -7,7 +7,7 @@ use figue::{self as args};
 pub struct QueryString {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
     #[facet(args::positional, default)]
-    groups: Vec<QueryGroup>,
+    pub groups: Vec<QueryGroup>,
 }
 
 impl QueryString {
@@ -42,6 +42,11 @@ impl QueryString {
     #[must_use]
     pub fn groups(&self) -> &[QueryGroup] {
         &self.groups
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
     }
 
     #[must_use]
@@ -159,4 +164,48 @@ fn is_drive_designator(chars: &[char], colon_index: usize) -> bool {
 
 fn is_query_boundary(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '|' | '/' | '\\' | '\'')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueryString;
+    use crate::search_index::format::SearchIndexHeader;
+    use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::SearchIndexBytes;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+
+    #[test]
+    fn query_string_intersects_contains_and_suffix_candidates() -> eyre::Result<()> {
+        let rows = vec![
+            SearchIndexPathRow {
+                path: String::from("C:\\src\\flower.jar"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\flowchart.txt"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\pkg\\trees.zip"),
+                has_deleted_entries: false,
+            },
+        ];
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let parsed = SearchIndexBytes::new(bytes).parse_trusted_for_query()?;
+        let query = QueryString::parse_inputs(&[String::from("flow .jar$")])?;
+
+        assert_eq!(
+            query.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(
+                &parsed, rule
+            ))?,
+            vec![0]
+        );
+
+        Ok(())
+    }
 }

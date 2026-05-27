@@ -5,13 +5,13 @@ use crate::cli::command::sync::mft::SyncMftArgs;
 use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
 use crate::machine::ipc::IfExistsDto;
 use crate::machine::ipc::SyncModeDto;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use futures::TryStreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use crate::windows_utils::storage::DriveLetterPattern;
 use tokio_stream::StreamExt;
 use tracing::info_span;
 
@@ -44,8 +44,8 @@ impl SyncArgs {
     pub fn invoke(self) -> eyre::Result<()> {
         let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
         if self.no_daemon {
-            let cache_root = crate::machine::config::load_required_cache_root()?;
-            let drive_infos = resolve_drive_infos_in_dir_for_letters(&cache_root, drive_letters)?;
+            let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+            let drive_infos = resolve_drive_infos_in_dir_for_letters(&sync_dir, drive_letters)?;
             let command = self.command.unwrap_or_default();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -62,12 +62,9 @@ impl SyncArgs {
         crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
         let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-        let response = crate::machine::ipc::sync(&config, request, logs_tx)?;
+        crate::machine::ipc::sync(&config, request, logs_tx)?;
         let _ = log_drain.join();
-        match response {
-            Ok(()) => Ok(()),
-            Err(error) => eyre::bail!(error.message),
-        }
+        Ok(())
     }
 }
 

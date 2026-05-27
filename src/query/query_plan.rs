@@ -1,8 +1,10 @@
+use std::num::NonZeroUsize;
+
 use crate::query::QueryString;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use crate::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
@@ -22,7 +24,7 @@ pub struct QueryPlan {
     pub drive_letter_pattern: DriveLetterPattern,
     /// Maximum number of results to show
     #[facet(args::named, default)]
-    pub limit: usize,
+    pub limit: Option<NonZeroUsize>,
     /// Include paths that contain one or more deleted MFT entries
     #[facet(args::named, default)]
     pub include_deleted: bool,
