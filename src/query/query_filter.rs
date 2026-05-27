@@ -84,8 +84,8 @@ impl QueryFilter {
 mod tests {
     use super::QueryFilter;
     use crate::query::IndexedPathRow;
-    use crate::query::QueryResultPath;
     use crate::query::QueryRequestSpec;
+    use crate::query::QueryResultPath;
     use crate::query::QuerySource;
 
     fn spec() -> QueryRequestSpec {

@@ -1,7 +1,7 @@
 use crate::query::DriveQueryResult;
 use crate::query::IndexedPathRow;
-use crate::query::QueryResultPath;
 use crate::query::QueryPlan;
+use crate::query::QueryResultPath;
 use crate::query::matching_row_indices_for_rule;
 use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
