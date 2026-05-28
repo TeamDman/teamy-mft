@@ -1,4 +1,5 @@
 use crate::cli::command::service::install::ServiceInstallArgs;
+use crate::cli::command::service::is_running::ServiceIsRunningArgs;
 use crate::cli::command::service::logs::ServiceLogsArgs;
 use crate::cli::command::service::run::ServiceRunArgs;
 use crate::cli::command::service::start::ServiceStartArgs;
@@ -29,6 +30,8 @@ pub enum ServiceCommand {
     Stop(ServiceStopArgs),
     /// Show service registration and runtime status
     Status(ServiceStatusArgs),
+    /// Exit successfully when the daemon service is running
+    IsRunning(ServiceIsRunningArgs),
     /// Replay and follow daemon logs
     Logs(ServiceLogsArgs),
     /// Internal daemon runtime entrypoint
@@ -52,6 +55,7 @@ impl ServiceArgs {
             ServiceCommand::Start(args) => args.invoke(),
             ServiceCommand::Stop(args) => args.invoke(),
             ServiceCommand::Status(args) => args.invoke(),
+            ServiceCommand::IsRunning(args) => args.invoke(),
             ServiceCommand::Logs(args) => args.invoke(),
             ServiceCommand::Run(args) => args.invoke(),
         }
