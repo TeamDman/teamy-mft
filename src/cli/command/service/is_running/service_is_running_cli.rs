@@ -23,7 +23,9 @@ impl ServiceIsRunningArgs {
             )
             .is_ok_and(|state| matches!(state, WindowsServiceState::Running));
         info!(is_running, "daemon status");
-        if !is_running {
+        if is_running {
+            println!("Daemon is running.");
+        } else {
             std::process::exit(1);
         }
         Ok(())
