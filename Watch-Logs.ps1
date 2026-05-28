@@ -1,0 +1,1 @@
+while ($true) { teamy-mft daemon is-running; if ($?) { write-host "connecting"; teamy-mft daemon logs -f}; Start-Sleep -Seconds 1}
