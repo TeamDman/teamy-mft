@@ -117,6 +117,7 @@ struct TraceFieldVisitor {
     correlation_id: Option<CorrelationId>,
     rpc_method: Option<String>,
     message: Option<String>,
+    log_target: Option<String>,
     fields: Vec<DaemonLogField>,
 }
 
@@ -136,6 +137,13 @@ impl TraceFieldVisitor {
             }
             "rpc_method" => self.rpc_method = Some(value),
             "message" => self.message = Some(value),
+            "log.target" => {
+                self.log_target = Some(value.clone());
+                self.fields.push(DaemonLogField {
+                    key: field.name().to_string(),
+                    value,
+                });
+            }
             _ => self.fields.push(DaemonLogField {
                 key: field.name().to_string(),
                 value,
@@ -208,11 +216,6 @@ impl<S> Layer<S> for DaemonTraceLayer
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
-    fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
-        should_capture_daemon_log_target(metadata.target(), *metadata.level())
-            || ctx.enabled(metadata)
-    }
-
     fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
             let mut visitor = TraceFieldVisitor::default();
@@ -242,6 +245,9 @@ where
         }
         let mut visitor = TraceFieldVisitor::default();
         event.record(&mut visitor);
+        if !should_capture_daemon_log_event(metadata, &visitor) {
+            return;
+        }
 
         let mut correlation_id = visitor.correlation_id.clone();
         let mut rpc_method = visitor.rpc_method.clone();
@@ -344,11 +350,40 @@ fn daemon_log_span_from_metadata(metadata: &Metadata<'_>) -> DaemonLogSpan {
 }
 
 fn should_capture_daemon_log_target(target: &str, level: tracing::Level) -> bool {
+    if is_noisy_dependency_log_target(target) {
+        return false;
+    }
+
     if target.starts_with("teamy_mft") {
         return true;
     }
 
-    level >= tracing::Level::WARN
+    level <= tracing::Level::WARN
+}
+
+fn should_capture_daemon_log_event(metadata: &Metadata<'_>, visitor: &TraceFieldVisitor) -> bool {
+    if visitor
+        .log_target
+        .as_deref()
+        .is_some_and(is_noisy_dependency_log_target)
+    {
+        return false;
+    }
+
+    should_capture_daemon_log_target(metadata.target(), *metadata.level())
+}
+
+fn is_noisy_dependency_log_target(target: &str) -> bool {
+    [
+        "cranelift_codegen",
+        "cranelift_frontend",
+        "cranelift_jit",
+        "cranelift_native",
+        "regalloc2",
+        "wasmtime",
+    ]
+    .iter()
+    .any(|prefix| target == *prefix || target.starts_with(&format!("{prefix}::")))
 }
 
 fn map_level(level: tracing::Level) -> DaemonLogLevel {
@@ -392,6 +427,18 @@ fn spawn_log_forwarder(
     let mut live_rx = daemon_log_hub().subscribe();
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
     let join_handle = tokio::spawn(async move {
+        for event in daemon_log_hub().snapshot() {
+            if matches_correlation_id(&event, correlation_id.as_ref())
+                && logs_tx
+                    .send(DaemonLogWireEvent::from(&event))
+                    .await
+                    .is_err()
+            {
+                let _ = logs_tx.close(Vec::default()).await;
+                return;
+            }
+        }
+
         loop {
             tokio::select! {
                 _ = &mut stop_rx => {
@@ -485,6 +532,13 @@ fn daemon_log_spans(event: &DaemonLogEvent) -> String {
         .join(" > ")
 }
 
+pub const DAEMON_REMOTE_TARGET: &str = "teamy_mft::daemon_remote";
+pub const DAEMON_REMOTE_SPAN_TRANSITION_TARGET: &str = "teamy_mft::daemon_remote::span_transition";
+
+fn is_span_transition_event(event: &DaemonLogEvent) -> bool {
+    matches!(event.message.as_str(), "enter_span" | "exit_span")
+}
+
 fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
     let fields = event
         .fields
@@ -500,6 +554,77 @@ fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
         .line
         .map_or_else(|| String::from("unknown"), |line| line.to_string());
     let spans = daemon_log_spans(event);
+    if is_span_transition_event(event) {
+        match event.level {
+            DaemonLogLevel::Trace => tracing::trace!(
+                target: "teamy_mft::daemon_remote::span_transition",
+                side = "daemon",
+                daemon_target = %event.target,
+                daemon_file = %file,
+                daemon_line = %line,
+                daemon_spans = %spans,
+                rpc_method = %event.method,
+                correlation_id = %correlation_id,
+                daemon_fields = %fields,
+                "{}",
+                event.message
+            ),
+            DaemonLogLevel::Debug => tracing::debug!(
+                target: "teamy_mft::daemon_remote::span_transition",
+                side = "daemon",
+                daemon_target = %event.target,
+                daemon_file = %file,
+                daemon_line = %line,
+                daemon_spans = %spans,
+                rpc_method = %event.method,
+                correlation_id = %correlation_id,
+                daemon_fields = %fields,
+                "{}",
+                event.message
+            ),
+            DaemonLogLevel::Info => tracing::info!(
+                target: "teamy_mft::daemon_remote::span_transition",
+                side = "daemon",
+                daemon_target = %event.target,
+                daemon_file = %file,
+                daemon_line = %line,
+                daemon_spans = %spans,
+                rpc_method = %event.method,
+                correlation_id = %correlation_id,
+                daemon_fields = %fields,
+                "{}",
+                event.message
+            ),
+            DaemonLogLevel::Warn => tracing::warn!(
+                target: "teamy_mft::daemon_remote::span_transition",
+                side = "daemon",
+                daemon_target = %event.target,
+                daemon_file = %file,
+                daemon_line = %line,
+                daemon_spans = %spans,
+                rpc_method = %event.method,
+                correlation_id = %correlation_id,
+                daemon_fields = %fields,
+                "{}",
+                event.message
+            ),
+            DaemonLogLevel::Error => tracing::error!(
+                target: "teamy_mft::daemon_remote::span_transition",
+                side = "daemon",
+                daemon_target = %event.target,
+                daemon_file = %file,
+                daemon_line = %line,
+                daemon_spans = %spans,
+                rpc_method = %event.method,
+                correlation_id = %correlation_id,
+                daemon_fields = %fields,
+                "{}",
+                event.message
+            ),
+        }
+        return;
+    }
+
     match event.level {
         DaemonLogLevel::Trace => tracing::trace!(
             target: "teamy_mft::daemon_remote",
@@ -628,6 +753,8 @@ mod tests {
     use super::DaemonLogLevel;
     use super::DaemonTraceLayer;
     use super::daemon_log_hub;
+    use super::is_noisy_dependency_log_target;
+    use super::should_capture_daemon_log_target;
     use super::snapshot_for_correlation;
     use std::str::FromStr;
     use tracing_subscriber::prelude::*;
@@ -704,5 +831,26 @@ mod tests {
                 && event.correlation_id.as_ref() == Some(&correlation_id)),
             "expected daemon pong to be captured for correlation id; got {events:#?}"
         );
+    }
+
+    #[test]
+    fn noisy_dependency_log_targets_are_identified() {
+        assert!(is_noisy_dependency_log_target("cranelift_jit::backend"));
+        assert!(is_noisy_dependency_log_target("cranelift_codegen"));
+        assert!(!is_noisy_dependency_log_target(
+            "teamy_mft::machine::daemon"
+        ));
+    }
+
+    #[test]
+    fn daemon_capture_rejects_dependency_debug_targets() {
+        assert!(!should_capture_daemon_log_target(
+            "vox_core::driver",
+            tracing::Level::DEBUG
+        ));
+        assert!(should_capture_daemon_log_target(
+            "vox_core::driver",
+            tracing::Level::WARN
+        ));
     }
 }

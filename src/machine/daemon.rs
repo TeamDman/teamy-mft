@@ -11,6 +11,7 @@ use crate::machine::config::published_drive_paths;
 use crate::machine::config::save_checkpoint;
 use crate::machine::daemon_log::daemon_log_hub;
 use crate::machine::daemon_log::spawn_correlation_log_forwarder;
+use crate::machine::daemon_log::spawn_global_log_forwarder;
 use crate::machine::daemon_log::stop_log_forwarder;
 use crate::machine::ipc::CorrelationId;
 use crate::machine::ipc::DegradedDriveStatus;
@@ -635,7 +636,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<PingResponse, MachineError> {
         let correlation_id = next_correlation_id("ping");
-        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
+        let log_forwarder = spawn_global_log_forwarder(logs);
         let service_name = self.config.service_name.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -1060,12 +1061,32 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async move {
-        crate::machine::security::restrict_path_to_owner(&config.sync_dir, &config.owner_sid)?;
+        info!(
+            service_name = %config.service_name,
+            sync_dir = %config.sync_dir.display(),
+            pipe_name = %config.pipe_name,
+            "Daemon runtime starting"
+        );
+        debug!("Checking machine cache protection before binding daemon pipe");
+        let protection_status =
+            crate::machine::security::query_path_protection_status(&config.sync_dir, &config.owner_sid)?;
+        crate::machine::security::warn_if_path_protection_disabled(
+            &config.sync_dir,
+            &protection_status,
+        );
+        debug!("Machine cache protection check completed");
         let service = MachineDaemonService::new(config.clone());
         let mut last_activity = std::time::Instant::now();
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
+        debug!("Binding daemon named pipe");
         let acceptor =
             MachineDaemonPipeAcceptor::bind(config.pipe_name.clone(), config.owner_sid.clone())?;
+        info!(
+            service_name = %config.service_name,
+            pipe_name = %config.pipe_name,
+            idle_timeout_secs = config.idle_timeout_secs,
+            "Daemon named pipe bound and ready"
+        );
 
         loop {
             if STOP_REQUESTED.load(Ordering::Relaxed) {

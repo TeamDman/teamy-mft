@@ -10,6 +10,7 @@ use tracing::Event;
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Registry;
+use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::FormatEvent;
 use tracing_subscriber::fmt::FormatFields;
@@ -68,7 +69,11 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let source = if event.metadata().target() == "teamy_mft::daemon_remote" {
+        let source = if event
+            .metadata()
+            .target()
+            .starts_with(crate::machine::daemon_log::DAEMON_REMOTE_TARGET)
+        {
             if writer.has_ansi_escapes() {
                 "[daemon] ".bright_blue().to_string()
             } else {
@@ -99,6 +104,28 @@ fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
     EnvFilter::builder().parse(filter).map_err(Into::into)
 }
 
+fn stderr_event_filter(metadata: &tracing::Metadata<'_>) -> bool {
+    metadata.target() != crate::machine::daemon_log::DAEMON_REMOTE_SPAN_TRANSITION_TARGET
+}
+
+#[cfg(all(feature = "tracy", not(test)))]
+fn tracy_log_filter() -> eyre::Result<EnvFilter> {
+    EnvFilter::builder()
+        .parse(
+            [
+                "trace",
+                "cranelift_codegen=warn",
+                "cranelift_frontend=warn",
+                "cranelift_jit=warn",
+                "cranelift_native=warn",
+                "regalloc2=warn",
+                "wasmtime=warn",
+            ]
+            .join(","),
+        )
+        .map_err(Into::into)
+}
+
 // tool[impl logging.stderr-output]
 // tool[impl logging.file-path-option]
 // tool[impl logging.file-structured-ndjson]
@@ -114,9 +141,6 @@ fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
 pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
     let subscriber = Registry::default();
 
-    let env_filter_layer = default_log_filter(global_args)?;
-    let subscriber = subscriber.with(env_filter_layer);
-
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_file(cfg!(debug_assertions))
         .with_line_number(cfg!(debug_assertions))
@@ -126,7 +150,9 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
             inner: tracing_subscriber::fmt::format()
                 .pretty()
                 .with_timer(tracing_subscriber::fmt::time::uptime()),
-        });
+        })
+        .with_filter(default_log_filter(global_args)?)
+        .with_filter(FilterFn::new(stderr_event_filter));
 
     let subscriber = subscriber.with(stderr_layer);
     let subscriber = subscriber.with(crate::machine::daemon_log::DaemonTraceLayer);
@@ -158,7 +184,8 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
             .with_file(true)
             .with_target(false)
             .with_line_number(true)
-            .with_writer(json_writer);
+            .with_writer(json_writer)
+            .with_filter(default_log_filter(global_args)?);
         Some(json_layer)
     } else {
         None
@@ -166,7 +193,10 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
     let subscriber = subscriber.with(json_layer);
 
     #[cfg(all(feature = "tracy", not(test)))]
-    let subscriber = subscriber.with(tracing_tracy::TracyLayer::new(TracyLayerConfig::default()));
+    let subscriber = subscriber.with(
+        tracing_tracy::TracyLayer::new(TracyLayerConfig::default())
+            .with_filter(tracy_log_filter()?),
+    );
 
     if let Err(error) = subscriber.try_init() {
         eprintln!(

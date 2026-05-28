@@ -20,6 +20,7 @@ use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use std::cmp::Ordering;
 use std::time::Duration;
+use tracing::Instrument;
 
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -61,7 +62,7 @@ pub fn query(
     request: QueryPlan,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<Vec<QueryResultRow>> {
-    with_client(config, move |client| async move {
+    with_client(config, "query", move |client| async move {
         client
             .query(request, logs)
             .await
@@ -79,7 +80,7 @@ pub fn query_stream(
     rows: vox::Tx<QueryResultRow>,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<CorrelationId> {
-    with_client(config, move |client| async move {
+    with_client(config, "query_stream", move |client| async move {
         client.query_stream(request, rows, logs).await
     })
 }
@@ -93,7 +94,7 @@ pub fn sync(
     request: SyncRequest,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<()> {
-    with_client(config, move |client| async move {
+    with_client(config, "sync", move |client| async move {
         client.sync(request, logs).await
     })
 }
@@ -107,7 +108,7 @@ pub fn status(
     request: StatusRequest,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<StatusResponse> {
-    with_client(config, move |client| async move {
+    with_client(config, "status", move |client| async move {
         client.status(request, logs).await
     })
 }
@@ -120,7 +121,9 @@ pub fn ping(
     config: &MachineConfig,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<PingResponse> {
-    with_client(config, move |client| async move { client.ping(logs).await })
+    with_client(config, "ping", move |client| async move {
+        client.ping(logs).await
+    })
 }
 
 /// # Errors
@@ -128,10 +131,9 @@ pub fn ping(
 /// Returns an error if the daemon transport cannot be reached or the call fails outside
 /// the daemon's structured machine error contract.
 pub fn shutdown(config: &MachineConfig, logs: vox::Tx<DaemonLogWireEvent>) -> eyre::Result<()> {
-    with_client(
-        config,
-        move |client| async move { client.shutdown(logs).await },
-    )
+    with_client(config, "shutdown", move |client| async move {
+        client.shutdown(logs).await
+    })
 }
 
 #[must_use]
@@ -231,12 +233,12 @@ pub fn stream_logs(
     logs: vox::Tx<DaemonLogWireEvent>,
     cancel: vox::Rx<u8>,
 ) -> eyre::Result<()> {
-    with_client(config, move |client| async move {
+    with_client(config, "stream_logs", move |client| async move {
         client.stream_logs(request, logs, cancel).await
     })
 }
 
-fn with_client<F, Fut, T>(config: &MachineConfig, f: F) -> eyre::Result<T>
+fn with_client<F, Fut, T>(config: &MachineConfig, rpc_method: &'static str, f: F) -> eyre::Result<T>
 where
     F: FnOnce(MachineDaemonRpcClient) -> Fut,
     Fut: std::future::Future<Output = Result<T, vox::VoxError<MachineError>>>,
@@ -246,12 +248,24 @@ where
         .build()?;
     let addr = format!("local://{}", config.pipe_name);
     runtime.block_on(async move {
-        let client: MachineDaemonRpcClient = vox::connect(&addr)
-            .connect_timeout(DAEMON_CONNECT_TIMEOUT)
-            .wait_for_service(DAEMON_CONNECT_TIMEOUT)
-            .await
-            .map_err(|error| eyre::eyre!("Failed connecting to daemon at {addr}: {error}"))?;
-        match f(client).await {
+        let connect_span = tracing::info_span!(
+            "daemon_ipc_connect",
+            rpc_method,
+            service_name = %config.service_name,
+            pipe_name = %config.pipe_name,
+            timeout_ms = DAEMON_CONNECT_TIMEOUT.as_millis()
+        );
+        let client: MachineDaemonRpcClient = async {
+            vox::connect(&addr)
+                .connect_timeout(DAEMON_CONNECT_TIMEOUT)
+                .wait_for_service(DAEMON_CONNECT_TIMEOUT)
+                .await
+        }
+        .instrument(connect_span)
+        .await
+        .map_err(|error| eyre::eyre!("Failed connecting to daemon at {addr}: {error}"))?;
+        let call_span = tracing::info_span!("daemon_ipc_call", rpc_method);
+        match f(client).instrument(call_span).await {
             Ok(value) => Ok(value),
             Err(vox::VoxError::User(error)) => Err(machine_error_report(&error)),
             Err(error) => Err(eyre::eyre!("Daemon RPC call failed: {error}")),
@@ -260,13 +274,17 @@ where
 }
 
 fn ping_without_restart(config: &MachineConfig) -> eyre::Result<PingResponse> {
-    with_client(config, move |client| async move {
+    with_client(config, "ping", move |client| async move {
         let (logs_tx, logs_rx) = vox::channel::<DaemonLogWireEvent>();
         let ping_response = client.ping(logs_tx).await;
         crate::machine::daemon_log::drain_stderr_logs_until_idle(
             logs_rx,
             Duration::from_millis(100),
         )
+        .instrument(tracing::info_span!(
+            "daemon_log_drain_until_idle",
+            rpc_method = "ping"
+        ))
         .await;
         ping_response
     })
@@ -288,13 +306,17 @@ fn restart_daemon(config: &MachineConfig) -> eyre::Result<()> {
 }
 
 fn shutdown_with_log_drain(config: &MachineConfig) -> eyre::Result<()> {
-    with_client(config, move |client| async move {
+    with_client(config, "shutdown", move |client| async move {
         let (logs_tx, logs_rx) = vox::channel::<DaemonLogWireEvent>();
         let shutdown_response = client.shutdown(logs_tx).await;
         crate::machine::daemon_log::drain_stderr_logs_until_idle(
             logs_rx,
             Duration::from_millis(100),
         )
+        .instrument(tracing::info_span!(
+            "daemon_log_drain_until_idle",
+            rpc_method = "shutdown"
+        ))
         .await;
         shutdown_response
     })
@@ -321,11 +343,11 @@ fn should_restart_for_build(
 ) -> bool {
     match compare_semver(cli_app_version, &ping.build.app_version) {
         Some(Ordering::Greater) => true,
-        Some(Ordering::Equal) => {
-            compare_build_unix_ms(cli_build_unix_ms, ping.build.build_unix_ms)
-                .is_some_and(|ordering| ordering == Ordering::Greater)
-                || cli_git_revision != ping.build.git_revision
-        }
+        Some(Ordering::Equal) => compare_build_unix_ms(cli_build_unix_ms, ping.build.build_unix_ms)
+            .is_some_and(|ordering| {
+                ordering == Ordering::Greater
+                    || (ordering == Ordering::Equal && cli_git_revision != ping.build.git_revision)
+            }),
         Some(Ordering::Less) | None => false,
     }
 }
@@ -396,6 +418,7 @@ mod tests {
         let ping = ping_response("1.2.3", "git-daemon", 2, crate::DAEMON_RPC_COMPAT_VERSION);
 
         assert!(should_restart_for_build("1.2.3", "git-cli", "2", &ping));
+        assert!(!should_restart_for_build("1.2.3", "git-cli", "1", &ping));
     }
 
     #[test]
