@@ -38,4 +38,4 @@ pub use query_rule::QueryRule;
 pub(crate) use query_scope::QueryScope;
 pub(crate) use query_scope::resolve_query_scope;
 pub use query_string::QueryString;
-pub(crate) use search_index_query::load_and_query_drive_search_index;
+pub(crate) use search_index_query::visit_drive_search_index_rows;

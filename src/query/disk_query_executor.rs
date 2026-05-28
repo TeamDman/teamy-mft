@@ -4,11 +4,11 @@ use crate::query::QueryIgnoreRules;
 use crate::query::QueryPlan;
 use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
-use crate::query::load_and_query_drive_search_index;
+use crate::query::visit_drive_search_index_rows;
 use eyre::bail;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
+use tracing::debug;
 use tracing::info_span;
 
 #[derive(Debug)]
@@ -84,49 +84,61 @@ impl DiskQueryExecutor {
         let include_deleted = self.request.include_deleted;
         let only_deleted = self.request.only_deleted;
 
-        std::thread::spawn(move || {
-            let _span = info_span!("query_disk_producers").entered();
-            let mut handles = Vec::with_capacity(drive_count);
-            for (drive_letter, _) in self.mft_files {
-                let sink = sink.clone();
-                let query_plan = Arc::clone(&query_plan);
-                let filter = Arc::clone(&filter);
-                let sync_dir = Arc::clone(&sync_dir);
-                handles.push(std::thread::spawn(move || {
-                    let _span = info_span!("query_drive_task").entered();
-                    let result = load_and_query_drive_search_index(
-                        drive_letter,
-                        &sync_dir,
-                        &query_plan,
-                        include_deleted,
-                        only_deleted,
-                    );
-                    match result {
-                        Ok(result) => {
-                            for row in result.matched_rows {
-                                let Some(row) = filter.classify_and_match(row) else {
-                                    continue;
-                                };
-                                if sink.blocking_send(row).is_err() {
-                                    return;
+        std::thread::Builder::new()
+            .name("teamy-mft-query-disk-producers".to_owned())
+            .spawn(move || {
+                let _span = info_span!("query_disk_producers").entered();
+                let mut handles = Vec::with_capacity(drive_count);
+                for (drive_letter, _) in self.mft_files {
+                    let sink = sink.clone();
+                    let query_plan = Arc::clone(&query_plan);
+                    let filter = Arc::clone(&filter);
+                    let sync_dir = Arc::clone(&sync_dir);
+                    let thread_name = format!("teamy-mft-query-drive-{drive_letter}");
+                    handles.push(
+                        std::thread::Builder::new()
+                            .name(thread_name)
+                            .spawn(move || {
+                                let _span = info_span!("query_drive_task").entered();
+                                let result = visit_drive_search_index_rows(
+                                    drive_letter,
+                                    &sync_dir,
+                                    &query_plan,
+                                    include_deleted,
+                                    only_deleted,
+                                    |row| {
+                                        let Some(row) = filter.classify_and_match(row) else {
+                                            return Ok(true);
+                                        };
+                                        Ok(sink.blocking_send(row).is_ok())
+                                    },
+                                );
+                                match result {
+                                    Ok(loaded_rows) => {
+                                        debug!(
+                                            drive = %drive_letter,
+                                            loaded_rows,
+                                            "Disk query drive completed"
+                                        );
+                                    }
+                                    Err(error) => {
+                                        let _ = sink.blocking_send_error(error);
+                                    }
                                 }
-                            }
-                            info!(
-                                drive = %drive_letter,
-                                loaded_rows = result.loaded_rows,
-                                "Disk query drive completed"
-                            );
+                            }),
+                    );
+                }
+                for handle in handles {
+                    match handle {
+                        Ok(handle) => {
+                            let _ = handle.join();
                         }
                         Err(error) => {
-                            let _ = sink.blocking_send_error(error);
+                            let _ = sink.blocking_send_error(error.into());
                         }
                     }
-                }));
-            }
-            for handle in handles {
-                let _ = handle.join();
-            }
-        });
+                }
+            })?;
 
         Ok(QueryRowStream::Local(rx))
     }

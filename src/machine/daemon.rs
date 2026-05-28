@@ -32,15 +32,12 @@ use crate::query::QueryIgnoreRules;
 use crate::query::QueryLimit;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
-use crate::query::matching_row_indices_for_rule;
+use crate::query::visit_drive_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
-use crate::search_index::search_index_bytes::SearchIndexBytes;
 use futures::FutureExt;
 use rustc_hash::FxHashMap;
-use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicIsize;
@@ -220,7 +217,6 @@ impl DaemonRuntimeState {
         drive: char,
         request: &QueryPlan,
     ) -> eyre::Result<Vec<QueryResultRow>> {
-        let paths = published_drive_paths(&self.sync_dir, drive);
         let query_plan = request.clone();
         let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
             &[drive],
@@ -237,19 +233,24 @@ impl DaemonRuntimeState {
             }
         };
         let filter = QueryFilter::new(request, ignore_rules)?;
-        let mut rows = query_published_index_path(&paths.base_index_path, &query_plan)?;
+        let limit = request.limit.get();
+        let mut rows = Vec::with_capacity(limit.unwrap_or_default());
 
-        if paths.overlay_index_path.is_file() {
-            rows = merge_index_rows(
-                rows,
-                query_published_index_path(&paths.overlay_index_path, &query_plan)?,
-            );
-        }
+        visit_drive_search_index_rows(
+            drive,
+            &self.sync_dir,
+            &query_plan,
+            request.include_deleted,
+            request.only_deleted,
+            |row| {
+                if let Some(row) = filter.classify_and_match(row) {
+                    rows.push(row);
+                }
+                Ok(limit.is_none_or(|limit| rows.len() < limit))
+            },
+        )?;
 
-        Ok(rows
-            .into_iter()
-            .filter_map(|row| filter.classify_and_match(row))
-            .collect())
+        Ok(rows)
     }
 
     fn status_response(&self, buffered_log_count: usize, drive_letters: &[char]) -> StatusResponse {
@@ -430,41 +431,6 @@ fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
         .join("; ")
 }
 
-fn query_published_index_path(
-    path: &Path,
-    query_plan: &QueryPlan,
-) -> eyre::Result<Vec<crate::query::QueryResultRow>> {
-    let bytes = std::fs::read(path)?;
-    let parsed_index = SearchIndexBytes::new(&bytes).parse_trusted_for_query()?;
-    let matched_row_indices = query_plan
-        .query
-        .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))?;
-    let mut rows = Vec::with_capacity(matched_row_indices.len());
-    for row_index in matched_row_indices {
-        let row = parsed_index.row_view(row_index as usize)?;
-        rows.push(crate::query::QueryResultRow {
-            path: row.path().into(),
-            has_deleted_entries: row.has_deleted_entries,
-            is_ignored: false,
-        });
-    }
-    Ok(rows)
-}
-
-fn merge_index_rows(
-    base_rows: Vec<crate::query::QueryResultRow>,
-    overlay_rows: Vec<crate::query::QueryResultRow>,
-) -> Vec<crate::query::QueryResultRow> {
-    let mut merged = BTreeMap::<crate::query::Pathlike, crate::query::QueryResultRow>::new();
-    for row in base_rows {
-        merged.insert(row.path.clone(), row);
-    }
-    for row in overlay_rows {
-        merged.insert(row.path.clone(), row);
-    }
-    merged.into_values().collect()
-}
-
 impl MachineDaemonService {
     fn new(config: MachineConfig) -> Self {
         let state = Arc::new(Mutex::new(DaemonRuntimeState::new(&config)));
@@ -541,8 +507,19 @@ impl MachineDaemonService {
                 .into_drive_letters()
                 .map_err(|error| MachineError::request_invalid(error.to_string()))?;
             for &drive in &drive_letters {
+                let mut per_drive_request = request_for_body.clone();
+                if let Some(limit) = request_for_body.limit.get() {
+                    let Some(remaining) = limit.checked_sub(emitted_rows) else {
+                        break;
+                    };
+                    if remaining == 0 {
+                        break;
+                    }
+                    per_drive_request.limit = QueryLimit::from(remaining);
+                }
+
                 let drive_rows = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    state.query_drive_rows(drive, &request_for_body)
+                    state.query_drive_rows(drive, &per_drive_request)
                 })) {
                     Ok(Ok(rows)) => rows,
                     Ok(Err(error)) => {
