@@ -817,6 +817,9 @@ impl MachineDaemonRpc for MachineDaemonService {
         if request.follow {
             let mut live_rx = daemon_log_hub().subscribe();
             loop {
+                if STOP_REQUESTED.load(Ordering::Relaxed) {
+                    break;
+                }
                 tokio::select! {
                     cancel_result = cancel.recv() => {
                         match cancel_result {
@@ -847,6 +850,7 @@ impl MachineDaemonRpc for MachineDaemonService {
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         }
                     }
+                    () = tokio::time::sleep(Duration::from_millis(250)) => {}
                 }
             }
         }
