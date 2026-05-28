@@ -228,8 +228,6 @@ if ($Release) {
 }
 $teamyMftPath = Join-Path $PSScriptRoot "target\$profileOutputDirectory\teamy-mft.exe"
 $appArgs = @($QueryArgs)
-$appArgs += '--log-filter'
-$appArgs += 'trace'
 
 $buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 Write-Host "Building $profileLabel with features ${profilerFeatures}: cargo $($buildArgs -join ' ')"
