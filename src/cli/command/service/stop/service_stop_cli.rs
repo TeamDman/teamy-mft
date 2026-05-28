@@ -8,11 +8,16 @@ use crate::machine::service::wait_for_stopped;
 use arbitrary::Arbitrary;
 use eyre::WrapErr;
 use facet::Facet;
+use figue::{self as args};
 use tracing::info;
 use tracing::warn;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
-pub struct ServiceStopArgs;
+pub struct ServiceStopArgs {
+    /// Skip daemon RPC shutdown and directly stop the Windows service, elevating if needed.
+    #[facet(args::named, default)]
+    pub force: bool,
+}
 
 impl ServiceStopArgs {
     /// # Errors
@@ -25,36 +30,41 @@ impl ServiceStopArgs {
         } else {
             &config.service_name
         };
-        let was_running = match query_service_state(service_name)? {
-            WindowsServiceState::Running | WindowsServiceState::StartPending => {
-                let (logs_tx, logs_rx) =
-                    vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-                match shutdown_daemon(&config, logs_tx) {
-                    Ok(()) => {
-                        drop(log_drain);
-                        wait_for_stopped(service_name, std::time::Duration::from_secs(10))
+        let was_running = if self.force {
+            crate::windows_utils::elevation::ensure_elevated()?;
+            stop_service_if_running(service_name)?
+        } else {
+            match query_service_state(service_name)? {
+                WindowsServiceState::Running | WindowsServiceState::StartPending => {
+                    let (logs_tx, logs_rx) =
+                        vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
+                    let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+                    match shutdown_daemon(&config, logs_tx) {
+                        Ok(()) => {
+                            drop(log_drain);
+                            wait_for_stopped(service_name, std::time::Duration::from_secs(10))
                             .wrap_err_with(|| {
                                 format!(
                                     "Timed out waiting for {service_name} to stop after daemon shutdown request"
                                 )
                             })?;
-                        true
-                    }
-                    Err(error) => {
-                        drop(log_drain);
-                        warn!(
-                            service_name,
-                            error = %error,
-                            "Daemon shutdown failed; falling back to service stop"
-                        );
-                        stop_service_if_running(service_name)?
+                            true
+                        }
+                        Err(error) => {
+                            drop(log_drain);
+                            warn!(
+                                service_name,
+                                error = %error,
+                                "Daemon shutdown failed; falling back to service stop"
+                            );
+                            stop_service_if_running(service_name)?
+                        }
                     }
                 }
+                WindowsServiceState::Stopped
+                | WindowsServiceState::Missing
+                | WindowsServiceState::Unknown(_) => false,
             }
-            WindowsServiceState::Stopped
-            | WindowsServiceState::Missing
-            | WindowsServiceState::Unknown(_) => false,
         };
         info!(
             service_name,
