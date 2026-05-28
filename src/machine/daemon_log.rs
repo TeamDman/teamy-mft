@@ -427,15 +427,16 @@ fn spawn_log_forwarder(
     let mut live_rx = daemon_log_hub().subscribe();
     let (stop_tx, mut stop_rx) = oneshot::channel::<()>();
     let join_handle = tokio::spawn(async move {
-        for event in daemon_log_hub().snapshot() {
-            if matches_correlation_id(&event, correlation_id.as_ref())
-                && logs_tx
+        if correlation_id.is_none() {
+            for event in daemon_log_hub().snapshot() {
+                if logs_tx
                     .send(DaemonLogWireEvent::from(&event))
                     .await
                     .is_err()
-            {
-                let _ = logs_tx.close(Vec::default()).await;
-                return;
+                {
+                    let _ = logs_tx.close(Vec::default()).await;
+                    return;
+                }
             }
         }
 
