@@ -352,7 +352,10 @@ fn should_restart_for_build(
     }
 }
 
-fn ensure_rpc_compatibility(ping: &PingResponse) -> eyre::Result<()> {
+/// # Errors
+///
+/// Returns an error if the daemon RPC compatibility version does not match this CLI.
+pub fn ensure_rpc_compatibility(ping: &PingResponse) -> eyre::Result<()> {
     let compatibility = daemon_compatibility(ping);
     if !compatibility.rpc_compat_matches {
         eyre::bail!(

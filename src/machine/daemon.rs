@@ -11,7 +11,6 @@ use crate::machine::config::published_drive_paths;
 use crate::machine::config::save_checkpoint;
 use crate::machine::daemon_log::daemon_log_hub;
 use crate::machine::daemon_log::spawn_correlation_log_forwarder;
-use crate::machine::daemon_log::spawn_global_log_forwarder;
 use crate::machine::daemon_log::stop_log_forwarder;
 use crate::machine::ipc::CorrelationId;
 use crate::machine::ipc::DegradedDriveStatus;
@@ -39,11 +38,14 @@ use rustc_hash::FxHashMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicIsize;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::Mutex;
@@ -613,7 +615,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<PingResponse, MachineError> {
         let correlation_id = next_correlation_id("ping");
-        let log_forwarder = spawn_global_log_forwarder(logs);
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let service_name = self.config.service_name.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -1037,7 +1039,8 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async move {
+    let local = tokio::task::LocalSet::new();
+    runtime.block_on(local.run_until(async move {
         info!(
             service_name = %config.service_name,
             sync_dir = %config.sync_dir.display(),
@@ -1053,7 +1056,8 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         );
         debug!("Machine cache protection check completed");
         let service = MachineDaemonService::new(config.clone());
-        let mut last_activity = std::time::Instant::now();
+        let last_activity = Arc::new(StdMutex::new(Instant::now()));
+        let active_connections = Arc::new(AtomicUsize::new(0));
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
         debug!("Binding daemon named pipe");
         let acceptor =
@@ -1069,7 +1073,9 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
             if STOP_REQUESTED.load(Ordering::Relaxed) {
                 break;
             }
-            if last_activity.elapsed() >= idle_timeout {
+            if active_connections.load(Ordering::Relaxed) == 0
+                && last_daemon_activity_elapsed(&last_activity) >= idle_timeout
+            {
                 break;
             }
 
@@ -1077,21 +1083,28 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
                 accept_result = acceptor.accept() => {
                     let link = accept_result?;
                     let rpc_service = service.clone();
-                    let response = vox::acceptor_on(link)
-                        .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
-                        .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
-                        .await;
-                    match response {
-                        Ok(client) => {
-                            tracing::debug!("Daemon RPC connection established");
-                            client.caller.closed().await;
-                            tracing::debug!("Daemon RPC connection closed");
+                    mark_daemon_activity(&last_activity);
+                    active_connections.fetch_add(1, Ordering::Relaxed);
+                    let active_connections = Arc::clone(&active_connections);
+                    let last_activity = Arc::clone(&last_activity);
+                    tokio::task::spawn_local(async move {
+                        let response = vox::acceptor_on(link)
+                            .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
+                            .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
+                            .await;
+                        match response {
+                            Ok(client) => {
+                                tracing::debug!("Daemon RPC connection established");
+                                client.caller.closed().await;
+                                tracing::debug!("Daemon RPC connection closed");
+                            }
+                            Err(error) => {
+                                tracing::warn!(error = %error, "Daemon RPC connection failed");
+                            }
                         }
-                        Err(error) => {
-                            tracing::warn!(error = %error, "Daemon RPC connection failed");
-                        }
-                    }
-                    last_activity = std::time::Instant::now();
+                        mark_daemon_activity(&last_activity);
+                        active_connections.fetch_sub(1, Ordering::Relaxed);
+                    });
                 }
                 () = tokio::time::sleep(Duration::from_millis(250)) => {
                     service.state.lock().await.refresh_loaded_drives();
@@ -1101,7 +1114,19 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
 
         service.state.lock().await.flush_dirty_drives();
         Ok(())
-    })
+    }))
+}
+
+fn mark_daemon_activity(last_activity: &StdMutex<Instant>) {
+    if let Ok(mut last_activity) = last_activity.lock() {
+        *last_activity = Instant::now();
+    }
+}
+
+fn last_daemon_activity_elapsed(last_activity: &StdMutex<Instant>) -> Duration {
+    last_activity
+        .lock()
+        .map_or(Duration::ZERO, |last_activity| last_activity.elapsed())
 }
 
 #[allow(
