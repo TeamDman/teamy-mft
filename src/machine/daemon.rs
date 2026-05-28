@@ -818,6 +818,23 @@ impl MachineDaemonRpc for MachineDaemonService {
             let mut live_rx = daemon_log_hub().subscribe();
             loop {
                 if STOP_REQUESTED.load(Ordering::Relaxed) {
+                    let _ = logs
+                        .send(crate::machine::daemon_log::DaemonLogWireEvent {
+                            timestamp_unix_ms: crate::machine::config::current_unix_ms(),
+                            level: crate::machine::daemon_log::DaemonLogLevel::Info,
+                            target: module_path!().to_owned(),
+                            file: Some(file!().to_owned()),
+                            line: Some(line!()),
+                            message:
+                                "Daemon log stream closing because daemon shutdown was requested"
+                                    .to_owned(),
+                            request_id: 0,
+                            method: "global".to_owned(),
+                            correlation_id: None,
+                            spans: Vec::new(),
+                            fields: Vec::new(),
+                        })
+                        .await;
                     break;
                 }
                 tokio::select! {
