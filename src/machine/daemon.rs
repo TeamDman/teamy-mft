@@ -377,9 +377,9 @@ impl DaemonRuntimeState {
 
         if !self.drives.contains_key(&drive) {
             let state = self.load_drive_state(drive).map_err(|error| {
-                MachineError::degraded(format!(
-                    "Drive {drive} could not be loaded for live query: {error}"
-                ))
+                let message = format!("Drive {drive} could not be loaded for live query: {error}");
+                self.degraded.insert(drive, message.clone());
+                MachineError::degraded(message)
             })?;
             self.drives.insert(drive, state);
         }
