@@ -129,52 +129,50 @@ impl QueryArgs {
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;
-        let source = if self.no_daemon {
-            QueryDataSource::DiskOnly
+        let rtn = if self.no_daemon {
+            let executor = DiskQueryExecutor::new(self.plan.clone())?;
+            let stream = executor.stream()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
         } else {
-            QueryDataSource::DaemonOnly
-        };
-        let rtn = match source {
-            QueryDataSource::DiskOnly => {
-                let executor = DiskQueryExecutor::new(self.plan.clone())?;
-                let stream = executor.stream()?;
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
-            }
-            QueryDataSource::DaemonOnly => {
-                let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-                crate::machine::ipc::ensure_daemon_ready(&config)?;
-                let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
-                let (logs_tx, logs_rx) =
-                    vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-                let row_drain = {
-                    let stream = QueryRowStream::Vox(rows_rx);
-                    let limit = self.plan.limit;
-                    std::thread::spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()?;
-                        runtime.block_on(stream.collect_filtered_limit(limit))
-                    })
-                };
-                let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-                let response =
-                    crate::machine::ipc::query_stream(&config, self.plan.clone(), rows_tx, logs_tx)
-                        .wrap_err("Daemon query failed, re-run with `--no-daemon` to query the published disk cache")?;
-                let response_rows = row_drain.join().map_err(|join_error| {
-                    eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
-                })??;
-                let () = log_drain.join().map_err(|join_error| {
-                    eyre::eyre!("Daemon log drain thread panicked: {join_error:?}")
-                })?;
-                debug!(
-                    correlation_id = %response,
-                    "Daemon-only streamed query completed"
-                );
-                response_rows
-            }
+            let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+            crate::machine::ipc::ensure_daemon_ready(&config)?;
+            let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
+            let (logs_tx, logs_rx) =
+                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
+            let row_drain = {
+                let stream = QueryRowStream::Vox(rows_rx);
+                let limit = self.plan.limit;
+                std::thread::spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    runtime.block_on(stream.collect_filtered_limit(limit))
+                })
+            };
+            let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+            let response = crate::machine::ipc::query_stream(
+                &config,
+                self.plan.clone(),
+                rows_tx,
+                logs_tx,
+            )
+            .wrap_err(
+                "Daemon query failed, re-run with `--no-daemon` to query the published disk cache",
+            )?;
+            let response_rows = row_drain.join().map_err(|join_error| {
+                eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
+            })??;
+            let () = log_drain.join().map_err(|join_error| {
+                eyre::eyre!("Daemon log drain thread panicked: {join_error:?}")
+            })?;
+            debug!(
+                correlation_id = %response,
+                "Daemon-only streamed query completed"
+            );
+            response_rows
         };
         if let Some(limit) = **self.plan.limit {
             ensure!(
