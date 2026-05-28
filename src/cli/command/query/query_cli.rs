@@ -1,6 +1,5 @@
 use crate::presentation::ResultListPresentation;
 use crate::query::DiskQueryExecutor;
-use crate::query::QueryDataSource;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowStream;
