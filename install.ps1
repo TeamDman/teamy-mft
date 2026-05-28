@@ -18,4 +18,4 @@ if ($runningClients.Count -gt 0) {
 }
 
 $env:TEAMY_MFT_BUILD_UNIX_MS = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString()
-cargo install --path . --locked --force
+cargo install --path . --locked --force --offline
