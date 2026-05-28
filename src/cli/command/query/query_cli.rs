@@ -136,11 +136,13 @@ impl QueryArgs {
                 .build()?;
             runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
         } else {
+            let _ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
             crate::machine::ipc::ensure_daemon_ready(&config)?;
             let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
             let (logs_tx, logs_rx) =
                 vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
+            let (cancel_tx, cancel_rx) = vox::channel::<u8>();
             let row_drain = {
                 let stream = QueryRowStream::Vox(rows_rx);
                 let limit = self.plan.limit;
@@ -151,12 +153,26 @@ impl QueryArgs {
                     runtime.block_on(stream.collect_filtered_limit(limit))
                 })
             };
+            let _cancel_signal = std::thread::spawn(move || {
+                while !crate::windows_utils::ctrl_c::interrupted() {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async move {
+                    let _ = cancel_tx.send(1).await;
+                    let _ = cancel_tx.close(Vec::new()).await;
+                });
+                Ok::<(), eyre::Report>(())
+            });
             let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
             let response = crate::machine::ipc::query_stream(
                 &config,
                 self.plan.clone(),
                 rows_tx,
                 logs_tx,
+                cancel_rx,
             )
             .wrap_err(
                 "Daemon query failed, re-run with `--no-daemon` to query the published disk cache",

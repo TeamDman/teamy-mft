@@ -33,7 +33,8 @@ use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::visit_drive_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
-use futures::FutureExt;
+use crossbeam_channel::Receiver;
+use crossbeam_channel::Sender;
 use rustc_hash::FxHashMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
@@ -49,6 +50,7 @@ use std::time::Instant;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
@@ -105,12 +107,17 @@ struct DaemonRuntimeState {
     sync_dir: std::path::PathBuf,
     drives: FxHashMap<char, LiveDriveState>,
     degraded: FxHashMap<char, String>,
+    loading: FxHashMap<char, String>,
+    active_jobs: usize,
+    warm_drive_letters: Vec<char>,
+    next_warm_drive_index: usize,
+    warm_not_before: Instant,
 }
 
 #[derive(Debug, Clone)]
 struct MachineDaemonService {
     config: MachineConfig,
-    state: Arc<Mutex<DaemonRuntimeState>>,
+    worker: DaemonWorker,
 }
 
 #[derive(Debug)]
@@ -119,20 +126,562 @@ struct DaemonDriveQueryRows {
     degraded: Option<(char, String)>,
 }
 
-impl DaemonRuntimeState {
-    fn new(config: &MachineConfig) -> Self {
+#[derive(Debug)]
+struct DaemonQueryOutcome {
+    rows: Vec<crate::query::QueryResultRow>,
+}
+
+enum DriveWorkerCommand {
+    Query {
+        request: QueryPlan,
+        correlation_id: CorrelationId,
+        rpc_method: &'static str,
+        cancel: Arc<AtomicBool>,
+        response: oneshot::Sender<Result<DaemonDriveQueryRows, MachineError>>,
+    },
+    Warm,
+    Flush,
+    Stop,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DriveWorkerStatusSnapshot {
+    loaded: bool,
+    loading: bool,
+    snapshot_only: Option<String>,
+    degraded: Option<String>,
+    active_jobs: usize,
+}
+
+#[derive(Clone)]
+struct DriveWorker {
+    drive: char,
+    tx: Sender<DriveWorkerCommand>,
+    status: Arc<StdMutex<DriveWorkerStatusSnapshot>>,
+    stop_requested: Arc<AtomicBool>,
+}
+
+enum DaemonWorkerCommand {
+    Sync {
+        request: SyncRequest,
+        correlation_id: CorrelationId,
+        response: oneshot::Sender<Result<(), MachineError>>,
+    },
+    Flush,
+    Stop,
+}
+
+#[derive(Clone)]
+struct DaemonWorker {
+    tx: Sender<DaemonWorkerCommand>,
+    status: Arc<StdMutex<DaemonWorkerStatusSnapshot>>,
+    drive_workers: Arc<StdMutex<FxHashMap<char, DriveWorker>>>,
+    sync_dir: std::path::PathBuf,
+    stop_requested: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DaemonWorkerStatusSnapshot {
+    loaded_drive_letters: Vec<char>,
+    loading_drive_letters: Vec<char>,
+    snapshot_only_drive_letters: Vec<char>,
+    degraded_drives: Vec<DegradedDriveStatus>,
+    active_job_count: usize,
+}
+
+impl std::fmt::Debug for DaemonWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DaemonWorker").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for DriveWorker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriveWorker")
+            .field("drive", &self.drive)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct DriveWorkerState {
+    drive: char,
+    sync_dir: std::path::PathBuf,
+    state: Option<LiveDriveState>,
+    snapshot_only: Option<String>,
+    degraded: Option<String>,
+    loading: bool,
+    active_jobs: usize,
+}
+
+impl DriveWorker {
+    fn start(drive: char, sync_dir: std::path::PathBuf) -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let status = Arc::new(StdMutex::new(DriveWorkerStatusSnapshot::default()));
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        std::thread::Builder::new()
+            .name(format!("teamy-mft-drive-{drive}"))
+            .spawn({
+                let status_for_thread = Arc::clone(&status);
+                let stop_requested_for_thread = Arc::clone(&stop_requested);
+                move || {
+                    let mut state = DriveWorkerState {
+                        drive,
+                        sync_dir,
+                        state: None,
+                        snapshot_only: None,
+                        degraded: None,
+                        loading: false,
+                        active_jobs: 0,
+                    };
+                    run_drive_worker(
+                        &mut state,
+                        &rx,
+                        &status_for_thread,
+                        &stop_requested_for_thread,
+                    );
+                }
+            })
+            .expect("failed to spawn daemon drive worker thread");
         Self {
-            owner_sid: config.owner_sid.clone(),
-            sync_dir: config.sync_dir.clone().into_inner(),
-            drives: FxHashMap::default(),
-            degraded: FxHashMap::default(),
+            drive,
+            tx,
+            status,
+            stop_requested,
         }
     }
 
-    fn query(
+    async fn query(
+        &self,
+        request: QueryPlan,
+        correlation_id: CorrelationId,
+        rpc_method: &'static str,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<DaemonDriveQueryRows, MachineError> {
+        let (response, rx) = oneshot::channel();
+        self.tx
+            .send(DriveWorkerCommand::Query {
+                request,
+                correlation_id,
+                rpc_method,
+                cancel,
+                response,
+            })
+            .map_err(|_send_error| MachineError::degraded("daemon drive worker stopped"))?;
+        rx.await
+            .map_err(|_recv_error| MachineError::degraded("daemon drive worker stopped"))?
+    }
+
+    fn snapshot(&self) -> DriveWorkerStatusSnapshot {
+        self.status
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default()
+    }
+
+    fn flush(&self) {
+        let _ = self.tx.send(DriveWorkerCommand::Flush);
+    }
+
+    fn warm(&self) {
+        let _ = self.tx.send(DriveWorkerCommand::Warm);
+    }
+
+    fn stop(&self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+        let _ = self.tx.send(DriveWorkerCommand::Stop);
+    }
+}
+
+impl DriveWorkerState {
+    fn query_with_cancel(
         &mut self,
         request: &QueryPlan,
-    ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
+        cancel: &AtomicBool,
+    ) -> Result<DaemonDriveQueryRows, MachineError> {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(DaemonDriveQueryRows {
+                rows: Vec::new(),
+                degraded: None,
+            });
+        }
+        if let Err(error) = self.refresh_with_cancel(Some(cancel)) {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(DaemonDriveQueryRows {
+                    rows: Vec::new(),
+                    degraded: None,
+                });
+            }
+            return match query_published_drive(self.drive, &self.sync_dir, request) {
+                Ok(rows) => {
+                    let message = format!(
+                        "{}; served published cache for this drive instead",
+                        error.message
+                    );
+                    self.mark_snapshot_only(message.clone());
+                    Ok(DaemonDriveQueryRows {
+                        rows,
+                        degraded: Some((self.drive, message)),
+                    })
+                }
+                Err(fallback_error) => Err(MachineError::degraded(format!(
+                    "{}; published cache fallback also failed: {fallback_error}",
+                    error.message
+                ))),
+            };
+        }
+
+        self.state
+            .as_mut()
+            .ok_or_else(|| MachineError::degraded(format!("Drive {} is not loaded", self.drive)))?
+            .query_with_cancel(request, Some(cancel))
+            .map(|rows| DaemonDriveQueryRows {
+                rows,
+                degraded: None,
+            })
+    }
+
+    fn refresh(&mut self) -> Result<(), MachineError> {
+        self.refresh_with_cancel(None)
+    }
+
+    fn refresh_with_cancel(&mut self, cancel: Option<&AtomicBool>) -> Result<(), MachineError> {
+        if let Some(message) = self.degraded.clone() {
+            return Err(MachineError::degraded(message));
+        }
+
+        if self.state.is_none() {
+            self.loading = true;
+            let paths = published_drive_paths(&self.sync_dir, self.drive);
+            let state = (|| -> eyre::Result<LiveDriveState> {
+                if !paths.mft_path.is_file() {
+                    eyre::bail!(
+                        "Drive {} has no published MFT snapshot at {}",
+                        self.drive,
+                        paths.mft_path.display()
+                    );
+                }
+                if !paths.base_index_path.is_file() {
+                    eyre::bail!(
+                        "Drive {} has no published base index at {}",
+                        self.drive,
+                        paths.base_index_path.display()
+                    );
+                }
+                LiveDriveState::load_with_cancel(&self.sync_dir, paths, cancel)
+            })()
+            .map_err(|error| {
+                let message = format!(
+                    "Drive {} could not be loaded for live query: {error}",
+                    self.drive
+                );
+                self.loading = false;
+                self.degraded = Some(message.clone());
+                MachineError::degraded(message)
+            })?;
+            self.loading = false;
+            self.snapshot_only = None;
+            self.state = Some(state);
+        }
+
+        let refresh_result = self
+            .state
+            .as_mut()
+            .expect("drive should be loaded before refresh")
+            .refresh_with_cancel(cancel);
+        if let Err(error) = refresh_result {
+            self.state = None;
+            let message = format!(
+                "Drive {} could not be refreshed for live query: {error}",
+                self.drive
+            );
+            self.degraded = Some(message.clone());
+            return Err(MachineError::degraded(message));
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        if !state.published_dirty() {
+            return;
+        }
+        if let Err(error) = state.flush_published() {
+            warn!(drive = %self.drive, error = %error, "Failed flushing live overlay during daemon shutdown/idle");
+        }
+    }
+
+    fn mark_snapshot_only(&mut self, message: String) {
+        self.snapshot_only = Some(message);
+        self.degraded = None;
+        self.loading = false;
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "drive worker command handling is intentionally kept in one loop so state transitions stay visible"
+)]
+fn run_drive_worker(
+    state: &mut DriveWorkerState,
+    rx: &Receiver<DriveWorkerCommand>,
+    status: &StdMutex<DriveWorkerStatusSnapshot>,
+    stop_requested: &AtomicBool,
+) {
+    publish_drive_worker_status(state, status);
+    loop {
+        if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed) {
+            state.flush();
+            publish_drive_worker_status(state, status);
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(DriveWorkerCommand::Query {
+                request,
+                correlation_id,
+                rpc_method,
+                cancel,
+                response,
+            }) => {
+                state.active_jobs += 1;
+                state.loading = state.state.is_none() && state.degraded.is_none();
+                publish_drive_worker_status(state, status);
+                let span = tracing::info_span!(
+                    "daemon_rpc",
+                    correlation_id = %correlation_id,
+                    rpc_method
+                );
+                let result = {
+                    let _entered = span.enter();
+                    if cancel.load(Ordering::Relaxed) {
+                        Ok(DaemonDriveQueryRows {
+                            rows: Vec::new(),
+                            degraded: None,
+                        })
+                    } else {
+                        std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            state.query_with_cancel(&request, &cancel)
+                        }))
+                        .map_err(|payload| {
+                            machine_error_from_panic("query request panicked", payload)
+                        })
+                        .and_then(|result| result)
+                    }
+                };
+                state.active_jobs = state.active_jobs.saturating_sub(1);
+                state.loading = false;
+                publish_drive_worker_status(state, status);
+                let _ = response.send(result);
+            }
+            Ok(DriveWorkerCommand::Flush) => {
+                state.flush();
+                publish_drive_worker_status(state, status);
+            }
+            Ok(DriveWorkerCommand::Warm) => {
+                if state.state.is_none() && state.degraded.is_none() {
+                    state.loading = true;
+                    publish_drive_worker_status(state, status);
+                }
+                if let Err(error) = state.refresh() {
+                    match published_drive_cache_available(state.drive, &state.sync_dir) {
+                        Ok(true) => {
+                            let message = format!(
+                                "{}; served published cache for this drive instead",
+                                error.message
+                            );
+                            state.mark_snapshot_only(message.clone());
+                            warn!(
+                                drive = %state.drive,
+                                error = %message,
+                                "Drive warmup fell back to published snapshot"
+                            );
+                        }
+                        Ok(false) => {
+                            warn!(
+                                drive = %state.drive,
+                                error = %error.message,
+                                "Drive warmup failed and no published snapshot fallback is available"
+                            );
+                        }
+                        Err(fallback_error) => {
+                            warn!(
+                                drive = %state.drive,
+                                error = %error.message,
+                                fallback_error = %fallback_error,
+                                "Drive warmup failed while checking published snapshot fallback"
+                            );
+                        }
+                    }
+                }
+                state.loading = false;
+                publish_drive_worker_status(state, status);
+            }
+            Ok(DriveWorkerCommand::Stop)
+            | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                state.flush();
+                publish_drive_worker_status(state, status);
+                break;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                if state.state.is_none() || state.degraded.is_some() {
+                    publish_drive_worker_status(state, status);
+                    continue;
+                }
+                if let Err(error) = state.refresh() {
+                    warn!(
+                        drive = %state.drive,
+                        error = %error.message,
+                        "Drive refresh degraded; falling back to disk until next reload"
+                    );
+                }
+                publish_drive_worker_status(state, status);
+            }
+        }
+    }
+}
+
+fn publish_drive_worker_status(
+    state: &DriveWorkerState,
+    status: &StdMutex<DriveWorkerStatusSnapshot>,
+) {
+    if let Ok(mut snapshot) = status.lock() {
+        *snapshot = DriveWorkerStatusSnapshot {
+            loaded: state.state.is_some(),
+            loading: state.loading,
+            snapshot_only: state.snapshot_only.clone(),
+            degraded: state.degraded.clone(),
+            active_jobs: state.active_jobs,
+        };
+    }
+}
+
+impl DaemonWorker {
+    fn start(config: &MachineConfig) -> Self {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut state = DaemonRuntimeState::new(config);
+        let status = Arc::new(StdMutex::new(DaemonWorkerStatusSnapshot::default()));
+        let drive_workers = Arc::new(StdMutex::new(FxHashMap::default()));
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        std::thread::Builder::new()
+            .name("teamy-mft-daemon-worker".to_owned())
+            .spawn({
+                let status_for_thread = Arc::clone(&status);
+                let drive_workers_for_thread = Arc::clone(&drive_workers);
+                let stop_requested_for_thread = Arc::clone(&stop_requested);
+                move || {
+                    run_daemon_worker(
+                        &mut state,
+                        &rx,
+                        &status_for_thread,
+                        &drive_workers_for_thread,
+                        &stop_requested_for_thread,
+                    );
+                }
+            })
+            .expect("failed to spawn daemon worker thread");
+        Self {
+            tx,
+            status,
+            drive_workers,
+            sync_dir: config.sync_dir.clone().into_inner(),
+            stop_requested,
+        }
+    }
+
+    async fn query(
+        &self,
+        request: QueryPlan,
+        correlation_id: CorrelationId,
+        rpc_method: &'static str,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<DaemonQueryOutcome, MachineError> {
+        self.query_drive_workers(request, correlation_id, rpc_method, cancel)
+            .await
+    }
+
+    async fn sync(
+        &self,
+        request: SyncRequest,
+        correlation_id: CorrelationId,
+    ) -> Result<(), MachineError> {
+        let (response, rx) = oneshot::channel();
+        self.tx
+            .send(DaemonWorkerCommand::Sync {
+                request,
+                correlation_id,
+                response,
+            })
+            .map_err(|_send_error| MachineError::degraded("daemon worker stopped"))?;
+        rx.await
+            .map_err(|_recv_error| MachineError::degraded("daemon worker stopped"))?
+    }
+
+    fn snapshot(&self) -> DaemonWorkerStatusSnapshot {
+        let mut snapshot = self
+            .status
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .unwrap_or_default();
+        if let Ok(workers) = self.drive_workers.lock() {
+            for (&drive, worker) in workers.iter() {
+                let drive_status = worker.snapshot();
+                if drive_status.loaded {
+                    snapshot.loaded_drive_letters.push(drive);
+                }
+                if drive_status.loading {
+                    snapshot.loading_drive_letters.push(drive);
+                }
+                if drive_status.snapshot_only.is_some() {
+                    snapshot.snapshot_only_drive_letters.push(drive);
+                }
+                if let Some(message) = drive_status.degraded {
+                    snapshot.degraded_drives.push(DegradedDriveStatus {
+                        drive_letter: drive,
+                        message,
+                    });
+                }
+                snapshot.active_job_count += drive_status.active_jobs;
+            }
+        }
+        snapshot.loaded_drive_letters.sort_unstable();
+        snapshot.loaded_drive_letters.dedup();
+        snapshot.loading_drive_letters.sort_unstable();
+        snapshot.loading_drive_letters.dedup();
+        snapshot.snapshot_only_drive_letters.sort_unstable();
+        snapshot.snapshot_only_drive_letters.dedup();
+        snapshot
+    }
+
+    fn flush(&self) {
+        let _ = self.tx.send(DaemonWorkerCommand::Flush);
+        if let Ok(workers) = self.drive_workers.lock() {
+            for worker in workers.values() {
+                worker.flush();
+            }
+        }
+    }
+
+    fn stop(&self) {
+        self.stop_requested.store(true, Ordering::Relaxed);
+        let _ = self.tx.send(DaemonWorkerCommand::Stop);
+        if let Ok(workers) = self.drive_workers.lock() {
+            for worker in workers.values() {
+                worker.stop();
+            }
+        }
+    }
+}
+
+impl DaemonWorker {
+    async fn query_drive_workers(
+        &self,
+        request: QueryPlan,
+        correlation_id: CorrelationId,
+        rpc_method: &'static str,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<DaemonQueryOutcome, MachineError> {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
         let mut degraded_drives = Vec::new();
@@ -141,7 +690,12 @@ impl DaemonRuntimeState {
             .clone()
             .into_drive_letters()
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
+
         for &drive in &drive_letters {
+            if cancel.load(Ordering::Relaxed) {
+                tracing::warn!("Daemon query cancelled by client");
+                break;
+            }
             let mut per_drive_request = request.clone();
             if let Some(limit) = request.limit.get() {
                 let Some(remaining) = limit.checked_sub(rows.len()) else {
@@ -153,7 +707,16 @@ impl DaemonRuntimeState {
                 per_drive_request.limit = QueryLimit::from(remaining);
             }
 
-            match self.query_drive_rows(drive, &per_drive_request) {
+            match self
+                .drive_worker(drive)
+                .query(
+                    per_drive_request,
+                    correlation_id.clone(),
+                    rpc_method,
+                    Arc::clone(&cancel),
+                )
+                .await
+            {
                 Ok(drive_rows) => {
                     if let Some(degraded) = drive_rows.degraded {
                         degraded_drives.push(degraded);
@@ -176,126 +739,151 @@ impl DaemonRuntimeState {
                 queried_drives,
                 degraded_drive_count = degraded_drives.len(),
                 degraded_drives = %format_degraded_query_drives(&degraded_drives),
-                "Daemon query skipped degraded drives"
+                "Daemon query used published snapshot fallback for some drives"
             );
         }
 
-        Ok(rows)
+        Ok(DaemonQueryOutcome { rows })
     }
 
-    fn query_drive_rows(
-        &mut self,
-        drive: char,
-        request: &QueryPlan,
-    ) -> Result<DaemonDriveQueryRows, MachineError> {
-        if let Err(error) = self.refresh_drive(drive) {
-            return match self.query_published_drive(drive, request) {
-                Ok(rows) => Ok(DaemonDriveQueryRows {
-                    rows,
-                    degraded: Some((
-                        drive,
-                        format!(
-                            "{}; served published cache for this drive instead",
-                            error.message
-                        ),
-                    )),
-                }),
-                Err(fallback_error) => Err(MachineError::degraded(format!(
-                    "{}; published cache fallback also failed: {fallback_error}",
-                    error.message
-                ))),
-            };
+    fn drive_worker(&self, drive: char) -> DriveWorker {
+        let mut workers = self
+            .drive_workers
+            .lock()
+            .expect("drive worker registry poisoned");
+        workers
+            .entry(drive)
+            .or_insert_with(|| DriveWorker::start(drive, self.sync_dir.clone()))
+            .clone()
+    }
+}
+
+fn run_daemon_worker(
+    state: &mut DaemonRuntimeState,
+    rx: &Receiver<DaemonWorkerCommand>,
+    status: &StdMutex<DaemonWorkerStatusSnapshot>,
+    drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
+    stop_requested: &AtomicBool,
+) {
+    publish_worker_status(state, status);
+    loop {
+        if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed) {
+            state.flush_dirty_drives();
+            publish_worker_status(state, status);
+            break;
         }
-        self.drive_mut(drive)?
-            .query(request)
-            .map(|rows| DaemonDriveQueryRows {
-                rows,
-                degraded: None,
-            })
-    }
-
-    fn query_published_drive(
-        &self,
-        drive: char,
-        request: &QueryPlan,
-    ) -> eyre::Result<Vec<QueryResultRow>> {
-        let query_plan = request.clone();
-        let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
-            &[drive],
-            &self.sync_dir,
-        ) {
-            Ok(rules) => Some(rules),
-            Err(error) => {
-                warn!(
-                    drive = %drive,
-                    error = %error,
-                    "Published-cache query could not load ignore rules; treating paths as visible"
-                );
-                None
-            }
-        };
-        let filter = QueryFilter::new(request, ignore_rules)?;
-        let limit = request.limit.get();
-        let mut rows = Vec::with_capacity(limit.unwrap_or_default());
-
-        visit_drive_search_index_rows(
-            drive,
-            &self.sync_dir,
-            &query_plan,
-            request.include_deleted,
-            request.only_deleted,
-            |row| {
-                if let Some(row) = filter.classify_and_match(row) {
-                    rows.push(row);
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(DaemonWorkerCommand::Sync {
+                request,
+                correlation_id,
+                response,
+            }) => {
+                state.active_jobs += 1;
+                publish_worker_status(state, status);
+                if let Ok(mut workers) = drive_workers.lock() {
+                    for drive in &request.drive_letters {
+                        if let Some(worker) = workers.remove(drive) {
+                            worker.stop();
+                        }
+                    }
                 }
-                Ok(limit.is_none_or(|limit| rows.len() < limit))
-            },
-        )?;
+                let span = tracing::info_span!(
+                    "daemon_rpc",
+                    correlation_id = %correlation_id,
+                    rpc_method = "sync"
+                );
+                let result = {
+                    let _entered = span.enter();
+                    run_daemon_worker_sync(state, request)
+                };
+                state.active_jobs = state.active_jobs.saturating_sub(1);
+                publish_worker_status(state, status);
+                let _ = response.send(result);
+            }
+            Ok(DaemonWorkerCommand::Flush) => {
+                state.flush_dirty_drives();
+                if let Ok(workers) = drive_workers.lock() {
+                    for worker in workers.values() {
+                        worker.flush();
+                    }
+                }
+                publish_worker_status(state, status);
+            }
+            Ok(DaemonWorkerCommand::Stop)
+            | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                state.flush_dirty_drives();
+                if let Ok(workers) = drive_workers.lock() {
+                    for worker in workers.values() {
+                        worker.stop();
+                    }
+                }
+                publish_worker_status(state, status);
+                break;
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed)
+                {
+                    state.flush_dirty_drives();
+                    publish_worker_status(state, status);
+                    break;
+                }
+                state.refresh_loaded_drives();
+                warm_next_drive_worker(state, drive_workers);
+                publish_worker_status(state, status);
+            }
+        }
+    }
+}
 
-        Ok(rows)
+fn warm_next_drive_worker(
+    state: &mut DaemonRuntimeState,
+    drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
+) {
+    if state.warm_drive_letters.is_empty() {
+        return;
+    }
+    if Instant::now() < state.warm_not_before {
+        return;
     }
 
-    fn status_response(&self, buffered_log_count: usize, drive_letters: &[char]) -> StatusResponse {
-        let published_drives =
-            collect_published_drive_summaries_for_letters(&self.sync_dir, drive_letters)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|drive| crate::machine::ipc::PublishedDriveStatus {
-                    drive_letter: drive.drive_letter,
-                    mft_path: drive.mft_path.display().to_string(),
-                    mft_modified_at_unix_ms: drive.mft_modified_at.map(system_time_to_unix_ms),
-                    base_index_path: drive.base_index_path.display().to_string(),
-                    base_index_modified_at_unix_ms: drive
-                        .base_index_modified_at
-                        .map(system_time_to_unix_ms),
-                    overlay_index_path: drive.overlay_index_path.display().to_string(),
-                    overlay_index_modified_at_unix_ms: drive
-                        .overlay_index_modified_at
-                        .map(system_time_to_unix_ms),
-                    checkpoint_path: drive.checkpoint_path.display().to_string(),
-                    checkpoint_modified_at_unix_ms: drive
-                        .checkpoint_modified_at
-                        .map(system_time_to_unix_ms),
-                    snapshot_usn: drive
-                        .checkpoint
-                        .as_ref()
-                        .and_then(|checkpoint| checkpoint.snapshot_usn),
-                    last_usn: drive
-                        .checkpoint
-                        .as_ref()
-                        .and_then(|checkpoint| checkpoint.last_usn),
-                    journal_id: drive
-                        .checkpoint
-                        .as_ref()
-                        .and_then(|checkpoint| checkpoint.journal_id),
-                    warning: drive.warning,
-                })
-                .collect();
-        StatusResponse {
-            sync_dir: self.sync_dir.display().to_string(),
-            owner_sid: self.owner_sid.clone(),
-            loaded_drive_letters: self.drives.keys().copied().collect(),
-            degraded_drives: self
+    for _ in 0..state.warm_drive_letters.len() {
+        let index = state.next_warm_drive_index % state.warm_drive_letters.len();
+        state.next_warm_drive_index = state.next_warm_drive_index.wrapping_add(1);
+        let drive = state.warm_drive_letters[index];
+        let Ok(mut workers) = drive_workers.lock() else {
+            return;
+        };
+        if workers.values().any(|worker| {
+            let snapshot = worker.snapshot();
+            snapshot.loading || snapshot.active_jobs > 0
+        }) {
+            return;
+        }
+        let worker = workers
+            .entry(drive)
+            .or_insert_with(|| DriveWorker::start(drive, state.sync_dir.clone()))
+            .clone();
+        drop(workers);
+
+        let snapshot = worker.snapshot();
+        if snapshot.loading || snapshot.active_jobs > 0 || snapshot.degraded.is_some() {
+            continue;
+        }
+        worker.warm();
+        break;
+    }
+}
+
+fn publish_worker_status(
+    state: &DaemonRuntimeState,
+    status: &StdMutex<DaemonWorkerStatusSnapshot>,
+) {
+    if let Ok(mut snapshot) = status.lock() {
+        *snapshot = DaemonWorkerStatusSnapshot {
+            loaded_drive_letters: state.drives.keys().copied().collect(),
+            loading_drive_letters: state.loading.keys().copied().collect(),
+            snapshot_only_drive_letters: Vec::new(),
+            degraded_drives: state
                 .degraded
                 .iter()
                 .map(|(&drive_letter, message)| DegradedDriveStatus {
@@ -303,8 +891,107 @@ impl DaemonRuntimeState {
                     message: message.clone(),
                 })
                 .collect(),
-            buffered_log_count,
-            published_drives,
+            active_job_count: state.active_jobs,
+        };
+    }
+}
+
+fn run_daemon_worker_sync(
+    state: &mut DaemonRuntimeState,
+    request: SyncRequest,
+) -> Result<(), MachineError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| MachineError::degraded(error.to_string()))?;
+    runtime.block_on(state.sync(request))
+}
+
+fn query_published_drive(
+    drive: char,
+    sync_dir: &std::path::Path,
+    request: &QueryPlan,
+) -> eyre::Result<Vec<QueryResultRow>> {
+    let query_plan = request.clone();
+    let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(&[drive], sync_dir) {
+        Ok(rules) => Some(rules),
+        Err(error) => {
+            warn!(
+                drive = %drive,
+                error = %error,
+                "Published-cache query could not load ignore rules; treating paths as visible"
+            );
+            None
+        }
+    };
+    let filter = QueryFilter::new(request, ignore_rules)?;
+    let limit = request.limit.get();
+    let mut rows = Vec::with_capacity(limit.unwrap_or_default());
+
+    visit_drive_search_index_rows(
+        drive,
+        sync_dir,
+        &query_plan,
+        request.include_deleted,
+        request.only_deleted,
+        |row| {
+            if let Some(row) = filter.classify_and_match(row) {
+                rows.push(row);
+            }
+            Ok(limit.is_none_or(|limit| rows.len() < limit))
+        },
+    )?;
+
+    Ok(rows)
+}
+
+fn published_drive_cache_available(drive: char, sync_dir: &std::path::Path) -> eyre::Result<bool> {
+    let paths = published_drive_paths(sync_dir, drive);
+    Ok(std::fs::metadata(&paths.mft_path)
+        .map(|metadata| metadata.is_file())
+        .or_else(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => Ok(false),
+            _ => Err(error),
+        })?
+        && std::fs::metadata(&paths.base_index_path)
+            .map(|metadata| metadata.is_file())
+            .or_else(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => Ok(false),
+                _ => Err(error),
+            })?)
+}
+
+fn collect_warm_drive_letters(sync_dir: &std::path::Path) -> Vec<char> {
+    crate::machine::status::collect_published_drive_summaries(
+        sync_dir,
+        &crate::windows_utils::storage::DriveLetterPattern("*".to_owned()),
+    )
+    .map(|summaries| {
+        summaries
+            .into_iter()
+            .filter(|summary| {
+                summary.mft_path.is_file()
+                    && summary.base_index_path.is_file()
+                    && summary.warning.is_none()
+            })
+            .map(|summary| summary.drive_letter)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+impl DaemonRuntimeState {
+    fn new(config: &MachineConfig) -> Self {
+        Self {
+            owner_sid: config.owner_sid.clone(),
+            sync_dir: config.sync_dir.clone().into_inner(),
+            drives: FxHashMap::default(),
+            degraded: FxHashMap::default(),
+            loading: FxHashMap::default(),
+            active_jobs: 0,
+            warm_drive_letters: collect_warm_drive_letters(config.sync_dir.as_path()),
+            next_warm_drive_index: 0,
+            warm_not_before: Instant::now() + Duration::from_secs(10),
         }
     }
 
@@ -376,11 +1063,14 @@ impl DaemonRuntimeState {
         }
 
         if !self.drives.contains_key(&drive) {
+            self.loading.insert(drive, "loading".to_owned());
             let state = self.load_drive_state(drive).map_err(|error| {
                 let message = format!("Drive {drive} could not be loaded for live query: {error}");
+                self.loading.remove(&drive);
                 self.degraded.insert(drive, message.clone());
                 MachineError::degraded(message)
             })?;
+            self.loading.remove(&drive);
             self.drives.insert(drive, state);
         }
 
@@ -435,8 +1125,8 @@ fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
 
 impl MachineDaemonService {
     fn new(config: MachineConfig) -> Self {
-        let state = Arc::new(Mutex::new(DaemonRuntimeState::new(&config)));
-        Self { config, state }
+        let worker = DaemonWorker::start(&config);
+        Self { config, worker }
     }
 
     async fn run_query_in_span(
@@ -444,7 +1134,7 @@ impl MachineDaemonService {
         request: QueryPlan,
         correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
-        let state = Arc::clone(&self.state);
+        let worker = self.worker.clone();
         let request_for_body = request.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -458,19 +1148,21 @@ impl MachineDaemonService {
                 limit = ?request_for_body.limit,
                 "Running daemon query"
             );
-            let mut state = state.lock().await;
-            match std::panic::catch_unwind(AssertUnwindSafe(|| state.query(&request_for_body))) {
-                Ok(Ok(rows)) => {
-                    tracing::info!(matched_rows = rows.len(), "Daemon query completed");
-                    Ok(rows)
+            match worker
+                .query(
+                    request_for_body,
+                    correlation_id.clone(),
+                    "query",
+                    Arc::new(AtomicBool::new(false)),
+                )
+                .await
+            {
+                Ok(outcome) => {
+                    tracing::info!(matched_rows = outcome.rows.len(), "Daemon query completed");
+                    Ok(outcome.rows)
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     tracing::warn!(error = %error.message, "Daemon query degraded");
-                    Err(error)
-                }
-                Err(payload) => {
-                    let error = machine_error_from_panic("query request panicked", payload);
-                    tracing::error!(error = %error.message, "Daemon query panicked");
                     Err(error)
                 }
             }
@@ -483,10 +1175,13 @@ impl MachineDaemonService {
         &self,
         request: QueryPlan,
         rows: &vox::Tx<QueryResultRow>,
+        cancel: &mut vox::Rx<u8>,
         correlation_id: &CorrelationId,
     ) -> Result<(), MachineError> {
-        let state = Arc::clone(&self.state);
+        let worker = self.worker.clone();
         let request_for_body = request.clone();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let cancel_flag_for_watcher = Arc::clone(&cancel_flag);
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
@@ -499,58 +1194,35 @@ impl MachineDaemonService {
                 limit = ?request_for_body.limit,
                 "Running daemon streamed query"
             );
-            let mut state = state.lock().await;
             let mut emitted_rows = 0usize;
-            let mut queried_drives = 0usize;
-            let mut degraded_drives = Vec::new();
-            let drive_letters = request_for_body
-                .drive_letter_pattern
-                .clone()
-                .into_drive_letters()
-                .map_err(|error| MachineError::request_invalid(error.to_string()))?;
-            for &drive in &drive_letters {
-                let mut per_drive_request = request_for_body.clone();
-                if let Some(limit) = request_for_body.limit.get() {
-                    let Some(remaining) = limit.checked_sub(emitted_rows) else {
-                        break;
-                    };
-                    if remaining == 0 {
-                        break;
+            let query = worker.query(
+                request_for_body.clone(),
+                correlation_id.clone(),
+                "query_stream",
+                Arc::clone(&cancel_flag),
+            );
+            tokio::pin!(query);
+            let outcome = loop {
+                tokio::select! {
+                    response = &mut query => break response?,
+                    cancel_result = cancel.recv() => {
+                        match cancel_result {
+                            Ok(Some(_) | None) => {
+                                cancel_flag_for_watcher.store(true, Ordering::Relaxed);
+                                tracing::warn!("Daemon query stream cancelled by client");
+                                return Ok(());
+                            }
+                            Err(error) => {
+                                tracing::debug!(error = %error, "Daemon query cancel channel failed");
+                            }
+                        }
                     }
-                    per_drive_request.limit = QueryLimit::from(remaining);
                 }
-
-                let drive_rows = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    state.query_drive_rows(drive, &per_drive_request)
-                })) {
-                    Ok(Ok(rows)) => rows,
-                    Ok(Err(error)) => {
-                        degraded_drives.push((drive, error.message));
-                        continue;
-                    }
-                    Err(payload) => {
-                        let error =
-                            machine_error_from_panic("query stream request panicked", payload);
-                        tracing::error!(error = %error.message, "Daemon query stream panicked");
-                        degraded_drives.push((drive, error.message));
-                        continue;
-                    }
-                };
-                if let Some(degraded) = drive_rows.degraded {
-                    degraded_drives.push(degraded);
-                }
-                queried_drives += 1;
-                for row in drive_rows.rows {
-                    if request_for_body
-                        .limit
-                        .is_some_and(|limit| emitted_rows >= limit)
-                    {
-                        break;
-                    }
-                    if rows.send(row).await.is_err() {
-                        return Ok(());
-                    }
-                    emitted_rows += 1;
+            };
+            for row in outcome.rows {
+                if cancel_flag.load(Ordering::Relaxed) || query_stream_cancelled(cancel).await {
+                    tracing::warn!("Daemon query stream cancelled by client");
+                    return Ok(());
                 }
                 if request_for_body
                     .limit
@@ -558,26 +1230,31 @@ impl MachineDaemonService {
                 {
                     break;
                 }
-            }
-
-            if queried_drives == 0 && !degraded_drives.is_empty() {
-                return Err(MachineError::degraded(format_degraded_query_drives(
-                    &degraded_drives,
-                )));
-            }
-            if !degraded_drives.is_empty() {
-                tracing::warn!(
-                    queried_drives,
-                    degraded_drive_count = degraded_drives.len(),
-                    degraded_drives = %format_degraded_query_drives(&degraded_drives),
-                    "Daemon query stream skipped degraded drives"
-                );
+                if rows.send(row).await.is_err() {
+                    return Ok(());
+                }
+                emitted_rows += 1;
             }
             tracing::info!(matched_rows = emitted_rows, "Daemon query stream completed");
             Ok(())
         }
         .instrument(span)
         .await
+    }
+}
+
+async fn query_stream_cancelled(cancel: &mut vox::Rx<u8>) -> bool {
+    tokio::select! {
+        cancel_result = cancel.recv() => {
+            match cancel_result {
+                Ok(Some(_) | None) => true,
+                Err(error) => {
+                    tracing::debug!(error = %error, "Daemon query cancel channel failed");
+                    false
+                }
+            }
+        }
+        () = tokio::time::sleep(Duration::ZERO) => false,
     }
 }
 
@@ -689,11 +1366,12 @@ impl MachineDaemonRpc for MachineDaemonService {
         request: QueryPlan,
         rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
+        mut cancel: vox::Rx<u8>,
     ) -> Result<CorrelationId, MachineError> {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let response = self
-            .run_query_stream_in_span(request, &rows, &correlation_id)
+            .run_query_stream_in_span(request, &rows, &mut cancel, &correlation_id)
             .await;
         match response {
             Ok(()) => {
@@ -717,7 +1395,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         let correlation_id = next_correlation_id("sync");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let drive_count = request.drive_letters.len();
-        let state = Arc::clone(&self.state);
+        let worker = self.worker.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
@@ -730,24 +1408,13 @@ impl MachineDaemonRpc for MachineDaemonService {
                 if_exists = ?request.if_exists,
                 "Starting daemon sync"
             );
-            match AssertUnwindSafe(async {
-                let mut state = state.lock().await;
-                state.sync(request.clone()).await
-            })
-            .catch_unwind()
-            .await
-            {
-                Ok(Ok(())) => {
+            match worker.sync(request.clone(), correlation_id.clone()).await {
+                Ok(()) => {
                     tracing::info!(drive_count, "Daemon sync completed");
                     Ok(())
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     tracing::warn!(error = %error.message, "Daemon sync degraded");
-                    Err(error)
-                }
-                Err(payload) => {
-                    let error = machine_error_from_panic("sync request panicked", payload);
-                    tracing::error!(error = %error.message, "Daemon sync panicked");
                     Err(error)
                 }
             }
@@ -765,7 +1432,8 @@ impl MachineDaemonRpc for MachineDaemonService {
     ) -> Result<StatusResponse, MachineError> {
         let correlation_id = next_correlation_id("status");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
-        let state = Arc::clone(&self.state);
+        let worker = self.worker.clone();
+        let config = self.config.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
@@ -773,12 +1441,58 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         let response = async move {
             let buffered_log_count = daemon_log_hub().len();
-            let status = state
-                .lock()
-                .await
-                .status_response(buffered_log_count, &request.drive_letters);
+            let snapshot = worker.snapshot();
+            let published_drives = collect_published_drive_summaries_for_letters(
+                &config.sync_dir,
+                &request.drive_letters,
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .map(|drive| crate::machine::ipc::PublishedDriveStatus {
+                drive_letter: drive.drive_letter,
+                mft_path: drive.mft_path.display().to_string(),
+                mft_modified_at_unix_ms: drive.mft_modified_at.map(system_time_to_unix_ms),
+                base_index_path: drive.base_index_path.display().to_string(),
+                base_index_modified_at_unix_ms: drive
+                    .base_index_modified_at
+                    .map(system_time_to_unix_ms),
+                overlay_index_path: drive.overlay_index_path.display().to_string(),
+                overlay_index_modified_at_unix_ms: drive
+                    .overlay_index_modified_at
+                    .map(system_time_to_unix_ms),
+                checkpoint_path: drive.checkpoint_path.display().to_string(),
+                checkpoint_modified_at_unix_ms: drive
+                    .checkpoint_modified_at
+                    .map(system_time_to_unix_ms),
+                snapshot_usn: drive
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.snapshot_usn),
+                last_usn: drive
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.last_usn),
+                journal_id: drive
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.journal_id),
+                warning: drive.warning,
+            })
+            .collect();
+            let status = StatusResponse {
+                sync_dir: config.sync_dir.display().to_string(),
+                owner_sid: config.owner_sid.clone(),
+                loaded_drive_letters: snapshot.loaded_drive_letters,
+                loading_drive_letters: snapshot.loading_drive_letters,
+                snapshot_only_drive_letters: snapshot.snapshot_only_drive_letters,
+                degraded_drives: snapshot.degraded_drives,
+                active_job_count: snapshot.active_job_count,
+                buffered_log_count,
+                published_drives,
+            };
             tracing::debug!(
                 loaded_drive_count = status.loaded_drive_letters.len(),
+                snapshot_only_drive_count = status.snapshot_only_drive_letters.len(),
                 degraded_drive_count = status.degraded_drives.len(),
                 buffered_log_count = status.buffered_log_count,
                 "Collected daemon status"
@@ -1127,13 +1841,12 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
                         active_connections.fetch_sub(1, Ordering::Relaxed);
                     });
                 }
-                () = tokio::time::sleep(Duration::from_millis(250)) => {
-                    service.state.lock().await.refresh_loaded_drives();
-                }
+                () = tokio::time::sleep(Duration::from_millis(250)) => {}
             }
         }
 
-        service.state.lock().await.flush_dirty_drives();
+        service.worker.flush();
+        service.worker.stop();
         Ok(())
     }))
 }
@@ -1148,6 +1861,64 @@ fn last_daemon_activity_elapsed(last_activity: &StdMutex<Instant>) -> Duration {
     last_activity
         .lock()
         .map_or(Duration::ZERO, |last_activity| last_activity.elapsed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DriveWorkerState;
+    use crate::query::QueryPlan;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn cancelled_drive_query_does_not_mark_drive_snapshot_only() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cancel = AtomicBool::new(true);
+        let mut state = DriveWorkerState {
+            drive: 'Z',
+            sync_dir: temp_dir.path().to_path_buf(),
+            state: None,
+            snapshot_only: None,
+            degraded: None,
+            loading: false,
+            active_jobs: 0,
+        };
+
+        let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
+
+        assert!(result.rows.is_empty());
+        assert!(result.degraded.is_none());
+        assert!(state.snapshot_only.is_none());
+        assert!(state.degraded.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn drive_query_load_failure_without_cancel_reports_degraded() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cancel = AtomicBool::new(false);
+        let mut state = DriveWorkerState {
+            drive: 'Z',
+            sync_dir: temp_dir.path().to_path_buf(),
+            state: None,
+            snapshot_only: None,
+            degraded: None,
+            loading: false,
+            active_jobs: 0,
+        };
+
+        let error = state
+            .query_with_cancel(&QueryPlan::new("music"), &cancel)
+            .expect_err("missing published files should degrade when not cancelled");
+
+        assert!(
+            error
+                .message
+                .contains("Drive Z has no published MFT snapshot")
+        );
+        assert!(!cancel.load(Ordering::Relaxed));
+        Ok(())
+    }
 }
 
 #[allow(

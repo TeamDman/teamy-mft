@@ -22,6 +22,7 @@
 )]
 
 pub mod console;
+pub mod ctrl_c;
 pub mod elevation;
 pub mod event_loop;
 pub mod handle;

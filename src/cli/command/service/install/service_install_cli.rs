@@ -1,7 +1,9 @@
 use crate::machine::config::DEFAULT_SERVICE_NAME;
 use crate::machine::config::MachineConfig;
+use crate::machine::config::machine_config_path;
 use crate::machine::config::machine_root_dir;
 use crate::machine::config::save_machine_config;
+use crate::machine::security::allow_machine_config_reads;
 use crate::machine::security::current_user_sid_string;
 use crate::machine::security::restrict_path_to_owner;
 use crate::machine::service::WindowsServiceState;
@@ -65,6 +67,7 @@ impl ServiceInstallArgs {
         restrict_path_to_owner(&machine_root, &owner_sid)?;
         restrict_path_to_owner(&config.sync_dir, &owner_sid)?;
         save_machine_config(&config)?;
+        allow_machine_config_reads(&machine_root, &machine_config_path())?;
         install_windows_service(&current_exe, &config)?;
         info!("Installed machine daemon at {}", config.sync_dir.display());
         println!(

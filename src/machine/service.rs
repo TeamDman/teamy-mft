@@ -82,7 +82,12 @@ pub fn query_service_state(service_name: &str) -> eyre::Result<WindowsServiceSta
         if text.contains("does not exist") || err.contains("does not exist") {
             return Ok(WindowsServiceState::Missing);
         }
-        return Ok(WindowsServiceState::Missing);
+        eyre::bail!(
+            "Failed querying Windows service {service_name}: exit={:?}; stdout={}; stderr={}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

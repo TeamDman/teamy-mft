@@ -27,6 +27,7 @@ pub trait MachineDaemonRpc {
         request: QueryPlan,
         rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<DaemonLogWireEvent>,
+        cancel: vox::Rx<u8>,
     ) -> Result<CorrelationId, MachineError>;
 
     async fn sync(

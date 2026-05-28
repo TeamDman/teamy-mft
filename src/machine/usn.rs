@@ -10,6 +10,8 @@
 
 use crate::machine::security::encode_wide;
 use eyre::Context;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
@@ -216,11 +218,35 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
         start_usn: u64,
         journal_id: u64,
     ) -> eyre::Result<UsnReadBatch> {
+        self.read_available_since_with_cancel(start_usn, journal_id, None)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if reading or decoding the USN journal fails, or cancellation is requested.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixed journal read buffer length does not fit in a Windows `DWORD`.
+    #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, start_usn))]
+    pub fn read_available_since_with_cancel(
+        &self,
+        start_usn: u64,
+        journal_id: u64,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<UsnReadBatch> {
         let mut next_usn = start_usn;
         let mut events = Vec::new();
         let mut iteration = 0usize;
 
         loop {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                eyre::bail!(
+                    "Cancelled reading USN journal for drive {} from USN {}",
+                    self.drive_letter,
+                    next_usn
+                );
+            }
             let _span = debug_span!(
                 "read_usn_iteration",
                 drive = %self.drive_letter,
@@ -275,7 +301,11 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
                 break;
             }
 
-            parse_records(&buffer[size_of::<u64>()..bytes_returned], &mut events)?;
+            parse_records_with_cancel(
+                &buffer[size_of::<u64>()..bytes_returned],
+                &mut events,
+                cancel,
+            )?;
             next_usn = advanced;
         }
 
@@ -289,9 +319,16 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
     }
 }
 
-fn parse_records(bytes: &[u8], events: &mut Vec<UsnEvent>) -> eyre::Result<()> {
+fn parse_records_with_cancel(
+    bytes: &[u8],
+    events: &mut Vec<UsnEvent>,
+    cancel: Option<&AtomicBool>,
+) -> eyre::Result<()> {
     let mut offset = 0usize;
     while offset + size_of::<u32>() + size_of::<u16>() * 2 <= bytes.len() {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            eyre::bail!("Cancelled parsing USN journal records");
+        }
         let record_length = u32::from_le_bytes(
             bytes[offset..offset + 4]
                 .try_into()

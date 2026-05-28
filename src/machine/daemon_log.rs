@@ -540,6 +540,10 @@ fn is_span_transition_event(event: &DaemonLogEvent) -> bool {
     matches!(event.message.as_str(), "enter_span" | "exit_span")
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "daemon log formatting keeps each emitted field mapping explicit"
+)]
 fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
     let fields = event
         .fields
@@ -751,9 +755,9 @@ pub fn spawn_stderr_log_drain(rx: vox::Rx<DaemonLogWireEvent>) -> std::thread::J
 mod tests {
     use super::CorrelationId;
     use super::DaemonLogEvent;
+    use super::DaemonLogHub;
     use super::DaemonLogLevel;
     use super::DaemonTraceLayer;
-    use super::daemon_log_hub;
     use super::is_noisy_dependency_log_target;
     use super::should_capture_daemon_log_target;
     use super::snapshot_for_correlation;
@@ -762,7 +766,7 @@ mod tests {
 
     #[test]
     fn hub_keeps_only_latest_events() {
-        let hub = daemon_log_hub();
+        let hub = DaemonLogHub::new(1);
         hub.publish(DaemonLogEvent {
             timestamp_unix_ms: 1,
             level: DaemonLogLevel::Info,

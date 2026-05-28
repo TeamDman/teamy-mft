@@ -217,10 +217,7 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
     );
 
     // Because our logging uses uptime as the timestamp, log the current time at startup to provide a reference point for when events occurred.
-    tracing::info!(
-        "Current time: {}",
-        Local::now().format("%Y-%m-%d %H:%M:%S")
-    );
-    
+    tracing::info!("Current time: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+
     Ok(())
 }

@@ -147,8 +147,20 @@ fn print_daemon_runtime_summary(status: &crate::machine::ipc::StatusResponse) {
         status.loaded_drive_letters.len()
     );
     println!(
+        "machine-daemon-loading-drive-count={}",
+        status.loading_drive_letters.len()
+    );
+    println!(
+        "machine-daemon-snapshot-only-drive-count={}",
+        status.snapshot_only_drive_letters.len()
+    );
+    println!(
         "machine-daemon-degraded-drive-count={}",
         status.degraded_drives.len()
+    );
+    println!(
+        "machine-daemon-active-job-count={}",
+        status.active_job_count
     );
     println!(
         "machine-daemon-buffered-log-count={}",
@@ -159,6 +171,9 @@ fn print_daemon_runtime_summary(status: &crate::machine::ipc::StatusResponse) {
             "machine-daemon-drive-{}-degraded={}",
             degraded_drive.drive_letter, degraded_drive.message
         );
+    }
+    for drive_letter in &status.snapshot_only_drive_letters {
+        println!("machine-daemon-drive-{drive_letter}-snapshot-only=true");
     }
 }
 

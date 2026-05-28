@@ -160,6 +160,25 @@ pub fn allow_development_reads(path: &Path) -> eyre::Result<()> {
     Ok(())
 }
 
+/// # Errors
+///
+/// Returns an error if read/traverse grants for the machine config cannot be applied.
+pub fn allow_machine_config_reads(machine_root: &Path, config_path: &Path) -> eyre::Result<()> {
+    let entries = [AclGrant::read_execute(Principal::WellKnown(
+        WinBuiltinUsersSid,
+    ))];
+    for path in [machine_root, config_path] {
+        let current = read_path_security(path)?;
+        apply_acl(path, &entries, current.dacl, false).wrap_err_with(|| {
+            format!(
+                "Failed applying machine config read ACL for {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct AclGrant {
     principal: Principal,

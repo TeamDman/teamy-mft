@@ -226,9 +226,25 @@ pub fn published_drive_paths(sync_dir: &Path, drive_letter: char) -> PublishedDr
 /// Returns an error if the machine config cannot be read or parsed.
 pub fn load_machine_config() -> eyre::Result<Option<MachineConfig>> {
     let path = machine_config_path();
-    if !path.is_file() {
-        debug!(path = %path.display(), "Machine config file is not present");
-        return Ok(None);
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(metadata) => {
+            eyre::bail!(
+                "Machine config path {} exists but is not a file; file_type={:?}",
+                path.display(),
+                metadata.file_type()
+            );
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            debug!(path = %path.display(), "Machine config file is not present");
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(eyre::eyre!(
+                "Failed reading machine config metadata at {}: {error}",
+                path.display()
+            ));
+        }
     }
 
     let config = facet_json::from_str::<MachineConfig>(&fs::read_to_string(&path)?)
