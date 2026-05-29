@@ -1,4 +1,5 @@
 pub use crate::daemon::CorrelationId;
+pub use crate::daemon::CreateUsnJournalRequest;
 pub use crate::daemon::DaemonBuildInfo;
 pub use crate::daemon::DegradedDriveStatus;
 pub use crate::daemon::LogStreamRequest;
@@ -14,6 +15,8 @@ pub use crate::daemon::StatusRequest;
 pub use crate::daemon::StatusResponse;
 pub use crate::daemon::SyncModeDto;
 pub use crate::daemon::SyncRequest;
+pub use crate::daemon::UsnJournalRequest;
+pub use crate::daemon::UsnJournalStatus;
 use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::query::QueryPlan;
@@ -111,6 +114,34 @@ pub fn status(
 ) -> eyre::Result<StatusResponse> {
     with_client(config, "status", move |client| async move {
         client.status(request, logs).await
+    })
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn query_usn_journal(
+    config: &MachineConfig,
+    request: UsnJournalRequest,
+    logs: vox::Tx<DaemonLogWireEvent>,
+) -> eyre::Result<UsnJournalStatus> {
+    with_client(config, "query_usn_journal", move |client| async move {
+        client.query_usn_journal(request, logs).await
+    })
+}
+
+/// # Errors
+///
+/// Returns an error if the daemon transport cannot be reached or the call fails outside
+/// the daemon's structured machine error contract.
+pub fn create_usn_journal(
+    config: &MachineConfig,
+    request: CreateUsnJournalRequest,
+    logs: vox::Tx<DaemonLogWireEvent>,
+) -> eyre::Result<UsnJournalStatus> {
+    with_client(config, "create_usn_journal", move |client| async move {
+        client.create_usn_journal(request, logs).await
     })
 }
 

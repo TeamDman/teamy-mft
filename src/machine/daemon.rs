@@ -1505,6 +1505,65 @@ impl MachineDaemonRpc for MachineDaemonService {
         response
     }
 
+    async fn query_usn_journal(
+        &self,
+        request: crate::machine::ipc::UsnJournalRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
+    ) -> Result<crate::machine::ipc::UsnJournalStatus, MachineError> {
+        let correlation_id = next_correlation_id("query_usn_journal");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            correlation_id = %correlation_id,
+            rpc_method = "query_usn_journal",
+            drive = %request.drive_letter
+        );
+        let response = async move {
+            tracing::info!(drive = %request.drive_letter, "Querying USN journal status");
+            crate::machine::usn::query_journal_status(request.drive_letter)
+                .map_err(|error| MachineError::degraded(error.to_string()))
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
+    async fn create_usn_journal(
+        &self,
+        request: crate::machine::ipc::CreateUsnJournalRequest,
+        logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
+    ) -> Result<crate::machine::ipc::UsnJournalStatus, MachineError> {
+        let correlation_id = next_correlation_id("create_usn_journal");
+        let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
+        let span = tracing::info_span!(
+            "daemon_rpc",
+            correlation_id = %correlation_id,
+            rpc_method = "create_usn_journal",
+            drive = %request.drive_letter,
+            maximum_size = request.maximum_size,
+            allocation_delta = request.allocation_delta
+        );
+        let response = async move {
+            tracing::info!(
+                drive = %request.drive_letter,
+                maximum_size = request.maximum_size,
+                allocation_delta = request.allocation_delta,
+                "Creating USN journal"
+            );
+            crate::machine::usn::create_journal(
+                request.drive_letter,
+                request.maximum_size,
+                request.allocation_delta,
+            )
+            .map_err(|error| MachineError::degraded(error.to_string()))
+        }
+        .instrument(span)
+        .await;
+        stop_log_forwarder(log_forwarder).await;
+        response
+    }
+
     async fn stream_logs(
         &self,
         request: LogStreamRequest,

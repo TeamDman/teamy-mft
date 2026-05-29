@@ -15,18 +15,23 @@ use std::sync::atomic::Ordering;
 use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
+use windows::Win32::Foundation::ERROR_JOURNAL_NOT_ACTIVE;
+use windows::Win32::Foundation::GetLastError;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Storage::FileSystem::CreateFileW;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 use windows::Win32::Storage::FileSystem::FILE_CREATION_DISPOSITION;
 use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_MODE;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::Ioctl::CREATE_USN_JOURNAL_DATA;
+use windows::Win32::System::Ioctl::FSCTL_CREATE_USN_JOURNAL;
 use windows::Win32::System::Ioctl::FSCTL_QUERY_USN_JOURNAL;
 use windows::Win32::System::Ioctl::FSCTL_READ_USN_JOURNAL;
 use windows::Win32::System::Ioctl::READ_USN_JOURNAL_DATA_V1;
@@ -141,12 +146,24 @@ impl VolumeUsnJournal {
     /// Returns an error if the NTFS volume handle cannot be opened.
     #[instrument(level = "debug")]
     pub fn open(drive_letter: char) -> eyre::Result<Self> {
+        Self::open_with_access(drive_letter, FILE_GENERIC_READ.0)
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the NTFS volume handle cannot be opened for journal mutation.
+    #[instrument(level = "debug")]
+    pub fn open_writable(drive_letter: char) -> eyre::Result<Self> {
+        Self::open_with_access(drive_letter, FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0)
+    }
+
+    fn open_with_access(drive_letter: char, desired_access: u32) -> eyre::Result<Self> {
         let volume_path = format!(r"\\.\{drive_letter}:");
         let wide = encode_wide(&volume_path);
         let handle = unsafe {
             CreateFileW(
                 PCWSTR(wide.as_ptr()),
-                FILE_GENERIC_READ.0,
+                desired_access,
                 FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0),
                 None,
                 FILE_CREATION_DISPOSITION(OPEN_EXISTING.0),
@@ -160,7 +177,7 @@ impl VolumeUsnJournal {
         debug!(
             drive = %drive_letter,
             volume_path,
-            desired_access = FILE_GENERIC_READ.0,
+            desired_access,
             "Opened USN journal volume handle"
         );
         Ok(Self {
@@ -171,9 +188,59 @@ impl VolumeUsnJournal {
 
     /// # Errors
     ///
+    /// Returns an error if the USN journal cannot be created or resized.
+    #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, maximum_size, allocation_delta))]
+    pub fn create_journal(&self, maximum_size: u64, allocation_delta: u64) -> eyre::Result<()> {
+        let input = CREATE_USN_JOURNAL_DATA {
+            MaximumSize: maximum_size,
+            AllocationDelta: allocation_delta,
+        };
+        let mut bytes_returned = 0u32;
+        unsafe {
+            DeviceIoControl(
+                *self.handle,
+                FSCTL_CREATE_USN_JOURNAL,
+                Some(std::ptr::from_ref(&input).cast()),
+                size_of::<CREATE_USN_JOURNAL_DATA>() as u32,
+                None,
+                0,
+                Some(&mut bytes_returned),
+                None,
+            )
+        }
+        .wrap_err_with(|| {
+            format!(
+                "Failed creating USN journal for {} with maximum_size={} allocation_delta={}",
+                self.drive_letter, maximum_size, allocation_delta
+            )
+        })?;
+        Ok(())
+    }
+
+    /// # Errors
+    ///
     /// Returns an error if the current journal metadata cannot be queried.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter))]
     pub fn query_cursor(&self) -> eyre::Result<JournalCursor> {
+        self.try_query_cursor_raw().map_err(|error| {
+            let last_error = unsafe { GetLastError() };
+            if last_error == ERROR_JOURNAL_NOT_ACTIVE {
+                eyre::eyre!(
+                    "The volume change journal is not active for drive {}. Run `teamy-mft fsutil usn create-journal {}` to enable it.",
+                    self.drive_letter,
+                    self.drive_letter
+                )
+            } else {
+                eyre::eyre!(
+                    "Failed querying USN journal metadata for {}. \
+This usually means the volume does not expose an NTFS USN journal or the volume handle was opened with incompatible rights: {error}",
+                    self.drive_letter,
+                )
+            }
+        })
+    }
+
+    fn try_query_cursor_raw(&self) -> Result<JournalCursor, windows::core::Error> {
         let mut output = USN_JOURNAL_DATA_V0::default();
         let mut bytes_returned = 0u32;
         unsafe {
@@ -187,14 +254,7 @@ impl VolumeUsnJournal {
                 Some(&mut bytes_returned),
                 None,
             )
-        }
-        .wrap_err_with(|| {
-            format!(
-                "Failed querying USN journal metadata for {}. \
-This usually means the volume does not expose an NTFS USN journal or the volume handle was opened with incompatible rights.",
-                self.drive_letter,
-            )
-        })?;
+        }?;
 
         Ok(JournalCursor {
             journal_id: output.UsnJournalID,
@@ -317,6 +377,56 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
         );
         Ok(UsnReadBatch { next_usn, events })
     }
+}
+
+/// # Errors
+///
+/// Returns an error if the volume handle cannot be opened or journal metadata cannot be queried
+/// for a reason other than an inactive journal.
+pub fn query_journal_status(drive_letter: char) -> eyre::Result<crate::daemon::UsnJournalStatus> {
+    let journal = VolumeUsnJournal::open(drive_letter)?;
+    match journal.try_query_cursor_raw() {
+        Ok(cursor) => Ok(crate::daemon::UsnJournalStatus {
+            drive_letter,
+            active: true,
+            journal_id: Some(cursor.journal_id),
+            first_usn: Some(cursor.first_usn),
+            next_usn: Some(cursor.next_usn),
+            lowest_valid_usn: Some(cursor.lowest_valid_usn),
+            max_usn: Some(cursor.max_usn),
+            inactive_reason: None,
+        }),
+        Err(error) => {
+            if unsafe { GetLastError() } == ERROR_JOURNAL_NOT_ACTIVE {
+                Ok(crate::daemon::UsnJournalStatus {
+                    drive_letter,
+                    active: false,
+                    journal_id: None,
+                    first_usn: None,
+                    next_usn: None,
+                    lowest_valid_usn: None,
+                    max_usn: None,
+                    inactive_reason: Some(String::from("The volume change journal is not active")),
+                })
+            } else {
+                Err(error.into())
+            }
+        }
+    }
+}
+
+/// # Errors
+///
+/// Returns an error if the volume handle cannot be opened, the journal cannot be created,
+/// or the resulting journal metadata cannot be queried.
+pub fn create_journal(
+    drive_letter: char,
+    maximum_size: u64,
+    allocation_delta: u64,
+) -> eyre::Result<crate::daemon::UsnJournalStatus> {
+    let journal = VolumeUsnJournal::open_writable(drive_letter)?;
+    journal.create_journal(maximum_size, allocation_delta)?;
+    query_journal_status(drive_letter)
 }
 
 fn parse_records_with_cancel(

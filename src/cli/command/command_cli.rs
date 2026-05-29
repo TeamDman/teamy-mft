@@ -1,3 +1,4 @@
+use crate::cli::command::fsutil::FsutilArgs;
 use crate::cli::command::ignore::IgnoreArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
@@ -33,6 +34,8 @@ pub enum Command {
     Ignore(IgnoreArgs),
     /// Toggle machine cache ACL protection for development workflows
     Protection(ProtectionArgs),
+    /// Native Windows filesystem utilities used by teamy-mft
+    Fsutil(FsutilArgs),
     /// Show per-drive cache freshness for `.mft` and `.mft_search_index` files
     Status(StatusArgs),
     /// Query indexed file paths (substring match) across cached `.mft_search_index` files
@@ -62,6 +65,7 @@ impl Command {
             Command::ListPaths(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
+            Command::Fsutil(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(),
             Command::Tray(args) => args.invoke(),

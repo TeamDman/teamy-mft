@@ -11,6 +11,8 @@ mod status_request;
 mod status_response;
 mod sync_mode_dto;
 mod sync_request;
+mod usn_journal_request;
+mod usn_journal_status;
 
 pub use build_info::DaemonBuildInfo;
 pub use build_info::PingResponse;
@@ -33,3 +35,6 @@ pub use status_request::StatusRequest;
 pub use status_response::StatusResponse;
 pub use sync_mode_dto::SyncModeDto;
 pub use sync_request::SyncRequest;
+pub use usn_journal_request::CreateUsnJournalRequest;
+pub use usn_journal_request::UsnJournalRequest;
+pub use usn_journal_status::UsnJournalStatus;

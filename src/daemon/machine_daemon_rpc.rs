@@ -1,4 +1,5 @@
 use crate::daemon::CorrelationId;
+use crate::daemon::CreateUsnJournalRequest;
 use crate::daemon::DaemonLogWireEvent;
 use crate::daemon::LogStreamRequest;
 use crate::daemon::MachineError;
@@ -7,6 +8,8 @@ use crate::daemon::QueryResponse;
 use crate::daemon::StatusRequest;
 use crate::daemon::StatusResponse;
 use crate::daemon::SyncRequest;
+use crate::daemon::UsnJournalRequest;
+use crate::daemon::UsnJournalStatus;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 
@@ -41,6 +44,18 @@ pub trait MachineDaemonRpc {
         request: StatusRequest,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<StatusResponse, MachineError>;
+
+    async fn query_usn_journal(
+        &self,
+        request: UsnJournalRequest,
+        logs: vox::Tx<DaemonLogWireEvent>,
+    ) -> Result<UsnJournalStatus, MachineError>;
+
+    async fn create_usn_journal(
+        &self,
+        request: CreateUsnJournalRequest,
+        logs: vox::Tx<DaemonLogWireEvent>,
+    ) -> Result<UsnJournalStatus, MachineError>;
 
     async fn stream_logs(
         &self,

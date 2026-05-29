@@ -3,6 +3,7 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use tracing::debug;
 use tracing::info;
+use tracing::warn;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ServiceIsRunningArgs;
@@ -23,7 +24,11 @@ impl ServiceIsRunningArgs {
             }
             result.is_ok()
         });
-        info!(is_running, "daemon status");
+        if is_running {
+            info!(is_running, "daemon status");
+        } else {
+            warn!(is_running, "daemon status");
+        }
         if is_running {
             println!("Daemon is running.");
         } else {

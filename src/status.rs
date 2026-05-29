@@ -1,7 +1,4 @@
 use crate::windows_utils::storage::DriveLetterPattern;
-use chrono::DateTime;
-use chrono::Utc;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -36,7 +33,7 @@ impl DriveCacheStatus {
     #[must_use]
     pub fn query_ready_age(&self, now: SystemTime) -> Option<Duration> {
         self.query_ready_at()
-            .map(|query_ready_at| age_since(now, query_ready_at))
+            .map(|query_ready_at| now.duration_since(query_ready_at).unwrap_or(Duration::ZERO))
     }
 }
 
@@ -85,8 +82,16 @@ impl TeamyMftStatus {
             .collect::<Vec<_>>();
 
         for drive in &mut drives {
-            drive.mft_modified_at = load_modified_time(&drive.mft_path)?;
-            drive.index_modified_at = load_modified_time(&drive.index_path)?;
+            drive.mft_modified_at = if drive.mft_path.is_file() {
+                Some(std::fs::metadata(&drive.mft_path)?.modified()?)
+            } else {
+                None
+            };
+            drive.index_modified_at = if drive.index_path.is_file() {
+                Some(std::fs::metadata(&drive.index_path)?.modified()?)
+            } else {
+                None
+            };
         }
 
         drives.sort_by_key(|drive| drive.drive_letter);
@@ -124,13 +129,13 @@ impl TeamyMftStatus {
     #[must_use]
     pub fn oldest_query_ready_age(&self, now: SystemTime) -> Option<Duration> {
         self.oldest_query_ready_at()
-            .map(|query_ready_at| age_since(now, query_ready_at))
+            .map(|query_ready_at| now.duration_since(query_ready_at).unwrap_or(Duration::ZERO))
     }
 
     #[must_use]
     pub fn newest_query_ready_age(&self, now: SystemTime) -> Option<Duration> {
         self.newest_query_ready_at()
-            .map(|query_ready_at| age_since(now, query_ready_at))
+            .map(|query_ready_at| now.duration_since(query_ready_at).unwrap_or(Duration::ZERO))
     }
 
     /// # Errors
@@ -151,7 +156,7 @@ impl TeamyMftStatus {
         if !missing_query_ready.is_empty() {
             eyre::bail!(
                 "teamy-mft query cache is incomplete for drives: {}",
-                format_drive_letters(&missing_query_ready)
+                missing_query_ready.iter().collect::<String>()
             );
         }
 
@@ -180,40 +185,6 @@ impl TeamyMftStatus {
             stale_summary
         );
     }
-}
-
-#[must_use]
-pub fn format_optional_system_time(value: Option<SystemTime>) -> String {
-    value.map_or_else(|| "none".to_owned(), format_system_time)
-}
-
-#[must_use]
-pub fn format_optional_duration(value: Option<Duration>) -> String {
-    value.map_or_else(
-        || "none".to_owned(),
-        |duration| humantime::format_duration(duration).to_string(),
-    )
-}
-
-#[must_use]
-pub fn format_system_time(value: SystemTime) -> String {
-    DateTime::<Utc>::from(value).to_rfc3339()
-}
-
-fn age_since(now: SystemTime, then: SystemTime) -> Duration {
-    now.duration_since(then).unwrap_or(Duration::ZERO)
-}
-
-fn load_modified_time(path: &Path) -> eyre::Result<Option<SystemTime>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-
-    Ok(Some(fs::metadata(path)?.modified()?))
-}
-
-fn format_drive_letters(values: &[char]) -> String {
-    values.iter().collect::<String>()
 }
 
 #[cfg(test)]

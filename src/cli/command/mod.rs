@@ -1,3 +1,4 @@
+pub mod fsutil;
 pub mod ignore;
 pub mod install;
 pub mod list_paths;
