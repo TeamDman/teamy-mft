@@ -6,11 +6,11 @@ use crate::daemon::PingResponse;
 use crate::daemon::QueryResponse;
 use crate::daemon::StatusRequest;
 use crate::daemon::StatusResponse;
-use crate::daemon::SyncRequest;
 use crate::daemon::UsnJournalRequest;
 use crate::daemon::UsnJournalStatus;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
+use crate::sync::SyncPlan;
 
 #[vox::service]
 pub trait MachineDaemonRpc {
@@ -34,7 +34,7 @@ pub trait MachineDaemonRpc {
 
     async fn sync(
         &self,
-        request: SyncRequest,
+        request: SyncPlan,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<(), MachineError>;
 

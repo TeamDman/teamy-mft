@@ -1,24 +1,22 @@
-use crate::cli::command::sync::IfExistsOutputBehaviour;
-use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collection;
 use crate::mft::mft_file::MftFile;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::search_index_bytes::SearchIndexBytesMut;
-use arbitrary::Arbitrary;
+use crate::sync::DriveSyncInfo;
+use crate::sync::IfExistsOutputBehaviour;
 use eyre::Context;
 use eyre::bail;
-use facet::Facet;
 use itertools::Itertools;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
 use uom::si::information::byte;
 
-#[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
-pub struct SyncIndexArgs;
+#[derive(Debug)]
+pub struct SyncIndex;
 
-impl SyncIndexArgs {
+impl SyncIndex {
     /// Validate the sync can proceed before any index writes begin.
     ///
     /// # Errors
@@ -61,7 +59,7 @@ impl SyncIndexArgs {
     ///
     /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
     /// resolved, or index files cannot be read, built, or written.
-    pub fn invoke(&self, drive_infos: Vec<DriveSyncInfo>) -> eyre::Result<()> {
+    pub fn invoke(drive_infos: Vec<DriveSyncInfo>) -> eyre::Result<()> {
         info!(
             "Building search indexes for drives: {}",
             drive_infos.iter().map(|info| info.drive_letter).join(", ")
@@ -75,7 +73,7 @@ impl SyncIndexArgs {
                 index_path = %info.index_output_path.display(),
             )
             .entered();
-            self.invoke_for_mft_path(&info)?;
+            Self::invoke_for_mft_path(&info)?;
         }
 
         info!("Index sync stage completed");
@@ -88,11 +86,7 @@ impl SyncIndexArgs {
     /// # Errors
     ///
     /// Returns an error if path conversion or index writing fails.
-    pub fn invoke_for_mft_file(
-        &self,
-        info: &DriveSyncInfo,
-        mft_file: &MftFile,
-    ) -> eyre::Result<()> {
+    pub fn invoke_for_mft_file(info: &DriveSyncInfo, mft_file: &MftFile) -> eyre::Result<()> {
         info!(
             drive_letter = %info.drive_letter,
             mft_path = %info.mft_output_path.display(),
@@ -119,7 +113,7 @@ impl SyncIndexArgs {
         }
     }
 
-    fn invoke_for_mft_path(&self, info: &DriveSyncInfo) -> eyre::Result<()> {
+    fn invoke_for_mft_path(info: &DriveSyncInfo) -> eyre::Result<()> {
         if !info.mft_output_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",
@@ -144,7 +138,7 @@ impl SyncIndexArgs {
             })?
         };
 
-        self.invoke_for_mft_file(info, &mft_file)
+        Self::invoke_for_mft_file(info, &mft_file)
     }
 
     fn build_rows_for_mft_file(

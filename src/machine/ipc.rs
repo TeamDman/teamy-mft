@@ -12,14 +12,14 @@ pub use crate::daemon::PublishedDriveStatus;
 pub use crate::daemon::QueryResponse as RpcQueryResponse;
 pub use crate::daemon::StatusRequest;
 pub use crate::daemon::StatusResponse;
-pub use crate::daemon::SyncModeDto;
-pub use crate::daemon::SyncRequest;
 pub use crate::daemon::UsnJournalRequest;
 pub use crate::daemon::UsnJournalStatus;
 use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
+pub use crate::sync::SyncMode;
+pub use crate::sync::SyncPlan;
 use std::cmp::Ordering;
 use std::time::Duration;
 use tracing::Instrument;
@@ -94,7 +94,7 @@ pub fn query_stream(
 /// the daemon's structured machine error contract.
 pub fn sync(
     config: &MachineConfig,
-    request: SyncRequest,
+    request: SyncPlan,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<()> {
     with_client(config, "sync", move |client| async move {

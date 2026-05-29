@@ -816,14 +816,14 @@ mod tests {
     use super::diff_overlay_rows;
     use super::join_windows_path;
     use super::validate_active_cursor;
-    use crate::cli::command::sync::IfExistsOutputBehaviour;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
-    use crate::machine::ipc::SyncModeDto;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexPathRow;
+    use crate::sync::IfExistsOutputBehaviour;
+    use crate::sync::SyncMode;
     use rustc_hash::FxHashMap;
     use std::time::Duration;
 
@@ -999,7 +999,7 @@ mod tests {
         sync_machine_cache(
             cache_dir.path(),
             &[drive_letter],
-            SyncModeDto::Both,
+            SyncMode::Both,
             IfExistsOutputBehaviour::Overwrite,
         )?;
 

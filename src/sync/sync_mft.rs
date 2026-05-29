@@ -1,14 +1,12 @@
-use crate::cli::command::sync::IfExistsOutputBehaviour;
-use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
 use crate::mft::mft_physical_read::PhysicalMftReadResult;
 use crate::mft::mft_physical_read::read_physical_mft;
+use crate::sync::DriveSyncInfo;
+use crate::sync::IfExistsOutputBehaviour;
 use crate::windows_utils::elevation::enable_backup_privileges;
 use crate::windows_utils::elevation::ensure_elevated;
-use arbitrary::Arbitrary;
 use async_stream::try_stream;
 use eyre::Context;
 use eyre::bail;
-use facet::Facet;
 use futures::StreamExt as _;
 use futures::stream;
 use itertools::Itertools;
@@ -17,10 +15,10 @@ use tracing::debug;
 use tracing::info;
 use tracing::info_span;
 
-#[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
-pub struct SyncMftArgs;
+#[derive(Debug)]
+pub struct SyncMft;
 
-impl SyncMftArgs {
+impl SyncMft {
     /// Validate the sync can proceed before any MFT reads begin.
     ///
     /// # Errors

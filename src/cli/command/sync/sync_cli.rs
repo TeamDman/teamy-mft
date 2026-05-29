@@ -1,34 +1,12 @@
-use crate::cli::command::sync::IfExistsOutputBehaviour;
-use crate::cli::command::sync::drive_sync_info::DriveSyncInfo;
-use crate::cli::command::sync::index::SyncIndexArgs;
-use crate::cli::command::sync::mft::SyncMftArgs;
-use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
-use crate::machine::ipc::SyncModeDto;
-use crate::windows_utils::storage::DriveLetterPattern;
+use crate::sync::SyncPlan;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use futures::TryStreamExt;
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use tokio_stream::StreamExt;
-use tracing::Instrument;
-use tracing::Span;
-use tracing::info_span;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 pub struct SyncArgs {
-    /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D")
-    #[facet(args::named, default)]
-    pub drive_letter_pattern: DriveLetterPattern,
-
-    /// How to handle existing output files
-    #[facet(args::named, default)]
-    pub if_exists: IfExistsOutputBehaviour,
-
-    /// Sync stage to run
-    #[facet(args::subcommand)]
-    pub command: Option<SyncCommand>,
+    #[facet(flatten)]
+    pub plan: SyncPlan,
 
     /// Bypass the machine daemon and run sync work directly in this process
     #[facet(args::named, default)]
@@ -43,214 +21,32 @@ impl SyncArgs {
     /// Returns an error if the machine daemon is not installed, cannot be started,
     /// or rejects the sync request.
     pub fn invoke(self) -> eyre::Result<()> {
-        let drive_letters = self.drive_letter_pattern.clone().into_drive_letters()?;
+        let plan = self.plan;
         if self.no_daemon {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
-            let drive_infos = resolve_drive_infos_in_dir_for_letters(&sync_dir, drive_letters)?;
-            let command = self.command.unwrap_or_default();
+            let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
+            let drive_infos = crate::sync::resolve_drive_infos_in_dir_for_letters(
+                &sync_dir,
+                drive_letters.iter().copied(),
+            )?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(command.invoke(drive_infos, &self.if_exists))?;
+            runtime.block_on(crate::sync::execute_sync_mode(
+                plan.mode(),
+                drive_infos,
+                &plan.if_exists,
+            ))?;
         } else {
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-            let request = crate::machine::ipc::SyncRequest {
-                drive_letters,
-                mode: SyncModeDto::from(self.command.unwrap_or_default()),
-                if_exists: self.if_exists,
-            };
             crate::machine::ipc::ensure_daemon_ready(&config)?;
             let (logs_tx, logs_rx) =
                 vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
             let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-            crate::machine::ipc::sync(&config, request, logs_tx)?;
+            crate::machine::ipc::sync(&config, plan, logs_tx)?;
             let _ = log_drain.join();
         }
 
         Ok(())
-    }
-}
-
-#[derive(Facet, Arbitrary, PartialEq, Debug, Clone, Default)]
-#[repr(u8)]
-#[facet(rename_all = "kebab-case")]
-pub enum SyncCommand {
-    /// Sync raw .mft snapshots
-    Mft(SyncMftArgs),
-    /// Build `.mft_search_index` files from snapshots
-    Index(SyncIndexArgs),
-    /// Sync both stages sequentially, with preflight checks and error handling for both stages
-    #[default]
-    Both,
-}
-
-impl From<SyncCommand> for SyncModeDto {
-    fn from(value: SyncCommand) -> Self {
-        match value {
-            SyncCommand::Mft(_) => Self::Mft,
-            SyncCommand::Index(_) => Self::Index,
-            SyncCommand::Both => Self::Both,
-        }
-    }
-}
-
-impl SyncCommand {
-    /// # Errors
-    ///
-    /// Returns an error if the sync fails, likely caused by IO problems.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "This command coordinates multiple sync paths and error-handling branches."
-    )]
-    pub async fn invoke(
-        &self,
-        drive_infos: Vec<DriveSyncInfo>,
-        if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<()> {
-        match self {
-            Self::Mft(SyncMftArgs) => {
-                let drive_infos = SyncMftArgs::invoke_preflight(drive_infos, if_exists)?;
-                let mft_span = info_span!("dispatch mft sync work");
-                let mft_data = {
-                    let _guard = mft_span.enter();
-                    SyncMftArgs::invoke(drive_infos)?
-                };
-                tokio::pin!(mft_data);
-                tracing::debug!("Collecting MFT sync results");
-                while let Some(result) = async { mft_data.next().await }
-                    .instrument(mft_span.clone())
-                    .await
-                {
-                    let (drive_info, physical_mft) = result?;
-                    {
-                        let _guard = info_span!(
-                            "drop_physical_mft_read_result",
-                            drive = %drive_info.drive_letter,
-                            physical_segments = physical_mft.physical_read_results.entries.len(),
-                            logical_segments = physical_mft.logical_read_plan.segments.len(),
-                        )
-                        .entered();
-                        drop(physical_mft);
-                    }
-                }
-                Ok(())
-            }
-            Self::Index(SyncIndexArgs) => {
-                let drive_infos = SyncIndexArgs::invoke_preflight(drive_infos, if_exists)?;
-                SyncIndexArgs.invoke(drive_infos)
-            }
-            Self::Both => {
-                // The two stages have different skip/overwrite/abort filtering rules, so
-                // they must each run their own preflight over the same initial drive set.
-                let mft_drive_infos =
-                    SyncMftArgs::invoke_preflight(drive_infos.clone(), if_exists)?;
-                let index_drive_infos = SyncIndexArgs::invoke_preflight(drive_infos, if_exists)?;
-
-                // Drives present in both sets can build the index directly from the fresh
-                // in-memory `PhysicalMftReadResult` produced by the MFT stage, avoiding a
-                // write-then-read roundtrip through the cached `.mft` file.
-                let mft_drive_letters = mft_drive_infos
-                    .iter()
-                    .map(|info| info.drive_letter)
-                    .collect::<BTreeSet<_>>();
-                let in_memory_index_drive_letters = Arc::new(
-                    index_drive_infos
-                        .iter()
-                        .map(|info| info.drive_letter)
-                        .filter(|drive_letter| mft_drive_letters.contains(drive_letter))
-                        .collect::<BTreeSet<_>>(),
-                );
-
-                // Any drive that still needs indexing but is not part of the current MFT sync
-                // cannot use the in-memory fast path. This happens, for example, when the MFT
-                // file already exists and MFT sync is skipped, but the search index still needs
-                // to be built from the cached `.mft` on disk.
-                let fallback_index_drive_infos = index_drive_infos
-                    .into_iter()
-                    .filter(|info| !mft_drive_letters.contains(&info.drive_letter))
-                    .collect::<Vec<_>>();
-
-                let mft_span = info_span!("dispatch mft sync work");
-                let mft_data = {
-                    let _guard = mft_span.enter();
-                    SyncMftArgs::invoke(mft_drive_infos)?
-                };
-
-                let in_memory_index_drive_letters_for_stream =
-                    Arc::clone(&in_memory_index_drive_letters);
-                let in_memory_indexing = async move {
-                    // Consume completed MFT reads as they arrive and fan index construction out
-                    // concurrently so slow drives do not block faster ones.
-                    tracing::debug!(
-                        drive_count = in_memory_index_drive_letters_for_stream.len(),
-                        "Collecting MFT sync and in-memory index results"
-                    );
-                    mft_data
-                        .try_for_each_concurrent(None, move |(drive_info, physical_mft)| {
-                            let in_memory_index_drive_letters =
-                                Arc::clone(&in_memory_index_drive_letters_for_stream);
-                            async move {
-                                if !in_memory_index_drive_letters.contains(&drive_info.drive_letter)
-                                {
-                                    return Ok(());
-                                }
-
-                                let parent_span = Span::current();
-                                tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                                    let _parent_guard = parent_span.enter();
-                                    let _guard = info_span!(
-                                        "build_in_memory_search_index_for_drive",
-                                        drive = %drive_info.drive_letter,
-                                        index_path = %drive_info.index_output_path.display(),
-                                    )
-                                    .entered();
-                                    let mft_file = physical_mft.to_mft_file()?;
-                                    SyncIndexArgs.invoke_for_mft_file(&drive_info, &mft_file)?;
-                                    {
-                                        let _guard = info_span!(
-                                            "drop_in_memory_index_inputs",
-                                            drive = %drive_info.drive_letter,
-                                            physical_segments = physical_mft.physical_read_results.entries.len(),
-                                            logical_segments = physical_mft.logical_read_plan.segments.len(),
-                                            mft_entries = mft_file.record_count(),
-                                        )
-                                        .entered();
-                                        drop(mft_file);
-                                        drop(physical_mft);
-                                    };
-                                    Ok(())
-                                })
-                                .await
-                                .map_err(|error| {
-                                    eyre::eyre!("Failed joining in-memory index task: {error}")
-                                })??;
-
-                                Ok(())
-                            }
-                        })
-                        .await
-                }
-                .instrument(mft_span);
-
-                let disk_indexing = async move {
-                    // Run the disk-backed index path in parallel with the in-memory path so
-                    // drives skipped by the MFT stage do not have to wait for fresh MFT reads.
-                    if fallback_index_drive_infos.is_empty() {
-                        return Ok(());
-                    }
-
-                    let _guard = info_span!(
-                        "build_disk_backed_search_indexes",
-                        drive_count = fallback_index_drive_infos.len(),
-                    )
-                    .entered();
-                    SyncIndexArgs.invoke(fallback_index_drive_infos)
-                };
-
-                tokio::try_join!(in_memory_indexing, disk_indexing)?;
-
-                Ok(())
-            }
-        }
     }
 }

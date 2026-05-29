@@ -1,7 +1,3 @@
-use crate::cli::command::sync::IfExistsOutputBehaviour;
-use crate::cli::command::sync::SyncCommand;
-use crate::cli::command::sync::index::SyncIndexArgs;
-use crate::cli::command::sync::resolve_drive_infos_in_dir_for_letters;
 use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::current_unix_ms;
@@ -21,8 +17,6 @@ use crate::machine::ipc::PingResponse;
 use crate::machine::ipc::RpcQueryResponse;
 use crate::machine::ipc::StatusRequest;
 use crate::machine::ipc::StatusResponse;
-use crate::machine::ipc::SyncModeDto;
-use crate::machine::ipc::SyncRequest;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournalHandle;
@@ -33,6 +27,11 @@ use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::visit_drive_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
+use crate::sync::IfExistsOutputBehaviour;
+use crate::sync::SyncMode;
+use crate::sync::SyncPlan;
+use crate::sync::execute_sync_mode;
+use crate::sync::resolve_drive_infos_in_dir_for_letters;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use rustc_hash::FxHashMap;
@@ -163,7 +162,7 @@ struct DriveWorker {
 
 enum DaemonWorkerCommand {
     Sync {
-        request: SyncRequest,
+        request: SyncPlan,
         correlation_id: CorrelationId,
         response: oneshot::Sender<Result<(), MachineError>>,
     },
@@ -603,7 +602,7 @@ impl DaemonWorker {
 
     async fn sync(
         &self,
-        request: SyncRequest,
+        request: SyncPlan,
         correlation_id: CorrelationId,
     ) -> Result<(), MachineError> {
         let (response, rx) = oneshot::channel();
@@ -780,8 +779,18 @@ fn run_daemon_worker(
             }) => {
                 state.active_jobs += 1;
                 publish_worker_status(state, status);
+                let drive_letters = match request.drive_letter_pattern.clone().into_drive_letters()
+                {
+                    Ok(drive_letters) => drive_letters,
+                    Err(error) => {
+                        state.active_jobs = state.active_jobs.saturating_sub(1);
+                        publish_worker_status(state, status);
+                        let _ = response.send(Err(MachineError::degraded(error.to_string())));
+                        continue;
+                    }
+                };
                 if let Ok(mut workers) = drive_workers.lock() {
-                    for drive in &request.drive_letters {
+                    for drive in &drive_letters {
                         if let Some(worker) = workers.remove(drive) {
                             worker.stop();
                         }
@@ -898,7 +907,7 @@ fn publish_worker_status(
 
 fn run_daemon_worker_sync(
     state: &mut DaemonRuntimeState,
-    request: SyncRequest,
+    request: SyncPlan,
 ) -> Result<(), MachineError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -995,26 +1004,28 @@ impl DaemonRuntimeState {
         }
     }
 
-    async fn sync(&mut self, request: SyncRequest) -> Result<(), MachineError> {
+    async fn sync(&mut self, request: SyncPlan) -> Result<(), MachineError> {
+        let drive_letters = request
+            .drive_letter_pattern
+            .clone()
+            .into_drive_letters()
+            .map_err(|error| MachineError::degraded(error.to_string()))?;
+        let mode = request.mode();
         self.flush_dirty_drives();
         info!(
-            drives = ?request.drive_letters,
-            mode = ?request.mode,
+            drives = ?drive_letters,
+            mode = ?mode,
             if_exists = ?request.if_exists,
             "daemon sync request starting"
         );
         crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
-        repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &request.drive_letters)
+        repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
-        let sync_result = sync_machine_cache_async(
-            &self.sync_dir,
-            &request.drive_letters,
-            request.mode,
-            request.if_exists,
-        )
-        .await
-        .map_err(|error| MachineError::degraded(error.to_string()))?;
+        let sync_result =
+            sync_machine_cache_async(&self.sync_dir, &drive_letters, mode, request.if_exists)
+                .await
+                .map_err(|error| MachineError::degraded(error.to_string()))?;
 
         debug!(
             synced_drives = ?sync_result.synced_drives,
@@ -1023,7 +1034,7 @@ impl DaemonRuntimeState {
             "Machine-managed sync completed"
         );
 
-        for &drive in &request.drive_letters {
+        for &drive in &drive_letters {
             self.drives.remove(&drive);
             self.degraded.remove(&drive);
         }
@@ -1389,12 +1400,18 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn sync(
         &self,
-        request: SyncRequest,
+        request: SyncPlan,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<(), MachineError> {
         let correlation_id = next_correlation_id("sync");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
-        let drive_count = request.drive_letters.len();
+        let drive_count = request
+            .drive_letter_pattern
+            .clone()
+            .into_drive_letters()
+            .map_err(|error| MachineError::degraded(error.to_string()))?
+            .len();
+        let mode = request.mode();
         let worker = self.worker.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -1404,7 +1421,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         let response = async move {
             tracing::info!(
                 drive_count,
-                mode = ?request.mode,
+                mode = ?mode,
                 if_exists = ?request.if_exists,
                 "Starting daemon sync"
             );
@@ -1970,7 +1987,7 @@ fn machine_error_from_panic(
 pub fn sync_machine_cache(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
-    mode: SyncModeDto,
+    mode: SyncMode,
     if_exists: IfExistsOutputBehaviour,
 ) -> eyre::Result<MachineCacheSyncResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1987,16 +2004,16 @@ pub fn sync_machine_cache(
 async fn sync_machine_cache_async(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
-    mode: SyncModeDto,
+    mode: SyncMode,
     if_exists: IfExistsOutputBehaviour,
 ) -> eyre::Result<MachineCacheSyncResult> {
     std::fs::create_dir_all(sync_dir)?;
-    let effective_mode = if matches!(mode, SyncModeDto::Mft) {
+    let effective_mode = if matches!(mode, SyncMode::Mft) {
         info!(
             drives = ?drive_letters,
             "Machine-managed MFT sync upgrades to full sync so published query state stays coherent"
         );
-        SyncModeDto::Both
+        SyncMode::Both
     } else {
         mode
     };
@@ -2004,12 +2021,7 @@ async fn sync_machine_cache_async(
         collect_supported_drives_for_machine_sync(drive_letters, effective_mode);
     let drive_infos =
         resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
-    let sync_command = match effective_mode {
-        SyncModeDto::Index => SyncCommand::Index(SyncIndexArgs),
-        SyncModeDto::Both => SyncCommand::Both,
-        SyncModeDto::Mft => unreachable!("effective mode normalizes Mft to Both"),
-    };
-    sync_command.invoke(drive_infos.clone(), &if_exists).await?;
+    execute_sync_mode(effective_mode, drive_infos.clone(), &if_exists).await?;
 
     for info in drive_infos {
         let paths = published_drive_paths(sync_dir, info.drive_letter);
@@ -2021,7 +2033,7 @@ async fn sync_machine_cache_async(
             .write_to_path(&paths.overlay_index_path)?;
         }
         match effective_mode {
-            SyncModeDto::Index => {
+            SyncMode::Index => {
                 if load_checkpoint(&paths.checkpoint_path)?.is_none() {
                     let checkpoint = PublishedCheckpoint {
                         published_at_unix_ms: current_unix_ms(),
@@ -2030,7 +2042,7 @@ async fn sync_machine_cache_async(
                     save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
                 }
             }
-            SyncModeDto::Both => {
+            SyncMode::Both => {
                 let cursor = snapshot_cursors
                     .as_ref()
                     .and_then(|cursors| cursors.get(&info.drive_letter))
@@ -2054,7 +2066,7 @@ async fn sync_machine_cache_async(
                 };
                 save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
             }
-            SyncModeDto::Mft => unreachable!("machine sync Mft mode is normalized to Both"),
+            SyncMode::Mft => unreachable!("machine sync Mft mode is normalized to Both"),
         }
     }
 
@@ -2067,9 +2079,9 @@ async fn sync_machine_cache_async(
 
 fn collect_supported_drives_for_machine_sync(
     drive_letters: &[char],
-    mode: SyncModeDto,
+    mode: SyncMode,
 ) -> SupportedDriveSyncOutcome {
-    if !matches!(mode, SyncModeDto::Both) {
+    if !matches!(mode, SyncMode::Both) {
         return (drive_letters.to_vec(), None, Vec::new());
     }
 
