@@ -49,20 +49,22 @@ impl SyncArgs {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            return runtime.block_on(command.invoke(drive_infos, &self.if_exists));
+            runtime.block_on(command.invoke(drive_infos, &self.if_exists))?;
+        } else {
+            let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+            let request = crate::machine::ipc::SyncRequest {
+                drive_letters,
+                mode: SyncModeDto::from(self.command.unwrap_or_default()),
+                if_exists: self.if_exists,
+            };
+            crate::machine::ipc::ensure_daemon_ready(&config)?;
+            let (logs_tx, logs_rx) =
+                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
+            let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+            crate::machine::ipc::sync(&config, request, logs_tx)?;
+            let _ = log_drain.join();
         }
 
-        let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-        let request = crate::machine::ipc::SyncRequest {
-            drive_letters,
-            mode: SyncModeDto::from(self.command.unwrap_or_default()),
-            if_exists: self.if_exists,
-        };
-        crate::machine::ipc::ensure_daemon_ready(&config)?;
-        let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-        let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-        crate::machine::ipc::sync(&config, request, logs_tx)?;
-        let _ = log_drain.join();
         Ok(())
     }
 }
