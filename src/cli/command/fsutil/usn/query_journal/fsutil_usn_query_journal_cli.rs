@@ -9,7 +9,7 @@ use crate::windows_utils::storage::DriveLetterPattern;
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct FsutilUsnQueryJournalArgs {
     /// Drive letter to inspect
-    #[facet(args::positional)]
+    #[facet(args::positional, default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
     /// Bypass the machine daemon and query the volume from this process
