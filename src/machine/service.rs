@@ -11,6 +11,15 @@ pub enum WindowsServiceState {
     Unknown(u32),
 }
 
+#[must_use]
+pub fn is_development_target_exe(path: &Path) -> bool {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair[0] == "target" && (pair[1] == "debug" || pair[1] == "release"))
+}
+
 /// # Errors
 ///
 /// Returns an error if `sc.exe` cannot be launched or the service cannot be registered.
@@ -241,4 +250,30 @@ fn run_sc_command(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_development_target_exe;
+    use std::path::Path;
+
+    #[test]
+    fn detects_cargo_debug_and_release_exes() {
+        assert!(is_development_target_exe(Path::new(
+            r"G:\repo\target\debug\teamy-mft.exe"
+        )));
+        assert!(is_development_target_exe(Path::new(
+            r"G:\repo\target\release\teamy-mft.exe"
+        )));
+    }
+
+    #[test]
+    fn rejects_non_cargo_target_paths() {
+        assert!(!is_development_target_exe(Path::new(
+            r"C:\Program Files\teamy-mft\teamy-mft.exe"
+        )));
+        assert!(!is_development_target_exe(Path::new(
+            r"G:\repo\target\profile\teamy-mft.exe"
+        )));
+    }
 }

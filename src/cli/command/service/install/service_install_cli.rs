@@ -88,14 +88,7 @@ fn resolve_sync_dir(path: String) -> eyre::Result<std::path::PathBuf> {
 }
 
 fn reject_development_target_exe(path: &std::path::Path) -> eyre::Result<()> {
-    let components = path
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let is_cargo_target_build = components
-        .windows(2)
-        .any(|pair| pair[0] == "target" && (pair[1] == "debug" || pair[1] == "release"));
-    if is_cargo_target_build {
+    if crate::machine::service::is_development_target_exe(path) {
         eyre::bail!(
             "Refusing to install the machine service from a Cargo build output path: {}. \
 Build and invoke the real binary instead, for example via the repo's install.ps1 workflow.",

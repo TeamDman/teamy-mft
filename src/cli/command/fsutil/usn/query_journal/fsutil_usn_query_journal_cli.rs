@@ -1,10 +1,8 @@
-use std::borrow::Cow;
-
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-
-use crate::windows_utils::storage::DriveLetterPattern;
+use std::borrow::Cow;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct FsutilUsnQueryJournalArgs {

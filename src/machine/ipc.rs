@@ -196,6 +196,14 @@ pub fn ensure_daemon_ready(config: &MachineConfig) -> eyre::Result<ReadyDaemon> 
     let mut restarted = false;
 
     if should_restart_for_local_build(&ping) {
+        let current_exe = std::env::current_exe()?;
+        if crate::machine::service::is_development_target_exe(&current_exe) {
+            eyre::bail!(
+                "Refusing to restart the machine daemon from a Cargo build output path: {}. \
+Use the repo's .\\install.ps1 workflow to update the installed daemon binary.",
+                current_exe.display()
+            );
+        }
         tracing::warn!(
             daemon_app_version = %ping.build.app_version,
             daemon_git_revision = %ping.build.git_revision,
