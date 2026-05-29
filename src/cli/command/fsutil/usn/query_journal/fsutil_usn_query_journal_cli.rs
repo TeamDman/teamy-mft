@@ -1,4 +1,4 @@
-use crate::windows_utils::storage::DriveLetterPattern;
+use crate::windows_utils::{elevation::ensure_elevated, storage::DriveLetterPattern};
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -13,6 +13,31 @@ pub struct FsutilUsnQueryJournalArgs {
     /// Bypass the machine daemon and query the volume from this process
     #[facet(args::named, default)]
     pub no_daemon: bool,
+
+    /// Filter drives by USN journal active state
+    #[facet(args::named, default)]
+    pub filter: FsutilUsnQueryJournalFilter,
+}
+
+#[derive(Default, Facet, Arbitrary, Clone, Copy, PartialEq, Eq, Debug, strum::Display)]
+#[repr(u8)]
+#[strum(serialize_all = "kebab-case")]
+#[facet(rename_all = "kebab-case")]
+pub enum FsutilUsnQueryJournalFilter {
+    #[default]
+    None,
+    Active,
+    Inactive,
+}
+
+impl FsutilUsnQueryJournalFilter {
+    fn matches(self, status: &crate::machine::ipc::UsnJournalStatus) -> bool {
+        match self {
+            Self::None => true,
+            Self::Active => status.active,
+            Self::Inactive => !status.active,
+        }
+    }
 }
 
 impl FsutilUsnQueryJournalArgs {
@@ -20,15 +45,15 @@ impl FsutilUsnQueryJournalArgs {
     ///
     /// Returns an error if the journal query fails.
     pub fn invoke(self) -> eyre::Result<()> {
+        let filter = self.filter;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         if self.no_daemon {
-            if !crate::windows_utils::elevation::is_elevated() {
-                eyre::bail!(
-                    "--no-daemon requires an elevated process. Run from an Administrator shell or omit --no-daemon to send the work to the elevated teamy-mft daemon."
-                );
-            }
+            ensure_elevated()?;
             for drive_letter in drive_letters {
                 let status = crate::machine::usn::query_journal_status(drive_letter)?;
+                if !filter.matches(&status) {
+                    continue;
+                }
                 print_usn_journal_status(&status);
             }
         } else {
@@ -44,6 +69,9 @@ impl FsutilUsnQueryJournalArgs {
                     logs_tx,
                 )?;
                 let _ = log_drain.join();
+                if !filter.matches(&status) {
+                    continue;
+                }
                 print_usn_journal_status(&status);
             }
         }
@@ -52,6 +80,7 @@ impl FsutilUsnQueryJournalArgs {
 }
 
 fn print_usn_journal_status(status: &crate::machine::ipc::UsnJournalStatus) {
+    println!("==============================");
     println!("usn-drive-letter={}", status.drive_letter);
     println!("usn-journal-active={}", status.active);
     println!(
