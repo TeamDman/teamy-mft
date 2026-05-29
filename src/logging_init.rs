@@ -5,9 +5,13 @@ use eyre::bail;
 use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::time::Instant;
 use tracing::Event;
 use tracing::debug;
+use tracing::field::Field;
+use tracing::field::Visit;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Registry;
 use tracing_subscriber::filter::FilterFn;
@@ -25,6 +29,71 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 struct SourceAwareEventFormat<E> {
     inner: E,
+}
+
+static LOG_START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+#[derive(Debug, Default)]
+struct DaemonRemotePrettyFields {
+    message: Option<String>,
+    target: Option<String>,
+    file: Option<String>,
+    line: Option<String>,
+    spans: Option<String>,
+    rpc_method: Option<String>,
+    correlation_id: Option<String>,
+    fields: Option<String>,
+}
+
+impl DaemonRemotePrettyFields {
+    fn record_rendered(&mut self, field: &Field, rendered: &str) {
+        let value = rendered.trim_matches('"').to_string();
+        match field.name() {
+            "message" => self.message = Some(value),
+            "daemon_target" => self.target = Some(value),
+            "daemon_file" => self.file = Some(value),
+            "daemon_line" => self.line = Some(value),
+            "daemon_spans" => self.spans = Some(value),
+            "rpc_method" => self.rpc_method = Some(value),
+            "correlation_id" => self.correlation_id = Some(value),
+            "daemon_fields" => self.fields = Some(value),
+            _ => {}
+        }
+    }
+}
+
+impl Visit for DaemonRemotePrettyFields {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.record_rendered(field, &format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.record_rendered(field, value);
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_rendered(field, &value.to_string());
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_rendered(field, &value.to_string());
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_rendered(field, &value.to_string());
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        self.record_rendered(field, &value.to_string());
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        self.record_rendered(field, &value.to_string());
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        self.record_rendered(field, &value.to_string());
+    }
 }
 
 #[cfg(all(feature = "tracy", not(test)))]
@@ -87,8 +156,68 @@ where
             }
         };
         writer.write_str(&source)?;
+        if event.metadata().target() == crate::machine::daemon_log::DAEMON_REMOTE_TARGET {
+            return format_daemon_remote_event(&mut writer, event);
+        }
         self.inner.format_event(ctx, writer, event)
     }
+}
+
+fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt::Result {
+    let mut fields = DaemonRemotePrettyFields::default();
+    event.record(&mut fields);
+
+    let elapsed = LOG_START.elapsed().as_secs_f64();
+    let level = event.metadata().level().to_string();
+    let target = fields
+        .target
+        .as_deref()
+        .unwrap_or_else(|| event.metadata().target());
+    let message = fields
+        .message
+        .as_deref()
+        .unwrap_or_else(|| event.metadata().name());
+
+    write!(writer, "{elapsed:>16.9}s  {level} {target}: {message}")?;
+    if let Some(event_fields) = fields.fields.as_deref().filter(|fields| !fields.is_empty()) {
+        write!(writer, ", {event_fields}")?;
+    }
+
+    match (
+        fields.file.as_deref().filter(|file| *file != "unknown"),
+        fields.line.as_deref().filter(|line| *line != "unknown"),
+    ) {
+        (Some(file), Some(line)) => write!(writer, "\n    at {file}:{line}")?,
+        (Some(file), None) => write!(writer, "\n    at {file}")?,
+        _ => {}
+    }
+
+    if let Some(spans) = fields.spans.as_deref().filter(|spans| !spans.is_empty()) {
+        write!(writer, "\n    in {spans}")?;
+        let method = fields
+            .rpc_method
+            .as_deref()
+            .filter(|method| *method != "global");
+        let correlation_id = fields
+            .correlation_id
+            .as_deref()
+            .filter(|correlation_id| *correlation_id != "global");
+        match (method, correlation_id) {
+            (Some(method), Some(correlation_id)) => {
+                write!(
+                    writer,
+                    " with rpc_method=\"{method}\", correlation_id={correlation_id}"
+                )?;
+            }
+            (Some(method), None) => write!(writer, " with rpc_method=\"{method}\"")?,
+            (None, Some(correlation_id)) => {
+                write!(writer, " with correlation_id={correlation_id}")?
+            }
+            (None, None) => {}
+        }
+    }
+
+    writeln!(writer)
 }
 
 fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
@@ -139,6 +268,8 @@ fn tracy_log_filter() -> eyre::Result<EnvFilter> {
 ///
 /// This function may panic if locking or cloning the log file handle fails.
 pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
+    LazyLock::force(&LOG_START);
+
     let subscriber = Registry::default();
 
     let stderr_layer = tracing_subscriber::fmt::layer()
