@@ -2,6 +2,7 @@ use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use std::borrow::Cow;
 use std::time::SystemTime;
 
 /// Show freshness information for cached `.mft` and `.mft_search_index` files.
@@ -252,7 +253,13 @@ fn print_machine_summary(
     println!("machine-managed={}", machine_status.config.is_some());
     println!(
         "machine-service-state={}",
-        format_service_state(machine_status.service_state)
+        match machine_status.service_state {
+            crate::machine::service::WindowsServiceState::Missing => "missing",
+            crate::machine::service::WindowsServiceState::Stopped => "stopped",
+            crate::machine::service::WindowsServiceState::StartPending => "start-pending",
+            crate::machine::service::WindowsServiceState::Running => "running",
+            crate::machine::service::WindowsServiceState::Unknown(_) => "unknown",
+        }
     );
     if verbose {
         println!(
@@ -301,22 +308,20 @@ fn print_machine_summary(
             println!(
                 "machine-drive-{}-snapshot-usn={}",
                 drive.drive_letter,
-                format_optional_u64(
-                    drive
-                        .checkpoint
-                        .as_ref()
-                        .and_then(|checkpoint| checkpoint.snapshot_usn)
-                )
+                drive
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.snapshot_usn)
+                    .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
             );
             println!(
                 "machine-drive-{}-last-usn={}",
                 drive.drive_letter,
-                format_optional_u64(
-                    drive
-                        .checkpoint
-                        .as_ref()
-                        .and_then(|checkpoint| checkpoint.last_usn)
-                )
+                drive
+                    .checkpoint
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.last_usn)
+                    .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
             );
             if let Some(warning) = &drive.warning {
                 println!("machine-drive-{}-warning={warning}", drive.drive_letter);
@@ -330,7 +335,12 @@ fn print_machine_summary(
                 println!(
                     "machine-drive-{}-mft-modified-at={}",
                     drive.drive_letter,
-                    crate::status::format_optional_system_time(drive.mft_modified_at)
+                    drive.mft_modified_at.map_or_else(
+                        || Cow::from("none"),
+                        |value| Cow::from(
+                            chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339()
+                        )
+                    )
                 );
                 println!(
                     "machine-drive-{}-base-index-path={}",
@@ -340,7 +350,12 @@ fn print_machine_summary(
                 println!(
                     "machine-drive-{}-base-index-modified-at={}",
                     drive.drive_letter,
-                    crate::status::format_optional_system_time(drive.base_index_modified_at)
+                    drive.base_index_modified_at.map_or_else(
+                        || Cow::from("none"),
+                        |value| Cow::from(
+                            chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339()
+                        )
+                    )
                 );
                 println!(
                     "machine-drive-{}-overlay-index-path={}",
@@ -350,7 +365,12 @@ fn print_machine_summary(
                 println!(
                     "machine-drive-{}-overlay-index-modified-at={}",
                     drive.drive_letter,
-                    crate::status::format_optional_system_time(drive.overlay_index_modified_at)
+                    drive.overlay_index_modified_at.map_or_else(
+                        || Cow::from("none"),
+                        |value| Cow::from(
+                            chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339()
+                        )
+                    )
                 );
                 println!(
                     "machine-drive-{}-checkpoint-path={}",
@@ -360,17 +380,21 @@ fn print_machine_summary(
                 println!(
                     "machine-drive-{}-checkpoint-modified-at={}",
                     drive.drive_letter,
-                    crate::status::format_optional_system_time(drive.checkpoint_modified_at)
+                    drive.checkpoint_modified_at.map_or_else(
+                        || Cow::from("none"),
+                        |value| Cow::from(
+                            chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339()
+                        )
+                    )
                 );
                 println!(
                     "machine-drive-{}-journal-id={}",
                     drive.drive_letter,
-                    format_optional_u64(
-                        drive
-                            .checkpoint
-                            .as_ref()
-                            .and_then(|checkpoint| checkpoint.journal_id)
-                    )
+                    drive
+                        .checkpoint
+                        .as_ref()
+                        .and_then(|checkpoint| checkpoint.journal_id)
+                        .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
                 );
             }
         }
@@ -413,11 +437,25 @@ fn print_cache_summary(
     println!("machine-published-drive-count={}", query_ready_drives.len());
     let oldest_query_ready_at = query_ready_drives
         .iter()
-        .filter_map(|drive| query_ready_at(drive))
+        .filter_map(
+            |drive| match (drive.mft_modified_at, drive.base_index_modified_at) {
+                (Some(mft_modified_at), Some(index_modified_at)) => {
+                    Some(mft_modified_at.min(index_modified_at))
+                }
+                _ => None,
+            },
+        )
         .min();
     let newest_query_ready_at = query_ready_drives
         .iter()
-        .filter_map(|drive| query_ready_at(drive))
+        .filter_map(
+            |drive| match (drive.mft_modified_at, drive.base_index_modified_at) {
+                (Some(mft_modified_at), Some(index_modified_at)) => {
+                    Some(mft_modified_at.min(index_modified_at))
+                }
+                _ => None,
+            },
+        )
         .max();
 
     println!(
@@ -426,14 +464,26 @@ fn print_cache_summary(
     );
     println!(
         "machine-cache-oldest-query-ready-age={}",
-        crate::status::format_optional_duration(
-            oldest_query_ready_at.map(|value| age_since(now, value))
+        oldest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| humantime::format_duration(
+                now.duration_since(value)
+                    .unwrap_or(std::time::Duration::ZERO)
+            )
+            .to_string()
+            .into()
         )
     );
     println!(
         "machine-cache-newest-query-ready-age={}",
-        crate::status::format_optional_duration(
-            newest_query_ready_at.map(|value| age_since(now, value))
+        newest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| humantime::format_duration(
+                now.duration_since(value)
+                    .unwrap_or(std::time::Duration::ZERO)
+            )
+            .to_string()
+            .into()
         )
     );
 
@@ -443,24 +493,42 @@ fn print_cache_summary(
 
     println!(
         "machine-cache-oldest-query-ready-at={}",
-        crate::status::format_optional_system_time(oldest_query_ready_at)
+        oldest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+        )
     );
     println!(
         "machine-cache-newest-query-ready-at={}",
-        crate::status::format_optional_system_time(newest_query_ready_at)
+        newest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+        )
     );
 
     for drive in &machine_status.drives {
+        let query_ready_at = match (drive.mft_modified_at, drive.base_index_modified_at) {
+            (Some(mft_modified_at), Some(index_modified_at)) => {
+                Some(mft_modified_at.min(index_modified_at))
+            }
+            _ => None,
+        };
         println!(
             "machine-cache-drive-{}-query-ready={}",
             drive.drive_letter,
-            query_ready_at(drive).is_some()
+            query_ready_at.is_some()
         );
         println!(
             "machine-cache-drive-{}-query-ready-age={}",
             drive.drive_letter,
-            crate::status::format_optional_duration(
-                query_ready_at(drive).map(|value| age_since(now, value))
+            query_ready_at.map_or_else(
+                || Cow::from("none"),
+                |value| humantime::format_duration(
+                    now.duration_since(value)
+                        .unwrap_or(std::time::Duration::ZERO)
+                )
+                .to_string()
+                .into()
             )
         );
         println!(
@@ -471,7 +539,10 @@ fn print_cache_summary(
         println!(
             "machine-cache-drive-{}-mft-modified-at={}",
             drive.drive_letter,
-            crate::status::format_optional_system_time(drive.mft_modified_at)
+            drive.mft_modified_at.map_or_else(
+                || Cow::from("none"),
+                |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+            )
         );
         println!(
             "machine-cache-drive-{}-index-path={}",
@@ -481,7 +552,10 @@ fn print_cache_summary(
         println!(
             "machine-cache-drive-{}-index-modified-at={}",
             drive.drive_letter,
-            crate::status::format_optional_system_time(drive.base_index_modified_at)
+            drive.base_index_modified_at.map_or_else(
+                || Cow::from("none"),
+                |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+            )
         );
     }
 }
@@ -505,11 +579,39 @@ fn print_cache_summary_from_daemon(
         .collect::<Vec<_>>();
     let oldest_query_ready_at = query_ready_drives
         .iter()
-        .filter_map(|drive| daemon_query_ready_at(drive))
+        .filter_map(|drive| {
+            match (
+                drive
+                    .mft_modified_at_unix_ms
+                    .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+                drive
+                    .base_index_modified_at_unix_ms
+                    .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+            ) {
+                (Some(mft_modified_at), Some(index_modified_at)) => {
+                    Some(mft_modified_at.min(index_modified_at))
+                }
+                _ => None,
+            }
+        })
         .min();
     let newest_query_ready_at = query_ready_drives
         .iter()
-        .filter_map(|drive| daemon_query_ready_at(drive))
+        .filter_map(|drive| {
+            match (
+                drive
+                    .mft_modified_at_unix_ms
+                    .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+                drive
+                    .base_index_modified_at_unix_ms
+                    .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+            ) {
+                (Some(mft_modified_at), Some(index_modified_at)) => {
+                    Some(mft_modified_at.min(index_modified_at))
+                }
+                _ => None,
+            }
+        })
         .max();
 
     println!(
@@ -526,14 +628,26 @@ fn print_cache_summary_from_daemon(
     );
     println!(
         "machine-cache-oldest-query-ready-age={}",
-        crate::status::format_optional_duration(
-            oldest_query_ready_at.map(|value| age_since(now, value))
+        oldest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| humantime::format_duration(
+                now.duration_since(value)
+                    .unwrap_or(std::time::Duration::ZERO)
+            )
+            .to_string()
+            .into()
         )
     );
     println!(
         "machine-cache-newest-query-ready-age={}",
-        crate::status::format_optional_duration(
-            newest_query_ready_at.map(|value| age_since(now, value))
+        newest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| humantime::format_duration(
+                now.duration_since(value)
+                    .unwrap_or(std::time::Duration::ZERO)
+            )
+            .to_string()
+            .into()
         )
     );
 
@@ -545,11 +659,17 @@ fn print_cache_summary_from_daemon(
     println!("machine-owner-sid={}", daemon_status.owner_sid);
     println!(
         "machine-cache-oldest-query-ready-at={}",
-        crate::status::format_optional_system_time(oldest_query_ready_at)
+        oldest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+        )
     );
     println!(
         "machine-cache-newest-query-ready-at={}",
-        crate::status::format_optional_system_time(newest_query_ready_at)
+        newest_query_ready_at.map_or_else(
+            || Cow::from("none"),
+            |value| Cow::from(chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339())
+        )
     );
 
     for drive in &daemon_status.published_drives {
@@ -562,26 +682,49 @@ fn print_cache_summary_from_daemon(
         println!(
             "machine-drive-{}-snapshot-usn={}",
             drive.drive_letter,
-            format_optional_u64(drive.snapshot_usn)
+            drive
+                .snapshot_usn
+                .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
         );
         println!(
             "machine-drive-{}-last-usn={}",
             drive.drive_letter,
-            format_optional_u64(drive.last_usn)
+            drive
+                .last_usn
+                .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
         );
         if let Some(warning) = &drive.warning {
             println!("machine-drive-{}-warning={warning}", drive.drive_letter);
         }
+        let query_ready_at = match (
+            drive
+                .mft_modified_at_unix_ms
+                .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+            drive
+                .base_index_modified_at_unix_ms
+                .map(|value| std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)),
+        ) {
+            (Some(mft_modified_at), Some(index_modified_at)) => {
+                Some(mft_modified_at.min(index_modified_at))
+            }
+            _ => None,
+        };
         println!(
             "machine-cache-drive-{}-query-ready={}",
             drive.drive_letter,
-            daemon_query_ready_at(drive).is_some()
+            query_ready_at.is_some()
         );
         println!(
             "machine-cache-drive-{}-query-ready-age={}",
             drive.drive_letter,
-            crate::status::format_optional_duration(
-                daemon_query_ready_at(drive).map(|value| age_since(now, value))
+            query_ready_at.map_or_else(
+                || Cow::from("none"),
+                |value| humantime::format_duration(
+                    now.duration_since(value)
+                        .unwrap_or(std::time::Duration::ZERO)
+                )
+                .to_string()
+                .into()
             )
         );
         println!(
@@ -591,7 +734,14 @@ fn print_cache_summary_from_daemon(
         println!(
             "machine-cache-drive-{}-mft-modified-at={}",
             drive.drive_letter,
-            format_optional_unix_ms(drive.mft_modified_at_unix_ms)
+            drive.mft_modified_at_unix_ms.map_or_else(
+                || Cow::from("none"),
+                |value| chrono::DateTime::<chrono::Utc>::from(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                )
+                .to_rfc3339()
+                .into()
+            )
         );
         println!(
             "machine-cache-drive-{}-index-path={}",
@@ -600,7 +750,14 @@ fn print_cache_summary_from_daemon(
         println!(
             "machine-cache-drive-{}-index-modified-at={}",
             drive.drive_letter,
-            format_optional_unix_ms(drive.base_index_modified_at_unix_ms)
+            drive.base_index_modified_at_unix_ms.map_or_else(
+                || Cow::from("none"),
+                |value| chrono::DateTime::<chrono::Utc>::from(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                )
+                .to_rfc3339()
+                .into()
+            )
         );
         if verbose {
             println!(
@@ -610,7 +767,14 @@ fn print_cache_summary_from_daemon(
             println!(
                 "machine-drive-{}-mft-modified-at={}",
                 drive.drive_letter,
-                format_optional_unix_ms(drive.mft_modified_at_unix_ms)
+                drive.mft_modified_at_unix_ms.map_or_else(
+                    || Cow::from("none"),
+                    |value| chrono::DateTime::<chrono::Utc>::from(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                    )
+                    .to_rfc3339()
+                    .into()
+                )
             );
             println!(
                 "machine-drive-{}-base-index-path={}",
@@ -619,7 +783,14 @@ fn print_cache_summary_from_daemon(
             println!(
                 "machine-drive-{}-base-index-modified-at={}",
                 drive.drive_letter,
-                format_optional_unix_ms(drive.base_index_modified_at_unix_ms)
+                drive.base_index_modified_at_unix_ms.map_or_else(
+                    || Cow::from("none"),
+                    |value| chrono::DateTime::<chrono::Utc>::from(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                    )
+                    .to_rfc3339()
+                    .into()
+                )
             );
             println!(
                 "machine-drive-{}-overlay-index-path={}",
@@ -628,7 +799,14 @@ fn print_cache_summary_from_daemon(
             println!(
                 "machine-drive-{}-overlay-index-modified-at={}",
                 drive.drive_letter,
-                format_optional_unix_ms(drive.overlay_index_modified_at_unix_ms)
+                drive.overlay_index_modified_at_unix_ms.map_or_else(
+                    || Cow::from("none"),
+                    |value| chrono::DateTime::<chrono::Utc>::from(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                    )
+                    .to_rfc3339()
+                    .into()
+                )
             );
             println!(
                 "machine-drive-{}-checkpoint-path={}",
@@ -637,63 +815,22 @@ fn print_cache_summary_from_daemon(
             println!(
                 "machine-drive-{}-checkpoint-modified-at={}",
                 drive.drive_letter,
-                format_optional_unix_ms(drive.checkpoint_modified_at_unix_ms)
+                drive.checkpoint_modified_at_unix_ms.map_or_else(
+                    || Cow::from("none"),
+                    |value| chrono::DateTime::<chrono::Utc>::from(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
+                    )
+                    .to_rfc3339()
+                    .into()
+                )
             );
             println!(
                 "machine-drive-{}-journal-id={}",
                 drive.drive_letter,
-                format_optional_u64(drive.journal_id)
+                drive
+                    .journal_id
+                    .map_or_else(|| Cow::from("none"), |value| Cow::from(value.to_string()))
             );
         }
-    }
-}
-
-fn query_ready_at(drive: &crate::machine::status::MachineDriveStatus) -> Option<SystemTime> {
-    match (drive.mft_modified_at, drive.base_index_modified_at) {
-        (Some(mft_modified_at), Some(index_modified_at)) => {
-            Some(mft_modified_at.min(index_modified_at))
-        }
-        _ => None,
-    }
-}
-
-fn age_since(now: SystemTime, then: SystemTime) -> std::time::Duration {
-    now.duration_since(then)
-        .unwrap_or(std::time::Duration::ZERO)
-}
-
-fn daemon_query_ready_at(drive: &crate::machine::ipc::PublishedDriveStatus) -> Option<SystemTime> {
-    match (
-        drive.mft_modified_at_unix_ms.map(unix_ms_to_system_time),
-        drive
-            .base_index_modified_at_unix_ms
-            .map(unix_ms_to_system_time),
-    ) {
-        (Some(mft_modified_at), Some(index_modified_at)) => {
-            Some(mft_modified_at.min(index_modified_at))
-        }
-        _ => None,
-    }
-}
-
-fn unix_ms_to_system_time(value: u64) -> SystemTime {
-    std::time::UNIX_EPOCH + std::time::Duration::from_millis(value)
-}
-
-fn format_optional_unix_ms(value: Option<u64>) -> String {
-    crate::status::format_optional_system_time(value.map(unix_ms_to_system_time))
-}
-
-fn format_optional_u64(value: Option<u64>) -> String {
-    value.map_or_else(|| String::from("none"), |value| value.to_string())
-}
-
-fn format_service_state(value: crate::machine::service::WindowsServiceState) -> &'static str {
-    match value {
-        crate::machine::service::WindowsServiceState::Missing => "missing",
-        crate::machine::service::WindowsServiceState::Stopped => "stopped",
-        crate::machine::service::WindowsServiceState::StartPending => "start-pending",
-        crate::machine::service::WindowsServiceState::Running => "running",
-        crate::machine::service::WindowsServiceState::Unknown(_) => "unknown",
     }
 }
