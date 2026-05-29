@@ -167,8 +167,9 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
     let mut fields = DaemonRemotePrettyFields::default();
     event.record(&mut fields);
 
+    let ansi = writer.has_ansi_escapes();
     let elapsed = LOG_START.elapsed().as_secs_f64();
-    let level = event.metadata().level().to_string();
+    let level = event.metadata().level();
     let target = fields
         .target
         .as_deref()
@@ -178,22 +179,39 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
         .as_deref()
         .unwrap_or_else(|| event.metadata().name());
 
-    write!(writer, "{elapsed:>16.9}s  {level} {target}: {message}")?;
+    write!(
+        writer,
+        "{} {} {}{} {}",
+        style_dim(ansi, &format!("{elapsed:>16.9}s")),
+        style_level(ansi, level, &level.to_string()),
+        style_level_bold(ansi, level, target),
+        style_level(ansi, level, ":"),
+        style_level(ansi, level, message)
+    )?;
     if let Some(event_fields) = fields.fields.as_deref().filter(|fields| !fields.is_empty()) {
-        write!(writer, ", {event_fields}")?;
+        write!(
+            writer,
+            "{} {}",
+            style_level(ansi, level, ","),
+            style_daemon_field_list(ansi, level, event_fields)
+        )?;
     }
 
     match (
         fields.file.as_deref().filter(|file| *file != "unknown"),
         fields.line.as_deref().filter(|line| *line != "unknown"),
     ) {
-        (Some(file), Some(line)) => write!(writer, "\n    at {file}:{line}")?,
-        (Some(file), None) => write!(writer, "\n    at {file}")?,
+        (Some(file), Some(line)) => write!(
+            writer,
+            "\n    {} {file}:{line}",
+            style_source_label(ansi, "at")
+        )?,
+        (Some(file), None) => write!(writer, "\n    {} {file}", style_source_label(ansi, "at"))?,
         _ => {}
     }
 
     if let Some(spans) = fields.spans.as_deref().filter(|spans| !spans.is_empty()) {
-        write!(writer, "\n    in {spans}")?;
+        write!(writer, "\n    {} {spans}", style_source_label(ansi, "in"))?;
         let method = fields
             .rpc_method
             .as_deref()
@@ -206,18 +224,94 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
             (Some(method), Some(correlation_id)) => {
                 write!(
                     writer,
-                    " with rpc_method=\"{method}\", correlation_id={correlation_id}"
+                    " {} {}{}, {}{}",
+                    style_dim(ansi, "with"),
+                    style_level_bold(ansi, level, "rpc_method"),
+                    style_level(ansi, level, &format!("=\"{method}\"")),
+                    style_level_bold(ansi, level, "correlation_id"),
+                    style_level(ansi, level, &format!("={correlation_id}"))
                 )?;
             }
-            (Some(method), None) => write!(writer, " with rpc_method=\"{method}\"")?,
-            (None, Some(correlation_id)) => {
-                write!(writer, " with correlation_id={correlation_id}")?
-            }
+            (Some(method), None) => write!(
+                writer,
+                " {} {}{}",
+                style_dim(ansi, "with"),
+                style_level_bold(ansi, level, "rpc_method"),
+                style_level(ansi, level, &format!("=\"{method}\""))
+            )?,
+            (None, Some(correlation_id)) => write!(
+                writer,
+                " {} {}{}",
+                style_dim(ansi, "with"),
+                style_level_bold(ansi, level, "correlation_id"),
+                style_level(ansi, level, &format!("={correlation_id}"))
+            )?,
             (None, None) => {}
         }
     }
 
     writeln!(writer)
+}
+
+fn style_level(ansi: bool, level: &tracing::Level, value: &str) -> String {
+    if !ansi {
+        return value.to_string();
+    }
+
+    match *level {
+        tracing::Level::TRACE => value.purple().to_string(),
+        tracing::Level::DEBUG => value.blue().to_string(),
+        tracing::Level::INFO => value.green().to_string(),
+        tracing::Level::WARN => value.yellow().to_string(),
+        tracing::Level::ERROR => value.red().to_string(),
+    }
+}
+
+fn style_level_bold(ansi: bool, level: &tracing::Level, value: &str) -> String {
+    if !ansi {
+        return value.to_string();
+    }
+
+    match *level {
+        tracing::Level::TRACE => value.purple().bold().to_string(),
+        tracing::Level::DEBUG => value.blue().bold().to_string(),
+        tracing::Level::INFO => value.green().bold().to_string(),
+        tracing::Level::WARN => value.yellow().bold().to_string(),
+        tracing::Level::ERROR => value.red().bold().to_string(),
+    }
+}
+
+fn style_dim(ansi: bool, value: &str) -> String {
+    if ansi {
+        value.dimmed().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn style_source_label(ansi: bool, value: &str) -> String {
+    if ansi {
+        value.dimmed().italic().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn style_daemon_field_list(ansi: bool, level: &tracing::Level, fields: &str) -> String {
+    fields
+        .split(", ")
+        .map(|field| {
+            let Some((key, value)) = field.split_once('=') else {
+                return style_level(ansi, level, field);
+            };
+            format!(
+                "{}{}",
+                style_level_bold(ansi, level, key),
+                style_level(ansi, level, &format!("={value}"))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(&style_level(ansi, level, ", "))
 }
 
 fn default_log_filter(global_args: &GlobalArgs) -> eyre::Result<EnvFilter> {
