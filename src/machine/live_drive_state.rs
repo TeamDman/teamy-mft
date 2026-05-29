@@ -6,7 +6,7 @@ use crate::machine::config::save_checkpoint;
 use crate::machine::ipc::MachineError;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::UsnEvent;
-use crate::machine::usn::VolumeUsnJournal;
+use crate::machine::usn::VolumeUsnJournalHandle;
 use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
@@ -126,7 +126,7 @@ impl LiveDriveState {
             )
         })?;
 
-        let journal = VolumeUsnJournal::open(paths.drive_letter)?;
+        let journal = VolumeUsnJournalHandle::open(paths.drive_letter)?;
         let cursor = journal.query_cursor()?;
         validate_journal_continuity(paths.drive_letter, &checkpoint, cursor)?;
 
@@ -209,7 +209,7 @@ impl LiveDriveState {
     /// Returns an error if reading additional journal records fails or cancellation is requested.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
     pub fn refresh_with_cancel(&mut self, cancel: Option<&AtomicBool>) -> eyre::Result<()> {
-        let journal = VolumeUsnJournal::open(self.drive_letter)?;
+        let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
         let cursor = journal.query_cursor()?;
         validate_active_cursor(
             self.drive_letter,
@@ -309,7 +309,7 @@ impl LiveDriveState {
 
     fn refresh_from_journal_with_cancel(
         &mut self,
-        journal: &VolumeUsnJournal,
+        journal: &VolumeUsnJournalHandle,
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<()> {
         let batch = journal.read_available_since_with_cancel(

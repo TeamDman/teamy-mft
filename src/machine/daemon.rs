@@ -25,7 +25,7 @@ use crate::machine::ipc::SyncModeDto;
 use crate::machine::ipc::SyncRequest;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
-use crate::machine::usn::VolumeUsnJournal;
+use crate::machine::usn::VolumeUsnJournalHandle;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryLimit;
@@ -2077,7 +2077,7 @@ fn collect_supported_drives_for_machine_sync(
     let mut cursors = FxHashMap::default();
     let mut skipped_drives = Vec::new();
     for &drive in drive_letters {
-        match VolumeUsnJournal::open(drive).and_then(|journal| journal.query_cursor()) {
+        match VolumeUsnJournalHandle::open(drive).and_then(|journal| journal.query_cursor()) {
             Ok(cursor) => {
                 supported_drives.push(drive);
                 cursors.insert(drive, cursor);

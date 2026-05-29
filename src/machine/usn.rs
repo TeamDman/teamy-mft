@@ -135,12 +135,12 @@ pub struct UsnReadBatch {
 }
 
 #[derive(Debug)]
-pub struct VolumeUsnJournal {
+pub struct VolumeUsnJournalHandle {
     drive_letter: char,
     handle: Owned<HANDLE>,
 }
 
-impl VolumeUsnJournal {
+impl VolumeUsnJournalHandle {
     /// # Errors
     ///
     /// Returns an error if the NTFS volume handle cannot be opened.
@@ -384,7 +384,7 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
 /// Returns an error if the volume handle cannot be opened or journal metadata cannot be queried
 /// for a reason other than an inactive journal.
 pub fn query_journal_status(drive_letter: char) -> eyre::Result<crate::daemon::UsnJournalStatus> {
-    let journal = VolumeUsnJournal::open(drive_letter)?;
+    let journal = VolumeUsnJournalHandle::open(drive_letter)?;
     match journal.try_query_cursor_raw() {
         Ok(cursor) => Ok(crate::daemon::UsnJournalStatus {
             drive_letter,
@@ -424,7 +424,7 @@ pub fn create_journal(
     maximum_size: u64,
     allocation_delta: u64,
 ) -> eyre::Result<crate::daemon::UsnJournalStatus> {
-    let journal = VolumeUsnJournal::open_writable(drive_letter)?;
+    let journal = VolumeUsnJournalHandle::open_writable(drive_letter)?;
     journal.create_journal(maximum_size, allocation_delta)?;
     query_journal_status(drive_letter)
 }
