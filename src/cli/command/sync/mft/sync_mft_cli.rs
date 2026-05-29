@@ -108,8 +108,10 @@ pub fn read_physical_mft_stream_with_info(
 
     stream::iter(drive_infos)
         .map(|drive_info| async move {
+            let parent_span = tracing::Span::current();
             tokio::task::spawn_blocking(
                 move || -> eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)> {
+                    let _parent_guard = parent_span.enter();
                     let _span = info_span!(
                         "read_physical_mft_for_drive",
                         drive = %drive_info.drive_letter,

@@ -12,6 +12,8 @@ use futures::TryStreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::info_span;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
@@ -108,13 +110,17 @@ impl SyncCommand {
         match self {
             Self::Mft(SyncMftArgs) => {
                 let drive_infos = SyncMftArgs::invoke_preflight(drive_infos, if_exists)?;
+                let mft_span = info_span!("dispatch mft sync work");
                 let mft_data = {
-                    let _guard = info_span!("dispatch mft sync work").entered();
+                    let _guard = mft_span.enter();
                     SyncMftArgs::invoke(drive_infos)?
                 };
                 tokio::pin!(mft_data);
                 tracing::debug!("Collecting MFT sync results");
-                while let Some(result) = mft_data.next().await {
+                while let Some(result) = async { mft_data.next().await }
+                    .instrument(mft_span.clone())
+                    .await
+                {
                     let (drive_info, physical_mft) = result?;
                     {
                         let _guard = info_span!(
@@ -164,8 +170,9 @@ impl SyncCommand {
                     .filter(|info| !mft_drive_letters.contains(&info.drive_letter))
                     .collect::<Vec<_>>();
 
+                let mft_span = info_span!("dispatch mft sync work");
                 let mft_data = {
-                    let _guard = info_span!("dispatch mft sync work").entered();
+                    let _guard = mft_span.enter();
                     SyncMftArgs::invoke(mft_drive_infos)?
                 };
 
@@ -188,7 +195,9 @@ impl SyncCommand {
                                     return Ok(());
                                 }
 
+                                let parent_span = Span::current();
                                 tokio::task::spawn_blocking(move || -> eyre::Result<()> {
+                                    let _parent_guard = parent_span.enter();
                                     let _guard = info_span!(
                                         "build_in_memory_search_index_for_drive",
                                         drive = %drive_info.drive_letter,
@@ -220,7 +229,8 @@ impl SyncCommand {
                             }
                         })
                         .await
-                };
+                }
+                .instrument(mft_span);
 
                 let disk_indexing = async move {
                     // Run the disk-backed index path in parallel with the in-memory path so
