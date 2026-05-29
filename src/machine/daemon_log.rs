@@ -525,8 +525,8 @@ fn daemon_log_spans(event: &DaemonLogEvent) -> String {
         .spans
         .iter()
         .map(|span| match (&span.file, span.line) {
-            (Some(file), Some(line)) => format!("{}@{}:{line}", span.name, file),
-            (Some(file), None) => format!("{}@{file}", span.name),
+            (Some(file), Some(line)) => format!("{} @ {}:{line}", span.name, file),
+            (Some(file), None) => format!("{} @ {file}", span.name),
             _ => span.name.clone(),
         })
         .collect::<Vec<_>>()
