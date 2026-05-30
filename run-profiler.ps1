@@ -2,9 +2,61 @@
 param(
 	[switch]$Release,
 	[switch]$NoOpenProfiler,
+	[switch]$Elevated,
 	[Parameter(Position = 0, ValueFromRemainingArguments = $true)]
 	[string[]]$QueryArgs
 )
+
+function Test-IsAdministrator {
+	$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+	$principal = [Security.Principal.WindowsPrincipal]::new($currentIdentity)
+	return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Quote-ProcessArgument {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$Argument
+	)
+
+	if ($Argument -notmatch '[\s"]') {
+		return $Argument
+	}
+
+	return '"' + ($Argument -replace '"', '\"') + '"'
+}
+
+if ($Elevated -and -not (Test-IsAdministrator)) {
+	$powershellCommand = Get-Command pwsh.exe -ErrorAction SilentlyContinue
+	if (-not $powershellCommand) {
+		$powershellCommand = Get-Command powershell.exe -ErrorAction Stop
+	}
+
+	$arguments = @(
+		'-NoProfile',
+		'-ExecutionPolicy',
+		'Bypass',
+		'-File',
+		$PSCommandPath
+	)
+	if ($Release) {
+		$arguments += '-Release'
+	}
+	if ($NoOpenProfiler) {
+		$arguments += '-NoOpenProfiler'
+	}
+	$arguments += '-Elevated'
+	$arguments += $QueryArgs
+
+	Write-Host "Relaunching profiler wrapper as administrator..."
+	$process = Start-Process `
+		-FilePath $powershellCommand.Source `
+		-ArgumentList (($arguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ') `
+		-Verb RunAs `
+		-Wait `
+		-PassThru
+	exit $process.ExitCode
+}
 
 $serviceName = "teamy-mft-daemon"
 
