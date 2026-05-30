@@ -4,6 +4,7 @@ mod sync_executor;
 mod sync_index;
 mod sync_mft;
 mod sync_mode;
+mod sync_phase;
 mod sync_plan;
 
 pub use drive_sync_info::DriveSyncInfo;

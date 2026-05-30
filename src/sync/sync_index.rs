@@ -5,6 +5,15 @@ use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::search_index_bytes::SearchIndexBytesMut;
 use crate::sync::DriveSyncInfo;
 use crate::sync::IfExistsOutputBehaviour;
+use crate::sync::sync_phase::SyncPhase;
+use crate::sync::sync_phase::bytes_human;
+use crate::sync::sync_phase::bytes_per_second;
+use crate::sync::sync_phase::bytes_per_second_human;
+use crate::sync::sync_phase::count_per_second;
+use crate::sync::sync_phase::count_per_second_human;
+use crate::sync::sync_phase::elapsed_human;
+use crate::sync::sync_phase::elapsed_ms;
+use crate::sync::sync_phase::u64_from_usize;
 use eyre::Context;
 use eyre::bail;
 use itertools::Itertools;
@@ -60,6 +69,8 @@ impl SyncIndex {
     /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
     /// resolved, or index files cannot be read, built, or written.
     pub fn invoke(drive_infos: Vec<DriveSyncInfo>) -> eyre::Result<()> {
+        let sync_phase = SyncPhase::start("sync_index", None);
+        let drive_count = drive_infos.len();
         info!(
             "Building search indexes for drives: {}",
             drive_infos.iter().map(|info| info.drive_letter).join(", ")
@@ -76,7 +87,15 @@ impl SyncIndex {
             Self::invoke_for_mft_path(&info)?;
         }
 
-        info!("Index sync stage completed");
+        let elapsed = sync_phase.elapsed();
+        info!(
+            phase = sync_phase.name(),
+            drive = %sync_phase.drive(),
+            drive_count,
+            elapsed_ms = elapsed_ms(elapsed),
+            elapsed_human = %elapsed_human(elapsed),
+            "Finished sync phase"
+        );
 
         Ok(())
     }
@@ -87,11 +106,10 @@ impl SyncIndex {
     ///
     /// Returns an error if path conversion or index writing fails.
     pub fn invoke_for_mft_file(info: &DriveSyncInfo, mft_file: &MftFile) -> eyre::Result<()> {
-        info!(
-            drive_letter = %info.drive_letter,
-            mft_path = %info.mft_output_path.display(),
-            "Building search index",
-        );
+        let index_phase = SyncPhase::start("build_search_index", Some(info.drive_letter));
+        let source_mft_bytes = u64_from_usize(mft_file.size().get::<byte>());
+        let source_mft_entries = mft_file.record_count();
+        let rows_phase = SyncPhase::start("build_search_index_rows", Some(info.drive_letter));
         let rows = {
             let _span = info_span!(
                 "build_search_index_rows",
@@ -101,7 +119,23 @@ impl SyncIndex {
             .entered();
             Self::build_rows_for_mft_file(info, mft_file)?
         };
-        {
+        let rows_elapsed = rows_phase.elapsed();
+        info!(
+            phase = rows_phase.name(),
+            drive = %rows_phase.drive(),
+            elapsed_ms = elapsed_ms(rows_elapsed),
+            elapsed_human = %elapsed_human(rows_elapsed),
+            source_mft_bytes,
+            source_mft_human = %bytes_human(source_mft_bytes),
+            source_mft_entries,
+            entries_per_second = count_per_second(source_mft_entries, rows_elapsed),
+            entries_per_second_human = %count_per_second_human(source_mft_entries, rows_elapsed),
+            row_count = rows.len(),
+            rows_per_second = count_per_second(rows.len(), rows_elapsed),
+            rows_per_second_human = %count_per_second_human(rows.len(), rows_elapsed),
+            "Finished sync phase"
+        );
+        let output_bytes = {
             let _span = info_span!(
                 "write_search_index_output",
                 drive = %info.drive_letter,
@@ -109,11 +143,49 @@ impl SyncIndex {
                 output_path = %info.index_output_path.display(),
             )
             .entered();
-            Self::write_index_output(info, mft_file, &rows)
-        }
+            let write_phase =
+                SyncPhase::start("write_search_index_output", Some(info.drive_letter));
+            let output_bytes = Self::write_index_output(info, mft_file, &rows)?;
+            let write_elapsed = write_phase.elapsed();
+            info!(
+                phase = write_phase.name(),
+                drive = %write_phase.drive(),
+                elapsed_ms = elapsed_ms(write_elapsed),
+                elapsed_human = %elapsed_human(write_elapsed),
+                output_bytes,
+                output_bytes_human = %bytes_human(output_bytes),
+                bytes_per_second = bytes_per_second(output_bytes, write_elapsed),
+                bytes_per_second_human = %bytes_per_second_human(output_bytes, write_elapsed),
+                row_count = rows.len(),
+                rows_per_second = count_per_second(rows.len(), write_elapsed),
+                rows_per_second_human = %count_per_second_human(rows.len(), write_elapsed),
+                output_path = %info.index_output_path.display(),
+                "Finished sync phase"
+            );
+            output_bytes
+        };
+        let index_elapsed = index_phase.elapsed();
+        info!(
+            phase = index_phase.name(),
+            drive = %index_phase.drive(),
+            elapsed_ms = elapsed_ms(index_elapsed),
+            elapsed_human = %elapsed_human(index_elapsed),
+            source_mft_bytes,
+            source_mft_human = %bytes_human(source_mft_bytes),
+            source_mft_entries,
+            entries_per_second = count_per_second(source_mft_entries, index_elapsed),
+            entries_per_second_human = %count_per_second_human(source_mft_entries, index_elapsed),
+            row_count = rows.len(),
+            rows_per_second = count_per_second(rows.len(), index_elapsed),
+            rows_per_second_human = %count_per_second_human(rows.len(), index_elapsed),
+            output_bytes,
+            output_bytes_human = %bytes_human(output_bytes),
+            "Finished sync phase"
+        );
+        Ok(())
     }
 
-    fn invoke_for_mft_path(info: &DriveSyncInfo) -> eyre::Result<()> {
+    pub(crate) fn invoke_for_mft_path(info: &DriveSyncInfo) -> eyre::Result<()> {
         if !info.mft_output_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",
@@ -122,6 +194,7 @@ impl SyncIndex {
             );
         }
 
+        let load_phase = SyncPhase::start("load_cached_mft_for_index", Some(info.drive_letter));
         let mft_file = {
             let _span = info_span!(
                 "load_cached_mft_for_index",
@@ -137,6 +210,23 @@ impl SyncIndex {
                 )
             })?
         };
+        let load_elapsed = load_phase.elapsed();
+        let source_mft_bytes = u64_from_usize(mft_file.size().get::<byte>());
+        let source_mft_entries = mft_file.record_count();
+        info!(
+            phase = load_phase.name(),
+            drive = %load_phase.drive(),
+            elapsed_ms = elapsed_ms(load_elapsed),
+            elapsed_human = %elapsed_human(load_elapsed),
+            source_mft_bytes,
+            source_mft_human = %bytes_human(source_mft_bytes),
+            source_mft_entries,
+            bytes_per_second = bytes_per_second(source_mft_bytes, load_elapsed),
+            bytes_per_second_human = %bytes_per_second_human(source_mft_bytes, load_elapsed),
+            entries_per_second = count_per_second(source_mft_entries, load_elapsed),
+            entries_per_second_human = %count_per_second_human(source_mft_entries, load_elapsed),
+            "Finished sync phase"
+        );
 
         Self::invoke_for_mft_file(info, &mft_file)
     }
@@ -171,12 +261,12 @@ impl SyncIndex {
         info: &DriveSyncInfo,
         mft_file: &MftFile,
         rows: &[SearchIndexPathRow],
-    ) -> eyre::Result<()> {
+    ) -> eyre::Result<u64> {
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(
                 info.drive_letter,
-                mft_file.size().get::<byte>() as u64,
-                rows.len() as u64,
+                u64_from_usize(mft_file.size().get::<byte>()),
+                u64_from_usize(rows.len()),
             ),
             rows,
         )?
@@ -187,6 +277,17 @@ impl SyncIndex {
                 info.drive_letter,
                 info.index_output_path.display()
             )
-        })
+        })?;
+
+        Ok(info
+            .index_output_path
+            .metadata()
+            .wrap_err_with(|| {
+                format!(
+                    "Failed reading metadata for index output {}",
+                    info.index_output_path.display()
+                )
+            })?
+            .len())
     }
 }
