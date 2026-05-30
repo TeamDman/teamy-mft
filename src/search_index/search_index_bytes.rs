@@ -888,7 +888,16 @@ impl SearchIndexBytesMut {
     pub fn write_to_path(self, output_path: impl AsRef<Path>) -> eyre::Result<()> {
         let output_path = output_path.as_ref();
         let temp_path = output_path.with_extension("mft_search_index.tmp");
-        let bytes = self.into_inner()?;
+        let row_count = self.rows.len();
+        let bytes = {
+            let _span = info_span!(
+                "serialize_search_index_bytes",
+                row_count,
+                output_path = %output_path.display(),
+            )
+            .entered();
+            self.into_inner()?
+        };
 
         let file = std::fs::File::create(&temp_path).wrap_err_with(|| {
             format!(
@@ -958,8 +967,14 @@ fn serialize_search_index(
     header: SearchIndexHeader,
     rows: &[SearchIndexPathRow],
 ) -> eyre::Result<Vec<u8>> {
-    let tables = collect_search_index_tables(rows)?;
-    serialize_search_index_tables(header, tables, rows.len())
+    let tables = {
+        let _span = info_span!("collect_search_index_tables", row_count = rows.len()).entered();
+        collect_search_index_tables(rows)?
+    };
+    {
+        let _span = info_span!("serialize_search_index_tables", row_count = rows.len()).entered();
+        serialize_search_index_tables(header, tables, rows.len())
+    }
 }
 
 fn collect_search_index_tables(
@@ -1140,22 +1155,44 @@ fn serialize_search_index_tables(
     bytes.extend_from_slice(&trigram_posting_segment_id_count.to_le_bytes());
     bytes.extend_from_slice(&trie_bytes);
 
-    serialize_segment_entries(&mut bytes, &segment_entries)?;
-    serialize_extension_suffix_entries(&mut bytes, &extension_postings_by_suffix)?;
-    serialize_trigram_entries(&mut bytes, &trigram_postings_by_trigram);
-    serialize_path_nodes(&mut bytes, &path_nodes);
-    serialize_terminals(&mut bytes, &terminals);
-    serialize_postings(&mut bytes, &postings_by_segment, posting_row_id_count)?;
-    serialize_extension_postings(
-        &mut bytes,
-        &extension_postings_by_suffix,
-        extension_posting_row_id_count,
-    )?;
-    serialize_trigram_postings(
-        &mut bytes,
-        &trigram_postings_by_trigram,
-        trigram_posting_segment_id_count,
-    )?;
+    info_span!("serialize_search_index_segments", count = segment_count)
+        .in_scope(|| serialize_segment_entries(&mut bytes, &segment_entries))?;
+    info_span!("serialize_search_index_extensions", count = extension_count).in_scope(|| {
+        serialize_extension_suffix_entries(&mut bytes, &extension_postings_by_suffix)
+    })?;
+    info_span!("serialize_search_index_trigrams", count = trigram_count).in_scope(|| {
+        serialize_trigram_entries(&mut bytes, &trigram_postings_by_trigram);
+    });
+    info_span!("serialize_search_index_path_nodes", count = path_node_count).in_scope(|| {
+        serialize_path_nodes(&mut bytes, &path_nodes);
+    });
+    info_span!("serialize_search_index_terminals", count = terminals.len()).in_scope(|| {
+        serialize_terminals(&mut bytes, &terminals);
+    });
+    info_span!("serialize_search_index_postings", posting_row_id_count)
+        .in_scope(|| serialize_postings(&mut bytes, &postings_by_segment, posting_row_id_count))?;
+    info_span!(
+        "serialize_search_index_extension_postings",
+        extension_posting_row_id_count
+    )
+    .in_scope(|| {
+        serialize_extension_postings(
+            &mut bytes,
+            &extension_postings_by_suffix,
+            extension_posting_row_id_count,
+        )
+    })?;
+    info_span!(
+        "serialize_search_index_trigram_postings",
+        trigram_posting_segment_id_count
+    )
+    .in_scope(|| {
+        serialize_trigram_postings(
+            &mut bytes,
+            &trigram_postings_by_trigram,
+            trigram_posting_segment_id_count,
+        )
+    })?;
 
     Ok(bytes)
 }
