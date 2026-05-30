@@ -12,6 +12,8 @@ use tracing::instrument;
 
 pub const ATTR_TYPE_FILE_NAME: u32 = 0x30;
 const ATTRIBUTE_TYPE_END: u32 = 0xFFFF_FFFF;
+const RECORD_FLAGS_OFFSET: usize = 0x16;
+const RECORD_FLAG_IN_USE: u16 = 0x0001;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileNameRef<'a> {
@@ -113,6 +115,14 @@ fn read_u64(bytes: &[u8], off: usize) -> Option<u64> {
     bytes
         .get(off..off + 8)
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+}
+
+#[inline]
+fn is_entry_deleted(entry_bytes: &[u8]) -> bool {
+    match read_u16(entry_bytes, RECORD_FLAGS_OFFSET) {
+        Some(flags) => flags & RECORD_FLAG_IN_USE == 0,
+        None => true,
+    }
 }
 
 /// Parse the total entry size from the first entry slice (delegates to `fast_fixup` helper)
@@ -244,54 +254,70 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// Panics if the MFT entry count exceeds `u32::MAX`.
 #[instrument(level = "debug", skip_all)]
 pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
-    type PerThreadData<'a> = Vec<(Vec<FileNameRef<'a>>, Vec<(u32, usize)>)>;
+    struct PerThreadData<'a> {
+        file_names: Vec<FileNameRef<'a>>,
+        pairs: Vec<(u32, usize)>,
+        deleted_flags: Vec<(usize, bool)>,
+    }
 
-    let (full, entry_size, entry_count, per_entry_deleted) = {
+    let (full, entry_size, entry_count) = {
         let _span = debug_span!("prepare_collection_inputs").entered();
         let full: &'a [u8] = mft; // borrow the entire bytes buffer
         let entry_size = mft.record_size().get::<uom::si::information::byte>();
         let entry_count = mft.record_count();
-        let per_entry_deleted = {
-            let _span = debug_span!("collect_deleted_flags").entered();
-            mft.iter_records()
-                .map(|record| record.is_deleted())
-                .collect()
-        };
-        (full, entry_size, entry_count, per_entry_deleted)
+        (full, entry_size, entry_count)
     };
 
-    let per_thread: PerThreadData = {
+    let per_thread = {
         let _span = debug_span!("parallel_collect_filenames").entered();
         (0..entry_count)
             .into_par_iter()
-            .map(|idx| {
-                #[cfg(feature = "tracy")]
-                let _span = debug_span!("scan_entry_for_filenames").entered();
-                let mut list = Vec::new();
-                let mut pairs = Vec::new();
-                let start = idx * entry_size;
-                let end = start + entry_size;
-                let record_bytes: &'a [u8] = &full[start..end];
-                for_each_filename(
-                    record_bytes,
-                    u32::try_from(idx).expect("idx should fit in u32"),
-                    |fref| {
-                        let global_index = list.len();
-                        list.push(fref);
-                        pairs.push((fref.entry_id, global_index));
-                    },
-                );
-                (list, pairs)
-            })
-            .collect()
+            .fold(
+                || PerThreadData {
+                    file_names: Vec::new(),
+                    pairs: Vec::new(),
+                    deleted_flags: Vec::new(),
+                },
+                |mut data, idx| {
+                    #[cfg(feature = "tracy")]
+                    let _span = debug_span!("scan_entry_for_filenames").entered();
+                    let start = idx * entry_size;
+                    let end = start + entry_size;
+                    let record_bytes: &'a [u8] = &full[start..end];
+                    data.deleted_flags
+                        .push((idx, is_entry_deleted(record_bytes)));
+                    for_each_filename(
+                        record_bytes,
+                        u32::try_from(idx).expect("idx should fit in u32"),
+                        |fref| {
+                            let local_index = data.file_names.len();
+                            data.file_names.push(fref);
+                            data.pairs.push((fref.entry_id, local_index));
+                        },
+                    );
+                    data
+                },
+            )
+            .collect::<Vec<_>>()
+    };
+
+    let per_entry_deleted = {
+        let _span = debug_span!("build_deleted_flag_index").entered();
+        let mut per_entry_deleted = vec![false; entry_count];
+        for data in &per_thread {
+            for &(entry_id, deleted) in &data.deleted_flags {
+                per_entry_deleted[entry_id] = deleted;
+            }
+        }
+        per_entry_deleted
     };
 
     let mut file_names = {
         let _span = debug_span!("flatten_thread_results").entered();
-        let total = per_thread.iter().map(|(v, _)| v.len()).sum();
+        let total = per_thread.iter().map(|data| data.file_names.len()).sum();
         let mut file_names = Vec::with_capacity(total);
-        for (v, _) in &per_thread {
-            file_names.extend_from_slice(v);
+        for data in &per_thread {
+            file_names.extend_from_slice(&data.file_names);
         }
         file_names
     };
@@ -300,14 +326,14 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
         let _span = debug_span!("build_per_entry_index").entered();
         let mut per_entry: Vec<Vec<usize>> = vec![Vec::new(); entry_count];
         let mut base = 0usize;
-        for (v, pairs) in per_thread {
-            for (entry_id, local_idx) in pairs {
+        for data in per_thread {
+            for (entry_id, local_idx) in data.pairs {
                 let global_idx = base + local_idx;
                 if let Some(vec) = per_entry.get_mut(entry_id as usize) {
                     vec.push(global_idx);
                 }
             }
-            base += v.len();
+            base += data.file_names.len();
         }
         per_entry
     };
@@ -320,5 +346,29 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
             per_entry_indices: per_entry,
             per_entry_deleted,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_filenames;
+    use crate::mft::mft_file::MftFile;
+
+    #[test]
+    fn collect_filenames_tracks_deleted_flags_during_entry_scan() -> eyre::Result<()> {
+        const ENTRY_SIZE: usize = 1024;
+        let mut bytes = vec![0u8; ENTRY_SIZE * 2];
+        bytes[0x1C..0x20].copy_from_slice(&(ENTRY_SIZE as u32).to_le_bytes());
+        bytes[0..4].copy_from_slice(b"FILE");
+        bytes[ENTRY_SIZE..ENTRY_SIZE + 4].copy_from_slice(b"FILE");
+        bytes[0x16..0x18].copy_from_slice(&1u16.to_le_bytes());
+        bytes[ENTRY_SIZE + 0x16..ENTRY_SIZE + 0x18].copy_from_slice(&0u16.to_le_bytes());
+
+        let mft = MftFile::from_vec(bytes)?;
+        let collection = collect_filenames(&mft);
+
+        assert!(!collection.per_entry_deleted[0]);
+        assert!(collection.per_entry_deleted[1]);
+        Ok(())
     }
 }

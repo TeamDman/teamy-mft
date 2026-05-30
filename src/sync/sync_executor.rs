@@ -88,7 +88,7 @@ pub async fn execute_sync_mode(
             let mft_span = info_span!("dispatch mft sync work");
             let mft_data = {
                 let _guard = mft_span.enter();
-                SyncMft::invoke(mft_drive_infos)?
+                SyncMft::invoke_read_stream(mft_drive_infos)?
             };
 
             let in_memory_index_drive_letters_for_stream =
@@ -105,37 +105,57 @@ pub async fn execute_sync_mode(
                         let in_memory_index_drive_letters =
                             Arc::clone(&in_memory_index_drive_letters_for_stream);
                         async move {
+                            let parent_span = Span::current();
+                            let physical_mft = Arc::new(physical_mft);
+                            let write_parent_span = parent_span.clone();
+                            let write_drive_info = drive_info.clone();
+                            let write_physical_mft = Arc::clone(&physical_mft);
+                            let write_task = tokio::task::spawn_blocking(move || {
+                                let _parent_guard = write_parent_span.enter();
+                                SyncMft::write_mft_snapshot(
+                                    &write_drive_info,
+                                    write_physical_mft.as_ref(),
+                                )
+                            });
+
                             if !in_memory_index_drive_letters.contains(&drive_info.drive_letter) {
+                                write_task.await.map_err(|error| {
+                                    eyre::eyre!("Failed joining MFT snapshot write task: {error}")
+                                })??;
                                 return Ok(());
                             }
 
-                            let parent_span = Span::current();
-                            tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                                let _parent_guard = parent_span.enter();
-                                let _guard = info_span!(
-                                    "build_in_memory_search_index_for_drive",
-                                    drive = %drive_info.drive_letter,
-                                    index_path = %drive_info.index_output_path.display(),
-                                )
-                                .entered();
-                                let mft_file = physical_mft.to_mft_file()?;
-                                SyncIndex::invoke_for_mft_file(&drive_info, &mft_file)?;
-                                {
+                            let index_task =
+                                tokio::task::spawn_blocking(move || -> eyre::Result<()> {
+                                    let _parent_guard = parent_span.enter();
                                     let _guard = info_span!(
-                                        "drop_in_memory_index_inputs",
+                                        "build_in_memory_search_index_for_drive",
                                         drive = %drive_info.drive_letter,
-                                        physical_segments = physical_mft.physical_read_results.entries.len(),
-                                        logical_segments = physical_mft.logical_read_plan.segments.len(),
-                                        mft_entries = mft_file.record_count(),
+                                        index_path = %drive_info.index_output_path.display(),
                                     )
                                     .entered();
-                                    drop(mft_file);
-                                    drop(physical_mft);
-                                };
-                                Ok(())
-                            })
-                            .await
-                            .map_err(|error| {
+                                    let mft_file = physical_mft.to_mft_file()?;
+                                    SyncIndex::invoke_for_mft_file(&drive_info, &mft_file)?;
+                                    {
+                                        let _guard = info_span!(
+                                            "drop_in_memory_index_inputs",
+                                            drive = %drive_info.drive_letter,
+                                            physical_segments = physical_mft.physical_read_results.entries.len(),
+                                            logical_segments = physical_mft.logical_read_plan.segments.len(),
+                                            mft_entries = mft_file.record_count(),
+                                        )
+                                        .entered();
+                                        drop(mft_file);
+                                        drop(physical_mft);
+                                    };
+                                    Ok(())
+                                });
+
+                            let (write_result, index_result) = tokio::join!(write_task, index_task);
+                            write_result.map_err(|error| {
+                                eyre::eyre!("Failed joining MFT snapshot write task: {error}")
+                            })??;
+                            index_result.map_err(|error| {
                                 eyre::eyre!("Failed joining in-memory index task: {error}")
                             })??;
 

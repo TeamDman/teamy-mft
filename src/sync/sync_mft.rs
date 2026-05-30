@@ -65,6 +65,30 @@ impl SyncMft {
         drive_infos: Vec<DriveSyncInfo>,
     ) -> eyre::Result<impl Stream<Item = eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)>>>
     {
+        let physical_mft_stream = Self::invoke_read_stream(drive_infos)?;
+        Ok(try_stream! {
+            tracing::debug!("Syncing MFTs from disks to files");
+            tokio::pin!(physical_mft_stream);
+            while let Some(mft) = physical_mft_stream.next().await {
+                let (drive_info, mft_result) = mft?;
+                Self::write_mft_snapshot(&drive_info, &mft_result)?;
+                yield (drive_info, mft_result);
+            }
+        })
+    }
+
+    /// Read syncable MFT data from each drive without persisting the `.mft`
+    /// snapshot. Callers that need both snapshot persistence and in-memory index
+    /// construction can consume this stream and schedule those downstream tasks
+    /// independently.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if elevation or backup privilege activation fails.
+    pub fn invoke_read_stream(
+        drive_infos: Vec<DriveSyncInfo>,
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)>>>
+    {
         ensure_elevated()?;
         enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
 
@@ -74,27 +98,30 @@ impl SyncMft {
             drive_infos.iter().map(|info| info.drive_letter).join(", ")
         );
 
-        Ok(try_stream! {
-            tracing::debug!("Syncing MFTs from disks to files");
-            let physical_mft_stream = read_physical_mft_stream_with_info(drive_infos);
-            tokio::pin!(physical_mft_stream);
-            while let Some(mft) = physical_mft_stream.next().await {
-                let (drive_info, mft_result) = mft?;
-                tracing::debug!(
-                    drive = %drive_info.drive_letter,
-                    output_path = %drive_info.mft_output_path.display(),
-                    "Writing MFT snapshot for drive"
-                );
-                mft_result.write_to_path(&drive_info.mft_output_path).wrap_err_with(|| {
-                    format!(
-                        "Failed writing MFT snapshot for drive {} to {}",
-                        drive_info.drive_letter,
-                        drive_info.mft_output_path.display()
-                    )
-                })?;
-                yield (drive_info, mft_result);
-            }
-        })
+        Ok(read_physical_mft_stream_with_info(drive_infos))
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if writing the MFT snapshot fails.
+    pub fn write_mft_snapshot(
+        drive_info: &DriveSyncInfo,
+        mft_result: &PhysicalMftReadResult,
+    ) -> eyre::Result<()> {
+        tracing::debug!(
+            drive = %drive_info.drive_letter,
+            output_path = %drive_info.mft_output_path.display(),
+            "Writing MFT snapshot for drive"
+        );
+        mft_result
+            .write_to_path(&drive_info.mft_output_path)
+            .wrap_err_with(|| {
+                format!(
+                    "Failed writing MFT snapshot for drive {} to {}",
+                    drive_info.drive_letter,
+                    drive_info.mft_output_path.display()
+                )
+            })
     }
 }
 

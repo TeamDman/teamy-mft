@@ -119,16 +119,7 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
         return FixupState::Invalid;
     }
 
-    let update_sequence = {
-        let start = usa_offset;
-        let end = start + 2;
-        entry[start..end].to_vec()
-    }; // own copy to avoid borrow conflicts
-    let original_bytes = {
-        let start = usa_offset + 2;
-        let end = usa_offset + total_fixup_bytes;
-        entry[start..end].to_vec()
-    };
+    let update_sequence = [entry[usa_offset], entry[usa_offset + 1]];
     let sectors = usa_size - 1; // first element reserved for update sequence value
 
     let mut any_applied = false;
@@ -142,21 +133,16 @@ pub fn apply_fixup_in_place(entry: &mut [u8]) -> FixupState {
             };
         }
         let tail_start = sector_end - 2;
-        // Avoid simultaneous immutable/mutable borrow; split slice.
-        let (head, tail_and_rest) = entry.split_at_mut(tail_start);
+        let original_offset = usa_offset + 2 + i * 2;
+        let original = [entry[original_offset], entry[original_offset + 1]];
+        let (_, tail_and_rest) = entry.split_at_mut(tail_start);
         let tail = &mut tail_and_rest[..2];
-        // head unused; keeps borrows disjoint.
-        let _ = head;
 
-        if tail == &*update_sequence {
-            let fix_slice = &original_bytes[i * 2..i * 2 + 2];
-            tail.copy_from_slice(fix_slice);
+        if tail == update_sequence.as_slice() {
+            tail.copy_from_slice(&original);
             any_applied = true;
-        } else {
-            let original = &original_bytes[i * 2..i * 2 + 2];
-            if tail != original {
-                return FixupState::Invalid;
-            }
+        } else if tail != original.as_slice() {
+            return FixupState::Invalid;
         }
     }
 
@@ -263,5 +249,35 @@ mod tests {
         entry[0..4].copy_from_slice(b"FILE");
         entry[0x1C..0x20].copy_from_slice(&1024u32.to_le_bytes());
         assert_eq!(detect_entry_size(&entry), Some(1024));
+    }
+
+    #[test]
+    fn apply_fixup_replaces_sector_tails_from_update_sequence_array() {
+        let mut entry = vec![0u8; 1024];
+        entry[4..6].copy_from_slice(&0x30u16.to_le_bytes());
+        entry[6..8].copy_from_slice(&3u16.to_le_bytes());
+        entry[0x30..0x32].copy_from_slice(&[0xAA, 0xBB]);
+        entry[0x32..0x34].copy_from_slice(&[0x11, 0x22]);
+        entry[0x34..0x36].copy_from_slice(&[0x33, 0x44]);
+        entry[510..512].copy_from_slice(&[0xAA, 0xBB]);
+        entry[1022..1024].copy_from_slice(&[0xAA, 0xBB]);
+
+        assert_eq!(apply_fixup_in_place(&mut entry), FixupState::Applied);
+        assert_eq!(&entry[510..512], &[0x11, 0x22]);
+        assert_eq!(&entry[1022..1024], &[0x33, 0x44]);
+    }
+
+    #[test]
+    fn apply_fixup_accepts_already_applied_sector_tails() {
+        let mut entry = vec![0u8; 1024];
+        entry[4..6].copy_from_slice(&0x30u16.to_le_bytes());
+        entry[6..8].copy_from_slice(&3u16.to_le_bytes());
+        entry[0x30..0x32].copy_from_slice(&[0xAA, 0xBB]);
+        entry[0x32..0x34].copy_from_slice(&[0x11, 0x22]);
+        entry[0x34..0x36].copy_from_slice(&[0x33, 0x44]);
+        entry[510..512].copy_from_slice(&[0x11, 0x22]);
+        entry[1022..1024].copy_from_slice(&[0x33, 0x44]);
+
+        assert_eq!(apply_fixup_in_place(&mut entry), FixupState::AlreadyApplied);
     }
 }

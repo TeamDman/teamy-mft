@@ -23,6 +23,14 @@ use tracing_subscriber::registry::LookupSpan;
 
 static DAEMON_LOG_HUB: LazyLock<DaemonLogHub> = LazyLock::new(|| DaemonLogHub::new(2_048));
 
+#[cfg(all(feature = "tracy", not(test)))]
+thread_local! {
+    static DAEMON_TRACY_REPLAY_SPANS: std::cell::RefCell<std::collections::HashMap<String, tracing_tracy::client::Span>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static DAEMON_TRACY_REPLAY_THREAD_NAMED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 #[derive(Debug)]
 pub struct DaemonLogHub {
     capacity: usize,
@@ -298,9 +306,23 @@ where
     let Some(span) = ctx.span(id) else {
         return;
     };
-    let Some(route_fields) = span.extensions().get::<RouteFields>().cloned() else {
-        return;
-    };
+
+    let mut route_fields = RouteFields::default();
+    for scoped_span in span.scope().from_root() {
+        if let Some(scoped_route_fields) = scoped_span.extensions().get::<RouteFields>() {
+            if route_fields.correlation_id.is_none() {
+                route_fields
+                    .correlation_id
+                    .clone_from(&scoped_route_fields.correlation_id);
+            }
+            if route_fields.rpc_method.is_none() {
+                route_fields
+                    .rpc_method
+                    .clone_from(&scoped_route_fields.rpc_method);
+            }
+        }
+    }
+
     if route_fields.correlation_id.is_none() && route_fields.rpc_method.is_none() {
         return;
     }
@@ -318,11 +340,25 @@ where
             .clone()
             .unwrap_or_else(|| String::from("global")),
         correlation_id: route_fields.correlation_id.clone(),
-        spans: vec![daemon_log_span_from_metadata(span.metadata())],
-        fields: vec![DaemonLogField {
-            key: String::from("span_name"),
-            value: span.metadata().name().to_string(),
-        }],
+        spans: span
+            .scope()
+            .from_root()
+            .map(|span| daemon_log_span_from_metadata(span.metadata()))
+            .collect(),
+        fields: vec![
+            DaemonLogField {
+                key: String::from("span_name"),
+                value: span.metadata().name().to_string(),
+            },
+            DaemonLogField {
+                key: String::from("span_id"),
+                value: id.into_u64().to_string(),
+            },
+            DaemonLogField {
+                key: String::from("thread_id"),
+                value: format!("{:?}", std::thread::current().id()),
+            },
+        ],
     });
 }
 
@@ -540,6 +576,65 @@ fn is_span_transition_event(event: &DaemonLogEvent) -> bool {
     matches!(event.message.as_str(), "enter_span" | "exit_span")
 }
 
+#[cfg(all(feature = "tracy", not(test)))]
+fn daemon_log_field_value<'a>(event: &'a DaemonLogEvent, key: &str) -> Option<&'a str> {
+    event
+        .fields
+        .iter()
+        .find(|field| field.key == key)
+        .map(|field| field.value.as_str())
+}
+
+#[cfg(all(feature = "tracy", not(test)))]
+fn replay_daemon_tracy_span_transition(
+    event: &DaemonLogEvent,
+    fields: &str,
+    correlation_id: &str,
+    file: &str,
+    line: &str,
+    spans: &str,
+) -> bool {
+    let Some(span_id) = daemon_log_field_value(event, "span_id") else {
+        return false;
+    };
+    let span_name = daemon_log_field_value(event, "span_name").unwrap_or("daemon_span");
+    let thread_id = daemon_log_field_value(event, "thread_id").unwrap_or("unknown");
+    let key = format!("{correlation_id}:{}:{span_id}", event.method);
+
+    if event.message == "exit_span" {
+        let span =
+            DAEMON_TRACY_REPLAY_SPANS.with(|open_spans| open_spans.borrow_mut().remove(&key));
+        return span.is_some();
+    }
+
+    if event.message != "enter_span" {
+        return false;
+    }
+
+    let client = tracing_tracy::client::Client::start();
+    DAEMON_TRACY_REPLAY_THREAD_NAMED.with(|named| {
+        if !named.get() {
+            client.set_thread_name("daemon-span-replay");
+            named.set(true);
+        }
+    });
+
+    let line = event
+        .line
+        .unwrap_or_else(|| line.parse::<u32>().unwrap_or(0));
+    let zone_name = format!("daemon::{span_name}");
+    let span = client.span_alloc(Some(&zone_name), &event.method, file, line, 0);
+    span.emit_color(0x4E79A7);
+    span.emit_text(&format!(
+        "target={} thread_id={} correlation_id={} fields={} stack={}",
+        event.target, thread_id, correlation_id, fields, spans
+    ));
+    let previous =
+        DAEMON_TRACY_REPLAY_SPANS.with(|open_spans| open_spans.borrow_mut().insert(key, span));
+    drop(previous);
+    true
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "daemon log formatting keeps each emitted field mapping explicit"
@@ -560,6 +655,12 @@ fn emit_forwarded_daemon_log(event: &DaemonLogEvent) {
         .map_or_else(|| String::from("unknown"), |line| line.to_string());
     let spans = daemon_log_spans(event);
     if is_span_transition_event(event) {
+        #[cfg(all(feature = "tracy", not(test)))]
+        if replay_daemon_tracy_span_transition(event, &fields, &correlation_id, file, &line, &spans)
+        {
+            return;
+        }
+
         match event.level {
             DaemonLogLevel::Trace => tracing::trace!(
                 target: "teamy_mft::daemon_remote::span_transition",
@@ -835,6 +936,47 @@ mod tests {
                 && event.method == "ping"
                 && event.correlation_id.as_ref() == Some(&correlation_id)),
             "expected daemon pong to be captured for correlation id; got {events:#?}"
+        );
+    }
+
+    #[test]
+    fn trace_layer_captures_child_span_transitions_inside_correlation_span() {
+        let correlation_id = CorrelationId::from_str("22222222-2222-2222-2222-222222222222")
+            .expect("uuid should parse");
+        let subscriber = tracing_subscriber::registry().with(DaemonTraceLayer);
+        tracing::subscriber::with_default(subscriber, || {
+            let parent = tracing::info_span!(
+                "daemon_rpc",
+                correlation_id = %correlation_id,
+                rpc_method = "sync"
+            );
+            let _parent_guard = parent.enter();
+            let child = tracing::info_span!("child_daemon_work");
+            let _child_guard = child.enter();
+        });
+
+        let events = snapshot_for_correlation(&correlation_id);
+        assert!(
+            events.iter().any(|event| {
+                event.message == "enter_span"
+                    && event.method == "sync"
+                    && event
+                        .fields
+                        .iter()
+                        .any(|field| field.key == "span_name" && field.value == "child_daemon_work")
+            }),
+            "expected child span enter transition to inherit daemon correlation; got {events:#?}"
+        );
+        assert!(
+            events.iter().any(|event| {
+                event.message == "exit_span"
+                    && event.method == "sync"
+                    && event
+                        .fields
+                        .iter()
+                        .any(|field| field.key == "span_name" && field.value == "child_daemon_work")
+            }),
+            "expected child span exit transition to inherit daemon correlation; got {events:#?}"
         );
     }
 
