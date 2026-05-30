@@ -49,6 +49,34 @@ if ($Elevated -and -not (Test-IsAdministrator)) {
 	$arguments += $QueryArgs
 
 	Write-Host "Relaunching profiler wrapper as administrator..."
+	$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
+	if ($wt) {
+		$wtArguments = @(
+			'-w',
+			'new',
+			'new-tab',
+			'--title',
+			'teamy-mft profiler (admin)',
+			'-d',
+			$PSScriptRoot,
+			$powershellCommand.Source
+		) + $arguments
+		try {
+			$process = Start-Process `
+				-FilePath $wt.Source `
+				-ArgumentList (($wtArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ') `
+				-Verb RunAs `
+				-Wait `
+				-PassThru
+			exit $process.ExitCode
+		} catch {
+			Write-Warning "Failed to relaunch profiler wrapper in Windows Terminal: $($_.Exception.Message)"
+			Write-Warning "Falling back to launching elevated PowerShell directly."
+		}
+	} else {
+		Write-Warning "wt.exe not found in PATH; launching elevated PowerShell directly."
+	}
+
 	$process = Start-Process `
 		-FilePath $powershellCommand.Source `
 		-ArgumentList (($arguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ') `
