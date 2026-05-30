@@ -408,3 +408,5 @@ Write-Host "  total wrapper:  $(Format-Elapsed $overallStopwatch.Elapsed)"
 if ($commandFailureMessage) {
 	throw $commandFailureMessage
 }
+
+Pause
