@@ -406,7 +406,9 @@ if ($profilerElapsed) {
 Write-Host "  total wrapper:  $(Format-Elapsed $overallStopwatch.Elapsed)"
 
 if ($commandFailureMessage) {
+	Write-Error $commandFailureMessage
+	Pause
 	throw $commandFailureMessage
+} else {
+	Pause
 }
-
-Pause
