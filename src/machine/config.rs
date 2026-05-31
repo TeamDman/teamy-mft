@@ -261,7 +261,7 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
     path.ensure_parent_dir_exists()?;
     let parent = path
         .parent()
-        .ok_or_else(|| eyre::eyre!("Machine config path {} has no parent", path.display()))?;
+        .wrap_err_with(|| format!("Machine config path {} has no parent", path.display()))?;
     let test_path = parent.join("machine_config.write_test.tmp");
     let bytes = facet_json::to_vec_pretty(config)?;
     debug!(

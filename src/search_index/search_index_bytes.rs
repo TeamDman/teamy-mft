@@ -4,6 +4,7 @@ use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
 use eyre::Context;
+use eyre::ContextCompat;
 use eyre::bail;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -606,8 +607,8 @@ impl<'a> ParsedSearchIndex<'a> {
     /// Returns an error if `segment_id` is out of bounds.
     pub fn segment(&self, segment_id: u32) -> eyre::Result<SearchIndexPathSegmentView<'a>> {
         let segment_id = segment_id as usize;
-        self.segments.get(segment_id).copied().ok_or_else(|| {
-            eyre::eyre!(
+        self.segments.get(segment_id).copied().wrap_err_with(|| {
+            format!(
                 "Corrupt search index: requested segment {} but index contains {} segments",
                 segment_id,
                 self.segments.len()
@@ -1204,39 +1205,35 @@ fn compute_search_index_layout(
     let path_node_bytes_len = counts
         .path_nodes
         .checked_mul(SEARCH_INDEX_NODE_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index path-node table length overflow"))?;
+        .wrap_err("Search index path-node table length overflow")?;
     let terminal_bytes_len = counts
         .terminals
         .checked_mul(SEARCH_INDEX_TERMINAL_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index terminal table length overflow"))?;
+        .wrap_err("Search index terminal table length overflow")?;
     let posting_range_bytes_len = counts
         .segments
         .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index posting-range table length overflow"))?;
+        .wrap_err("Search index posting-range table length overflow")?;
     let posting_row_id_bytes_len = counts
         .posting_row_ids
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index posting row-id table length overflow"))?;
+        .wrap_err("Search index posting row-id table length overflow")?;
     let extension_posting_range_bytes_len = counts
         .extensions
         .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index extension posting-range table length overflow"))?;
+        .wrap_err("Search index extension posting-range table length overflow")?;
     let extension_posting_row_id_bytes_len = counts
         .extension_posting_row_ids
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
-        .ok_or_else(|| {
-            eyre::eyre!("Search index extension posting row-id table length overflow")
-        })?;
+        .wrap_err("Search index extension posting row-id table length overflow")?;
     let trigram_posting_range_bytes_len = counts
         .trigrams
         .checked_mul(SEARCH_INDEX_POSTING_RANGE_LEN)
-        .ok_or_else(|| eyre::eyre!("Search index trigram posting-range table length overflow"))?;
+        .wrap_err("Search index trigram posting-range table length overflow")?;
     let trigram_posting_segment_id_bytes_len = counts
         .trigram_posting_segment_ids
         .checked_mul(SEARCH_INDEX_POSTING_ROW_LEN)
-        .ok_or_else(|| {
-            eyre::eyre!("Search index trigram posting segment-id table length overflow")
-        })?;
+        .wrap_err("Search index trigram posting segment-id table length overflow")?;
 
     let path_node_offset = cursor;
     let terminal_offset = path_node_offset + path_node_bytes_len;
@@ -1886,6 +1883,6 @@ mod tests {
             .iter()
             .position(|segment| segment.normalized == normalized)
             .map(|segment_id| segment_id as u32)
-            .ok_or_else(|| eyre::eyre!("missing segment {normalized}"))
+            .wrap_err_with(|| format!("missing segment {normalized}"))
     }
 }

@@ -1,8 +1,8 @@
 use crate::mft::mft_record_attribute_non_resident_header::MftRecordAttributeNonResidentHeader;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunList;
 use crate::mft::mft_record_attribute_x80_data_attribute::MftRecordX80DollarDataAttribute;
+use eyre::ContextCompat;
 use eyre::bail;
-use eyre::eyre;
 use std::ops::Deref;
 
 /// Wrapper around a borrowed attribute slice inside an MFT record.
@@ -135,7 +135,7 @@ impl<'a> MftRecordAttribute<'a> {
         }
         let header = self
             .get_non_resident_header()
-            .ok_or_else(|| eyre!("Attribute marked non-resident but too short for header"))?;
+            .wrap_err("Attribute marked non-resident but too short for header")?;
         Ok(Some(MftRecordAttributeRunList::new(header.runlist()?)))
     }
 }

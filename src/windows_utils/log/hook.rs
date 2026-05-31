@@ -1,5 +1,6 @@
 use crate::windows_utils::log::LOG_BUFFER;
 use eyre::Context;
+use eyre::ContextCompat;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
@@ -29,10 +30,7 @@ impl IoHook for Child {
 
 pub fn hook_stdout_logs(child: &mut Child) -> eyre::Result<()> {
     debug!("Hooking stdout logs");
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| eyre::eyre!("Failed to capture stdout"))?;
+    let stdout = child.stdout.take().wrap_err("Failed to capture stdout")?;
     let reader = BufReader::new(stdout);
     hook_io(reader);
     Ok(())
@@ -40,10 +38,7 @@ pub fn hook_stdout_logs(child: &mut Child) -> eyre::Result<()> {
 
 pub fn hook_stderr_logs(child: &mut Child) -> eyre::Result<()> {
     debug!("Hooking stderr logs");
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| eyre::eyre!("Failed to capture stderr"))?;
+    let stderr = child.stderr.take().wrap_err("Failed to capture stderr")?;
     let reader = BufReader::new(stderr);
     hook_io(reader);
     Ok(())

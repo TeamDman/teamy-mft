@@ -34,6 +34,7 @@ use crate::sync::execute_sync_mode;
 use crate::sync::resolve_drive_infos_in_dir_for_letters;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
+use eyre::ContextCompat;
 use rustc_hash::FxHashMap;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
@@ -1711,17 +1712,15 @@ pub fn run_daemon(service_mode: bool) -> eyre::Result<()> {
     if service_mode {
         run_windows_service_dispatcher()
     } else {
-        let config = load_machine_config()?.ok_or_else(|| {
-            eyre::eyre!("Machine config is not installed. Run `teamy-mft install` first.")
-        })?;
+        let config = load_machine_config()?
+            .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
         run_daemon_runtime(config)
     }
 }
 
 fn run_windows_service_dispatcher() -> eyre::Result<()> {
-    let config = load_machine_config()?.ok_or_else(|| {
-        eyre::eyre!("Machine config is not installed. Run `teamy-mft install` first.")
-    })?;
+    let config = load_machine_config()?
+        .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let mut service_name = crate::machine::security::encode_wide(&config.service_name);
     let mut table = [
         SERVICE_TABLE_ENTRYW {
@@ -1744,9 +1743,8 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows::core::PW
 
 fn service_main_impl() -> eyre::Result<()> {
     STOP_REQUESTED.store(false, Ordering::Relaxed);
-    let config = load_machine_config()?.ok_or_else(|| {
-        eyre::eyre!("Machine config is not installed. Run `teamy-mft install` first.")
-    })?;
+    let config = load_machine_config()?
+        .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let service_name = crate::machine::security::encode_wide(&config.service_name);
     // SAFETY: The service name pointer remains valid for the call and the handler function has the required ABI.
     let handle = unsafe {

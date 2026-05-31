@@ -1,9 +1,9 @@
 use crate::mft::mft_record_attribute::MftRecordAttribute;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunList;
 use crate::mft::mft_record_attribute_run_list::MftRecordAttributeRunListEntry;
+use eyre::ContextCompat;
 use eyre::Result;
 use eyre::bail;
-use eyre::eyre;
 use std::ops::Deref;
 
 /// Wrapper specific to a type 0x80 ($DATA) attribute.
@@ -31,7 +31,7 @@ impl<'a> MftRecordX80DollarDataAttribute<'a> {
     pub fn get_data_run_list(&'a self) -> Result<MftRecordAttributeRunList<'a>> {
         let rl = self
             .get_run_list()? // generic accessor
-            .ok_or_else(|| eyre!("No data run list for resident $DATA attribute"))?;
+            .wrap_err("No data run list for resident $DATA attribute")?;
         Ok(rl)
     }
 }
