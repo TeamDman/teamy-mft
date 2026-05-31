@@ -3,6 +3,7 @@ use crate::read::physical_read_request::PhysicalReadRequest;
 use crate::read::physical_read_results::PhysicalReadResultEntry;
 use crate::read::physical_read_results::PhysicalReadResults;
 use eyre::Context;
+use eyre::ContextCompat;
 use std::collections::BTreeSet;
 use tracing::info_span;
 use tracing::instrument;
@@ -123,7 +124,7 @@ impl PhysicalReader {
             .results
             .into_iter()
             .enumerate()
-            .map(|(i, o)| o.ok_or_else(|| eyre::eyre!("Missing response index {i}")))
+            .map(|(i, o)| o.wrap_err_with(|| format!("Missing response index {i}")))
             .collect::<eyre::Result<BTreeSet<_>>>()?;
         Ok(PhysicalReadResults { entries })
     }

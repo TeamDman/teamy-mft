@@ -21,6 +21,7 @@ use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use crate::search_index::search_index_bytes::SearchIndexBytesMut;
 use eyre::Context;
+use eyre::ContextCompat;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
@@ -102,8 +103,8 @@ impl LiveDriveState {
         paths: PublishedDrivePaths,
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<Self> {
-        let checkpoint = load_checkpoint(&paths.checkpoint_path)?.ok_or_else(|| {
-            eyre::eyre!(
+        let checkpoint = load_checkpoint(&paths.checkpoint_path)?.wrap_err_with(|| {
+            format!(
                 "Missing checkpoint for drive {} at {}",
                 paths.drive_letter,
                 paths.checkpoint_path.display()
@@ -113,14 +114,14 @@ impl LiveDriveState {
         let snapshot_usn = checkpoint
             .snapshot_usn
             .or(checkpoint.last_usn)
-            .ok_or_else(|| {
-                eyre::eyre!(
+            .wrap_err_with(|| {
+                format!(
                     "Checkpoint for drive {} does not include a snapshot or published USN",
                     paths.drive_letter
                 )
             })?;
-        let journal_id = checkpoint.journal_id.ok_or_else(|| {
-            eyre::eyre!(
+        let journal_id = checkpoint.journal_id.wrap_err_with(|| {
+            format!(
                 "Checkpoint for drive {} does not include a journal id",
                 paths.drive_letter
             )
@@ -278,11 +279,11 @@ impl LiveDriveState {
         let overlay_rows = self
             .overlay_rows_cache
             .as_deref()
-            .ok_or_else(|| eyre::eyre!("Missing overlay row cache"))?;
+            .wrap_err("Missing overlay row cache")?;
         let overlay_index = self
             .overlay_index_bytes_cache
             .as_deref()
-            .ok_or_else(|| eyre::eyre!("Missing overlay index cache"))?;
+            .wrap_err("Missing overlay index cache")?;
 
         write_search_index_bytes(&self.paths.overlay_index_path, overlay_index)?;
         let checkpoint = PublishedCheckpoint {
@@ -410,7 +411,7 @@ impl LiveDriveState {
         let current_rows = self
             .current_rows_cache
             .as_deref()
-            .ok_or_else(|| eyre::eyre!("Missing current row cache"))?;
+            .wrap_err("Missing current row cache")?;
         let overlay_rows = diff_overlay_rows(&self.base_rows, current_rows);
         let overlay_index_bytes = SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(
@@ -455,7 +456,7 @@ impl LiveDriveGraph {
         let root_frn = frns
             .get(5)
             .copied()
-            .ok_or_else(|| eyre::eyre!("MFT snapshot missing root directory record"))?;
+            .wrap_err("MFT snapshot missing root directory record")?;
 
         let mut nodes = FxHashMap::<u64, LiveNode>::default();
         for (entry_id, record) in records.iter().enumerate() {
@@ -660,14 +661,14 @@ fn validate_journal_continuity(
     let snapshot_usn = checkpoint
         .snapshot_usn
         .or(checkpoint.last_usn)
-        .ok_or_else(|| {
-            eyre::eyre!(
+        .wrap_err_with(|| {
+            format!(
                 "Checkpoint for drive {} is missing a replay cursor",
                 drive_letter
             )
         })?;
-    let journal_id = checkpoint.journal_id.ok_or_else(|| {
-        eyre::eyre!(
+    let journal_id = checkpoint.journal_id.wrap_err_with(|| {
+        format!(
             "Checkpoint for drive {} is missing a journal id",
             drive_letter
         )
@@ -992,7 +993,7 @@ mod tests {
             .to_string_lossy()
             .chars()
             .next()
-            .ok_or_else(|| eyre::eyre!("failed extracting drive letter from temp dir"))?;
+            .wrap_err("failed extracting drive letter from temp dir")?;
         let needle = format!("__teamy_mft_live_refresh_{}__", current_unix_ms());
         let created_path = scope_dir.path().join(format!("{needle}.txt"));
 

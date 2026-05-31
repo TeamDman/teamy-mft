@@ -7,6 +7,7 @@ use crate::windows_utils::tray::TRAY_ICON_ID;
 use crate::windows_utils::tray::add_tray_icon;
 use crate::windows_utils::window::create_window_for_tray;
 use eyre::Context;
+use eyre::ContextCompat;
 use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -61,7 +62,7 @@ pub fn set_tray_icon(icon: HICON) -> eyre::Result<()> {
     record_tray_icon(icon);
     let hwnd_bits = *TRAY_WINDOW
         .get()
-        .ok_or_else(|| eyre::eyre!("Tray window handle not available"))?;
+        .wrap_err("Tray window handle not available")?;
     let hwnd = HWND(hwnd_bits as *mut c_void);
 
     let notify_icon_data = NOTIFYICONDATAW {

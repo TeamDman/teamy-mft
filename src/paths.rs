@@ -1,5 +1,5 @@
 use directories::ProjectDirs;
-use eyre::eyre;
+use eyre::ContextCompat;
 use std::fs;
 use std::ops::Deref;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 fn project_dirs() -> eyre::Result<ProjectDirs> {
     ProjectDirs::from_path(PathBuf::from("teamy_mft"))
-        .ok_or_else(|| eyre!("Could not determine project directories"))
+        .wrap_err("Could not determine project directories")
 }
 
 #[derive(Debug)]
