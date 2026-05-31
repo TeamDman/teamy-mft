@@ -311,7 +311,7 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
 #[track_caller]
 pub fn load_required_machine_config() -> eyre::Result<MachineConfig> {
     load_machine_config()?
-        .wrap_err("Machine daemon is not installed. Run `teamy-mft install` first.")
+        .wrap_err("Teamy-MFT is not installed. Run `teamy-mft install --help`.")
 }
 
 /// # Errors
@@ -344,6 +344,7 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
 ///
 /// Returns an error if the machine cache root is unavailable because install has not been run.
 #[instrument(level = "debug")]
+#[track_caller]
 pub fn load_sync_dir_from_config() -> eyre::Result<PathBuf> {
     let config = load_required_machine_config()?;
     debug!(sync_dir = %config.sync_dir.display(), "Resolved machine sync directory");
