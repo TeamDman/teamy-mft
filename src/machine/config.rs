@@ -1,4 +1,5 @@
 use crate::paths::EnsureParentDirExists;
+use eyre::ContextCompat;
 use facet::Facet;
 use std::fs;
 use std::io;
@@ -307,10 +308,10 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
 ///
 /// Returns an error if the machine config is not installed or cannot be read.
 #[instrument(level = "debug")]
+#[track_caller]
 pub fn load_required_machine_config() -> eyre::Result<MachineConfig> {
-    load_machine_config()?.ok_or_else(|| {
-        eyre::eyre!("Machine daemon is not installed. Run `teamy-mft install` first.")
-    })
+    load_machine_config()?
+        .wrap_err("Machine daemon is not installed. Run `teamy-mft install` first.")
 }
 
 /// # Errors
