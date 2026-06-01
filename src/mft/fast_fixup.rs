@@ -203,7 +203,7 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
         buf.par_chunks_mut(entry_size)
             .enumerate()
             .map(|(_entry_index, entry)| {
-                #[cfg(feature = "tracy")]
+                #[cfg(feature = "extended_observability_per_record")]
                 let _span = debug_span!("apply_fixup_to_entry").entered();
                 if entry.len() < entry_size {
                     return FixupState::Invalid;
@@ -211,13 +211,13 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
                 apply_fixup_in_place(entry)
             })
             .fold(FixupStats::default, |mut acc, state| {
-                #[cfg(feature = "tracy")]
+                #[cfg(feature = "extended_observability_per_record")]
                 let _span = debug_span!("fold_fixup_state").entered();
                 acc.record(state);
                 acc
             })
             .reduce(FixupStats::default, |a, b| {
-                #[cfg(feature = "tracy")]
+                #[cfg(feature = "extended_observability_per_record")]
                 let _span = debug_span!("reduce_fixup_stats").entered();
                 FixupStats {
                     applied: a.applied + b.applied,
