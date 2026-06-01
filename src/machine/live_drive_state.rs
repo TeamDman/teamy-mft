@@ -824,7 +824,7 @@ mod tests {
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::sync::IfExistsOutputBehaviour;
-    use crate::sync::SyncMode;
+    use eyre::ContextCompat;
     use rustc_hash::FxHashMap;
     use std::time::Duration;
 
@@ -1000,7 +1000,6 @@ mod tests {
         sync_machine_cache(
             cache_dir.path(),
             &[drive_letter],
-            SyncMode::Both,
             IfExistsOutputBehaviour::Overwrite,
         )?;
 
