@@ -3,6 +3,7 @@ param(
 	[switch]$Release,
 	[switch]$NoOpenProfiler,
 	[switch]$Elevated,
+	[switch]$ElevateTracy,
 	[Parameter(Position = 0, ValueFromRemainingArguments = $true)]
 	[string[]]$QueryArgs
 )
@@ -26,6 +27,194 @@ function Quote-ProcessArgument {
 	return '"' + ($Argument -replace '"', '\"') + '"'
 }
 
+if (-not ("TeamyMftProfilerLoggedProcess" -as [type])) {
+	Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
+
+public sealed class TeamyMftProfilerLoggedProcess : IDisposable
+{
+    private readonly object gate = new object();
+    private readonly Process process;
+    private readonly StreamWriter logWriter;
+    private readonly Task stdoutTask;
+    private readonly Task stderrTask;
+    private bool closed;
+
+    private TeamyMftProfilerLoggedProcess(Process process, StreamWriter logWriter)
+    {
+        this.process = process;
+        this.logWriter = logWriter;
+        stdoutTask = Task.Factory.StartNew(delegate { Pump(process.StandardOutput); }, TaskCreationOptions.LongRunning);
+        stderrTask = Task.Factory.StartNew(delegate { Pump(process.StandardError); }, TaskCreationOptions.LongRunning);
+    }
+
+    public Process Process
+    {
+        get { return process; }
+    }
+
+    public static TeamyMftProfilerLoggedProcess Start(string filePath, string arguments, string logPath)
+    {
+        string logDirectory = Path.GetDirectoryName(logPath);
+        if (!String.IsNullOrEmpty(logDirectory))
+        {
+            Directory.CreateDirectory(logDirectory);
+        }
+
+        StreamWriter logWriter = new StreamWriter(logPath, false, new UTF8Encoding(false));
+        logWriter.AutoFlush = true;
+        logWriter.WriteLine("# started: " + DateTimeOffset.Now.ToString("o"));
+        if (String.IsNullOrWhiteSpace(arguments))
+        {
+            logWriter.WriteLine("# command: " + filePath);
+        }
+        else
+        {
+            logWriter.WriteLine("# command: " + filePath + " " + arguments);
+        }
+        logWriter.WriteLine();
+
+        ProcessStartInfo startInfo = new ProcessStartInfo();
+        startInfo.FileName = filePath;
+        startInfo.Arguments = arguments;
+        startInfo.UseShellExecute = false;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.CreateNoWindow = false;
+
+        Process process = new Process();
+        process.StartInfo = startInfo;
+        try
+        {
+            process.Start();
+        }
+        catch
+        {
+            logWriter.Dispose();
+            process.Dispose();
+            throw;
+        }
+
+        return new TeamyMftProfilerLoggedProcess(process, logWriter);
+    }
+
+    private void Pump(StreamReader reader)
+    {
+        try
+        {
+            string line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                WriteLine(line);
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private void WriteLine(string line)
+    {
+        lock (gate)
+        {
+            logWriter.WriteLine(line);
+            Console.WriteLine(line);
+        }
+    }
+
+    public int WaitForExit()
+    {
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        return process.ExitCode;
+    }
+
+    public void Close()
+    {
+        if (closed)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            WaitForExit();
+        }
+        catch
+        {
+        }
+
+        lock (gate)
+        {
+            logWriter.Flush();
+            logWriter.Dispose();
+        }
+
+        process.Dispose();
+        closed = true;
+    }
+
+    public void Dispose()
+    {
+        Close();
+    }
+}
+'@
+}
+
+function Start-LoggedProcess {
+	param(
+		[Parameter(Mandatory = $true)]
+		[string]$FilePath,
+		[Parameter(Mandatory = $true)]
+		[string[]]$ArgumentList,
+		[Parameter(Mandatory = $true)]
+		[string]$LogPath
+	)
+
+	$quotedArguments = (($ArgumentList | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ')
+	return [TeamyMftProfilerLoggedProcess]::Start($FilePath, $quotedArguments, $LogPath)
+}
+
+function Wait-LoggedProcessExit {
+	param(
+		[Parameter(Mandatory = $true)]
+		$LoggedProcess
+	)
+
+	return $LoggedProcess.WaitForExit()
+}
+
+function Close-LoggedProcess {
+	param(
+		$LoggedProcess
+	)
+
+	if ($null -eq $LoggedProcess) {
+		return
+	}
+
+	$LoggedProcess.Close()
+}
+
 if ($Elevated -and -not (Test-IsAdministrator)) {
 	$powershellCommand = Get-Command pwsh.exe -ErrorAction SilentlyContinue
 	if (-not $powershellCommand) {
@@ -44,6 +233,9 @@ if ($Elevated -and -not (Test-IsAdministrator)) {
 	}
 	if ($NoOpenProfiler) {
 		$arguments += '-NoOpenProfiler'
+	}
+	if ($ElevateTracy) {
+		$arguments += '-ElevateTracy'
 	}
 	$arguments += '-Elevated'
 	$arguments += $QueryArgs
@@ -186,13 +378,73 @@ function Wait-ForTracyCaptureExit {
 function Start-TracyCaptureProcess {
 	param(
 		[Parameter(Mandatory = $true)]
-		[string]$CapturePath
+		[string]$CapturePath,
+		[switch]$ElevateTracy
 	)
 
+	$tracyCaptureCommand = Get-Command tracy-capture.exe -ErrorAction Stop
+	$tracyCapturePath = $tracyCaptureCommand.Source
+	$tracyCaptureArguments = @("-o", $CapturePath)
+	$tracyCaptureArgumentString = (($tracyCaptureArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ')
+	$isAdministrator = Test-IsAdministrator
 	$wt = Get-Command wt.exe -ErrorAction SilentlyContinue
-	if ($wt) {
+
+	if ($isAdministrator -and -not $ElevateTracy) {
+		Write-Host "Launching tracy-capture without elevation. Pass -ElevateTracy to inherit the administrator token."
+		$shell = New-Object -ComObject Shell.Application
+		if ($wt) {
+			$wtArguments = @("-w", "new", $tracyCapturePath) + $tracyCaptureArguments
+			$wtArgumentString = (($wtArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ')
+			try {
+				$shell.ShellExecute($wt.Source, $wtArgumentString, $PSScriptRoot, "open", 1)
+				return
+			} catch {
+				Write-Warning "Failed to launch unelevated tracy-capture in Windows Terminal: $($_.Exception.Message)"
+				Write-Warning "Falling back to launching unelevated tracy-capture directly."
+			}
+		} else {
+			Write-Warning "wt.exe not found in PATH; launching unelevated tracy-capture directly"
+		}
+
 		try {
-			Start-Process -FilePath "wt.exe" -ArgumentList @("-w", "new", "tracy-capture.exe", "-o", $CapturePath) -ErrorAction Stop
+			$shell.ShellExecute($tracyCapturePath, $tracyCaptureArgumentString, $PSScriptRoot, "open", 1)
+			return
+		} catch {
+			throw "Failed to launch tracy-capture without elevation: $($_.Exception.Message)"
+		}
+	}
+
+	if ($ElevateTracy -and -not $isAdministrator) {
+		if ($wt) {
+			$wtArguments = @("-w", "new", $tracyCapturePath) + $tracyCaptureArguments
+			try {
+				Start-Process `
+					-FilePath $wt.Source `
+					-ArgumentList (($wtArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ') `
+					-Verb RunAs `
+					-ErrorAction Stop
+				return
+			} catch {
+				Write-Warning "Failed to launch elevated tracy-capture in Windows Terminal: $($_.Exception.Message)"
+				Write-Warning "Falling back to launching elevated tracy-capture directly."
+			}
+		} else {
+			Write-Warning "wt.exe not found in PATH; launching elevated tracy-capture directly"
+		}
+
+		Start-Process `
+			-FilePath $tracyCapturePath `
+			-ArgumentList $tracyCaptureArgumentString `
+			-Verb RunAs `
+			-PassThru `
+			-ErrorAction Stop
+		return
+	}
+
+	if ($wt) {
+		$wtArguments = @("-w", "new", $tracyCapturePath) + $tracyCaptureArguments
+		try {
+			Start-Process -FilePath $wt.Source -ArgumentList (($wtArguments | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ') -ErrorAction Stop
 			return
 		} catch {
 			Write-Warning "Failed to launch tracy-capture in Windows Terminal: $($_.Exception.Message)"
@@ -202,7 +454,7 @@ function Start-TracyCaptureProcess {
 		Write-Warning "wt.exe not found in PATH; launching tracy-capture directly"
 	}
 
-	Start-Process -FilePath "tracy-capture.exe" -ArgumentList @("-o", $CapturePath) -PassThru -ErrorAction Stop
+	Start-Process -FilePath $tracyCapturePath -ArgumentList $tracyCaptureArgumentString -PassThru -ErrorAction Stop
 }
 
 function Stop-TracyCaptureGracefully {
@@ -330,20 +582,24 @@ if (-not (Test-Path $captureDir)) {
 
 $slug = "$((Get-Date).ToString("yyyy-MM-dd_HH-mm-ss")).tracy"
 $capturePath = Join-Path $captureDir $slug
+$logPath = [System.IO.Path]::ChangeExtension($capturePath, ".log")
 
 Write-Host "Capture: $capturePath"
 Write-Host "Logging teamy-mft runtime performance information to $capturePath"
+Write-Host "Log: $logPath"
 $capture = $null
+$loggedTeamyProcess = $null
 
 try {
 	Write-Host "Starting built $profileLabel teamy-mft: $teamyMftPath $($appArgs -join ' ')"
 	$commandStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	$teamyProcess = Start-Process -FilePath $teamyMftPath -ArgumentList $appArgs -NoNewWindow -PassThru
+	$loggedTeamyProcess = Start-LoggedProcess -FilePath $teamyMftPath -ArgumentList $appArgs -LogPath $logPath
+	$teamyProcess = $loggedTeamyProcess.Process
 	Write-Host "Waiting $(Format-Elapsed $captureAttachDelay) for teamy-mft Tracy endpoint before launching capture"
 	Start-Sleep -Milliseconds ([int]$captureAttachDelay.TotalMilliseconds)
 
 	$captureLaunchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	$capture = Start-TracyCaptureProcess -CapturePath $capturePath
+	$capture = Start-TracyCaptureProcess -CapturePath $capturePath -ElevateTracy:$ElevateTracy
 	$captureLaunchStopwatch.Stop()
 	$captureLaunchElapsed = $captureLaunchStopwatch.Elapsed
 	Write-Host "Capture launch time: $(Format-Elapsed $captureLaunchElapsed)"
@@ -351,10 +607,11 @@ try {
 	$captureProcesses = @(Wait-ForTracyCaptureReady -CapturePath $capturePath -Timeout $captureStartupTimeout)
 	Write-Host "tracy-capture ready (pid: $($captureProcesses.Id -join ', '))"
 
-	$teamyProcess.WaitForExit()
+	$commandExitCode = Wait-LoggedProcessExit -LoggedProcess $loggedTeamyProcess
 	$commandStopwatch.Stop()
 	$commandElapsed = $commandStopwatch.Elapsed
-	$commandExitCode = $teamyProcess.ExitCode
+	Close-LoggedProcess -LoggedProcess $loggedTeamyProcess
+	$loggedTeamyProcess = $null
 	Write-Host "Traced command time: $(Format-Elapsed $commandElapsed)"
 	if ($commandExitCode -ne 0) {
 		$commandFailureMessage = "teamy-mft.exe failed with exit code $commandExitCode"
@@ -362,6 +619,10 @@ try {
 	}
 }
 finally {
+	if ($loggedTeamyProcess) {
+		Close-LoggedProcess -LoggedProcess $loggedTeamyProcess
+		$loggedTeamyProcess = $null
+	}
 	$cleanupStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 	Write-Host "Waiting $(Format-Elapsed $captureFlushDelay) before watching tracy-capture shutdown"
 	Start-Sleep -Milliseconds ([int]$captureFlushDelay.TotalMilliseconds)
