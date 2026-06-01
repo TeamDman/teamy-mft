@@ -310,8 +310,7 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
 #[instrument(level = "debug")]
 #[track_caller]
 pub fn load_required_machine_config() -> eyre::Result<MachineConfig> {
-    load_machine_config()?
-        .wrap_err("Teamy-MFT is not installed. Run `teamy-mft install --help`.")
+    load_machine_config()?.wrap_err("Teamy-MFT is not installed. Run `teamy-mft install --help`.")
 }
 
 /// # Errors

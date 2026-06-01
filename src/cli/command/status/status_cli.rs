@@ -417,6 +417,10 @@ fn print_protection_summary(config: &crate::machine::config::MachineConfig) {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "status output intentionally prints a flat machine-readable cache report"
+)]
 fn print_cache_summary(
     machine_status: &crate::machine::status::MachineStatus,
     daemon_status: Option<&crate::machine::ipc::StatusResponse>,

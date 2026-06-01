@@ -662,17 +662,11 @@ fn validate_journal_continuity(
         .snapshot_usn
         .or(checkpoint.last_usn)
         .wrap_err_with(|| {
-            format!(
-                "Checkpoint for drive {} is missing a replay cursor",
-                drive_letter
-            )
+            format!("Checkpoint for drive {drive_letter} is missing a replay cursor")
         })?;
-    let journal_id = checkpoint.journal_id.wrap_err_with(|| {
-        format!(
-            "Checkpoint for drive {} is missing a journal id",
-            drive_letter
-        )
-    })?;
+    let journal_id = checkpoint
+        .journal_id
+        .wrap_err_with(|| format!("Checkpoint for drive {drive_letter} is missing a journal id"))?;
     validate_active_cursor(
         drive_letter,
         snapshot_usn,

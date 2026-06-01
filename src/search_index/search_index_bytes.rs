@@ -1076,6 +1076,10 @@ fn collect_search_index_tables(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "serialization writes the fixed on-disk table layout in order"
+)]
 fn serialize_search_index_tables(
     header: SearchIndexHeader,
     tables: SearchIndexSerializationTables,

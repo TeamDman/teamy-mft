@@ -1,4 +1,5 @@
-use crate::windows_utils::{elevation::ensure_elevated, storage::DriveLetterPattern};
+use crate::windows_utils::elevation::ensure_elevated;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
