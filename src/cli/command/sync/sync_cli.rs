@@ -32,11 +32,7 @@ impl SyncArgs {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(crate::sync::execute_sync_mode(
-                plan.mode(),
-                drive_infos,
-                &plan.if_exists,
-            ))?;
+            runtime.block_on(crate::sync::execute_sync(drive_infos, &plan.if_exists))?;
         } else {
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
             crate::machine::ipc::ensure_daemon_ready(&config)?;

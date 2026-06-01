@@ -18,7 +18,6 @@ use crate::machine::config::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
-pub use crate::sync::SyncMode;
 pub use crate::sync::SyncPlan;
 use std::cmp::Ordering;
 use std::time::Duration;

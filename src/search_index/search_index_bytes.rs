@@ -1596,6 +1596,7 @@ mod tests {
     use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
+    use eyre::ContextCompat;
 
     const VIRTUAL_SNAPSHOT_TEST_PATH: &str = "Q:\\__TEAMY_MFT_VIRTUAL_SNAPSHOT_FIXTURE__\\a.txt";
 
