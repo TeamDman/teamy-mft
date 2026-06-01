@@ -183,17 +183,17 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
         writer,
         "{} {} {}{} {}",
         style_dim(ansi, &format!("{elapsed:>16.9}s")),
-        style_level(ansi, level, &level.to_string()),
-        style_level_bold(ansi, level, target),
-        style_level(ansi, level, ":"),
-        style_level(ansi, level, message)
+        style_level(ansi, *level, &level.to_string()),
+        style_level_bold(ansi, *level, target),
+        style_level(ansi, *level, ":"),
+        style_level(ansi, *level, message)
     )?;
     if let Some(event_fields) = fields.fields.as_deref().filter(|fields| !fields.is_empty()) {
         write!(
             writer,
             "{} {}",
-            style_level(ansi, level, ","),
-            style_daemon_field_list(ansi, level, event_fields)
+            style_level(ansi, *level, ","),
+            style_daemon_field_list(ansi, *level, event_fields)
         )?;
     }
 
@@ -226,25 +226,25 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
                     writer,
                     " {} {}{}, {}{}",
                     style_dim(ansi, "with"),
-                    style_level_bold(ansi, level, "rpc_method"),
-                    style_level(ansi, level, &format!("=\"{method}\"")),
-                    style_level_bold(ansi, level, "correlation_id"),
-                    style_level(ansi, level, &format!("={correlation_id}"))
+                    style_level_bold(ansi, *level, "rpc_method"),
+                    style_level(ansi, *level, &format!("=\"{method}\"")),
+                    style_level_bold(ansi, *level, "correlation_id"),
+                    style_level(ansi, *level, &format!("={correlation_id}"))
                 )?;
             }
             (Some(method), None) => write!(
                 writer,
                 " {} {}{}",
                 style_dim(ansi, "with"),
-                style_level_bold(ansi, level, "rpc_method"),
-                style_level(ansi, level, &format!("=\"{method}\""))
+                style_level_bold(ansi, *level, "rpc_method"),
+                style_level(ansi, *level, &format!("=\"{method}\""))
             )?,
             (None, Some(correlation_id)) => write!(
                 writer,
                 " {} {}{}",
                 style_dim(ansi, "with"),
-                style_level_bold(ansi, level, "correlation_id"),
-                style_level(ansi, level, &format!("={correlation_id}"))
+                style_level_bold(ansi, *level, "correlation_id"),
+                style_level(ansi, *level, &format!("={correlation_id}"))
             )?,
             (None, None) => {}
         }
@@ -253,12 +253,12 @@ fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt
     writeln!(writer)
 }
 
-fn style_level(ansi: bool, level: &tracing::Level, value: &str) -> String {
+fn style_level(ansi: bool, level: tracing::Level, value: &str) -> String {
     if !ansi {
         return value.to_string();
     }
 
-    match *level {
+    match level {
         tracing::Level::TRACE => value.purple().to_string(),
         tracing::Level::DEBUG => value.blue().to_string(),
         tracing::Level::INFO => value.green().to_string(),
@@ -267,12 +267,12 @@ fn style_level(ansi: bool, level: &tracing::Level, value: &str) -> String {
     }
 }
 
-fn style_level_bold(ansi: bool, level: &tracing::Level, value: &str) -> String {
+fn style_level_bold(ansi: bool, level: tracing::Level, value: &str) -> String {
     if !ansi {
         return value.to_string();
     }
 
-    match *level {
+    match level {
         tracing::Level::TRACE => value.purple().bold().to_string(),
         tracing::Level::DEBUG => value.blue().bold().to_string(),
         tracing::Level::INFO => value.green().bold().to_string(),
@@ -297,7 +297,7 @@ fn style_source_label(ansi: bool, value: &str) -> String {
     }
 }
 
-fn style_daemon_field_list(ansi: bool, level: &tracing::Level, fields: &str) -> String {
+fn style_daemon_field_list(ansi: bool, level: tracing::Level, fields: &str) -> String {
     fields
         .split(", ")
         .map(|field| {

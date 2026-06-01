@@ -12,10 +12,6 @@ use tracing::info_span;
 /// # Errors
 ///
 /// Returns an error if the sync fails, likely caused by IO problems.
-#[expect(
-    clippy::too_many_lines,
-    reason = "This function coordinates multiple sync paths and error-handling branches."
-)]
 pub async fn execute_sync(
     drive_infos: Vec<DriveSyncInfo>,
     if_exists: &IfExistsOutputBehaviour,

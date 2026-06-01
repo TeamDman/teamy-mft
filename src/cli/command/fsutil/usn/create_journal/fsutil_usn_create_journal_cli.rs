@@ -1,14 +1,12 @@
-use std::borrow::Cow;
-
+use crate::windows_utils::elevation::ensure_elevated;
+use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use std::borrow::Cow;
 
-use crate::windows_utils::elevation::ensure_elevated;
-use crate::windows_utils::storage::DriveLetterPattern;
-
-const DEFAULT_MAXIMUM_SIZE: u64 = 0x8000000;
-const DEFAULT_ALLOCATION_DELTA: u64 = 0x1000000;
+const DEFAULT_MAXIMUM_SIZE: u64 = 0x0800_0000;
+const DEFAULT_ALLOCATION_DELTA: u64 = 0x0100_0000;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct FsutilUsnCreateJournalArgs {
