@@ -124,7 +124,10 @@ pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
 
 /// Iterate all `FILE_NAME` attributes in an entry, invoking callback for each.
 /// Returns number of filename attributes found.
-#[cfg_attr(feature = "tracy", instrument(level = "debug", skip_all))]
+#[cfg_attr(
+    feature = "extended_observability_per_record",
+    instrument(level = "debug", skip_all)
+)]
 // mftf[impl file-name-attributes.resident-x30]
 pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     entry_bytes: &'a [u8],
@@ -132,7 +135,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     mut f: F,
 ) -> usize {
     let first_attr_off = {
-        #[cfg(feature = "tracy")]
+        #[cfg(feature = "extended_observability_per_record")]
         let _span = debug_span!("validate_entry_header").entered();
         if entry_bytes.len() < 0x18 || &entry_bytes[0..4] != b"FILE" {
             return 0;
@@ -150,7 +153,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     let mut offset = first_attr_off;
     let mut count = 0;
     while offset + 16 <= entry_bytes.len() {
-        #[cfg(feature = "tracy")]
+        #[cfg(feature = "extended_observability_per_record")]
         let _span = debug_span!("scan_attribute_header").entered();
         // minimal attribute header length guard
         let Some(attr_type) = read_u32(entry_bytes, offset) else {
@@ -168,6 +171,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
         }
         let non_res_flag = entry_bytes.get(offset + 8).copied().unwrap_or(0);
         if attr_type == ATTR_TYPE_FILE_NAME && non_res_flag == 0 {
+            #[cfg(feature = "extended_observability_per_record")]
             let _span = debug_span!("parse_resident_file_name").entered();
             // Resident attribute header layout (offsets relative to attribute start)
             if offset + 24 > entry_bytes.len() {
@@ -265,7 +269,7 @@ pub fn collect_filenames<'a>(mft: &'a MftFile) -> FileNameCollection<'a> {
         (0..entry_count)
             .into_par_iter()
             .map(|idx| {
-                #[cfg(feature = "tracy")]
+                #[cfg(feature = "extended_observability_per_record")]
                 let _span = debug_span!("scan_entry_for_filenames").entered();
                 let mut list = Vec::new();
                 let mut pairs = Vec::new();

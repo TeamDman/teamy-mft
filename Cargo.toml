@@ -83,6 +83,8 @@ vox-stream = "0.8.2"
 [features]
 default = []
 tracy = ["dep:tracing-tracy"]
+extended_observability = ["tracy"]
+extended_observability_per_record = ["extended_observability"]
 
 [build-dependencies]
 embed-resource = "3.0.3"

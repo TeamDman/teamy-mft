@@ -148,7 +148,7 @@ pub fn resolve_paths_all_parallel(
             raw.push(Vec::new());
         }
         for (entry_id, list) in raw.iter_mut().enumerate() {
-            #[cfg(feature = "tracy")]
+            #[cfg(feature = "extended_observability_per_record")]
             let _span = debug_span!("collect_entry_raw_names").entered();
             #[allow(clippy::cast_possible_truncation, reason = "entry_id fits in u32")]
             for fref in file_names.filenames_for_entry(entry_id as u32) {
@@ -173,7 +173,7 @@ pub fn resolve_paths_all_parallel(
         let _span = debug_span!("decode_raw_names_to_best_names").entered();
         let mut per_entry: Vec<Vec<BestName>> = Vec::with_capacity(entry_count);
         for raw_list in &raw {
-            #[cfg(feature = "tracy")]
+            #[cfg(feature = "extended_observability_per_record")]
             let _span = debug_span!("decode_entry_names").entered();
             let mut v: Vec<BestName> = Vec::with_capacity(raw_list.len());
             for (parent, _ns, name_units) in raw_list {
@@ -194,7 +194,7 @@ pub fn resolve_paths_all_parallel(
         let mut mark: Vec<Mark> = vec![Mark::Unvis; entry_count];
         for i in 0..entry_count {
             if depth[i] == -1 {
-                #[cfg(feature = "tracy")]
+                #[cfg(feature = "extended_observability_per_record")]
                 let _span = debug_span!("dfs_depth").entered();
                 dfs(i, &per_entry, &mut depth, &mut mark);
             }
@@ -235,13 +235,14 @@ pub fn resolve_paths_all_parallel(
             let layer_outputs: Vec<(MftRecordIndex, Vec<ResolvedPath>)> = layer_ids
                 .par_iter()
                 .map(|&entry_id| {
+                    #[cfg(feature = "extended_observability_per_record")]
                     let _span = debug_span!("resolve_single_entry").entered();
                     if !results[entry_id.get()].is_empty() {
                         return (entry_id, Vec::new());
                     }
                     let mut acc: Vec<ResolvedPath> = Vec::new();
                     {
-                        #[cfg(feature = "tracy")]
+                        #[cfg(feature = "extended_observability_per_record")]
                         let _span = debug_span!("expand_parent_paths").entered();
                         for bn in &per_entry[entry_id.get()] {
                             if bn.parent == entry_id.get() {
@@ -268,6 +269,7 @@ pub fn resolve_paths_all_parallel(
                         }
                     }
                     if acc.len() > 1 {
+                        #[cfg(feature = "extended_observability_per_record")]
                         let _span = debug_span!("dedup_entry_paths").entered();
                         let mut dedup = rustc_hash::FxHashMap::<PathBuf, ResolvedPath>::default();
                         for candidate in acc {
