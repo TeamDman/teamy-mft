@@ -23,6 +23,9 @@ pub struct QueryArgs {
     /// Bypass the machine daemon and read published indexes directly
     #[facet(args::named, default)]
     pub no_daemon: bool,
+    /// Ask the machine daemon to run the query
+    #[facet(args::named, default)]
+    pub daemon: bool,
 }
 
 #[derive(Default, Facet, Arbitrary, Clone, Copy, Debug, Eq, PartialEq, strum::Display)]
@@ -128,14 +131,12 @@ impl QueryArgs {
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;
-        let rtn = if self.no_daemon {
-            let executor = DiskQueryExecutor::new(self.plan.clone())?;
-            let stream = executor.stream()?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
-        } else {
+        ensure!(
+            !(self.daemon && self.no_daemon),
+            "`--daemon` and `--no-daemon` cannot be used together"
+        );
+
+        let rtn = if self.daemon {
             let _ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
             crate::machine::ipc::ensure_daemon_ready(&config)?;
@@ -175,7 +176,7 @@ impl QueryArgs {
                 cancel_rx,
             )
             .wrap_err(
-                "Daemon query failed, re-run with `--no-daemon` to query the published disk cache",
+                "Daemon query failed, re-run without `--daemon` to query the published disk cache",
             )?;
             let response_rows = row_drain.join().map_err(|join_error| {
                 eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
@@ -188,6 +189,13 @@ impl QueryArgs {
                 "Daemon-only streamed query completed"
             );
             response_rows
+        } else {
+            let executor = DiskQueryExecutor::new(self.plan.clone())?;
+            let stream = executor.stream()?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
         };
         if let Some(limit) = **self.plan.limit {
             ensure!(
