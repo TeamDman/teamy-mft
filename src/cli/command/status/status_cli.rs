@@ -21,6 +21,10 @@ pub struct StatusArgs {
     #[facet(args::named, default)]
     pub no_daemon: bool,
 
+    /// Ask the machine daemon for live status
+    #[facet(args::named, default)]
+    pub daemon: bool,
+
     /// Allow falling back to direct local inspection if the daemon cannot be reached
     #[facet(args::named, default)]
     pub allow_fallback: bool,
@@ -39,18 +43,23 @@ impl StatusArgs {
     ///
     /// Returns an error if drive letters cannot be resolved or cached file metadata cannot be read.
     pub fn invoke(self) -> eyre::Result<()> {
+        eyre::ensure!(
+            !(self.daemon && self.no_daemon),
+            "`--daemon` and `--no-daemon` cannot be used together"
+        );
+
         let mut machine_status =
             crate::machine::status::load_machine_status(&self.drive_letter_pattern)?;
         let daemon_status = load_daemon_status_summary(
             &self.drive_letter_pattern,
-            self.no_daemon,
+            self.daemon,
             self.allow_fallback,
         )?;
         if daemon_status.ping.is_some() {
             machine_status.service_state = crate::machine::service::WindowsServiceState::Running;
         }
         let include_direct_drive_details =
-            self.no_daemon && self.verbose && crate::windows_utils::elevation::is_elevated();
+            !self.daemon && self.verbose && crate::windows_utils::elevation::is_elevated();
         print_machine_summary(&machine_status, self.verbose, include_direct_drive_details);
         print_daemon_summary(&daemon_status, self.verbose);
         let now = SystemTime::now();
@@ -67,10 +76,10 @@ impl StatusArgs {
 
 fn load_daemon_status_summary(
     drive_letter_pattern: &DriveLetterPattern,
-    no_daemon: bool,
+    daemon: bool,
     allow_fallback: bool,
 ) -> eyre::Result<DaemonStatusSummary> {
-    if no_daemon {
+    if !daemon {
         return Ok(DaemonStatusSummary {
             ping: None,
             compatibility: None,

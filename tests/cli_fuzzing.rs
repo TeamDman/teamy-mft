@@ -2,6 +2,7 @@
 
 use figue::from_slice;
 use teamy_mft::cli::Cli;
+use teamy_mft::cli::command::Command;
 
 #[test]
 // cli[verify parser.args-consistent]
@@ -34,4 +35,37 @@ fn help_mentions_machine_install_command() {
         help.contains("install"),
         "help should mention the install command, got:\n{help}"
     );
+}
+
+#[test]
+fn sync_omits_daemon_preference_by_default() {
+    let cli = from_slice::<Cli>(&["sync"]).unwrap();
+    let Command::Sync(args) = cli.command else {
+        panic!("expected sync command");
+    };
+
+    assert!(!args.daemon);
+    assert!(!args.no_daemon);
+}
+
+#[test]
+fn sync_accepts_daemon_preference() {
+    let cli = from_slice::<Cli>(&["sync", "--daemon"]).unwrap();
+    let Command::Sync(args) = cli.command else {
+        panic!("expected sync command");
+    };
+
+    assert!(args.daemon);
+    assert!(!args.no_daemon);
+}
+
+#[test]
+fn sync_keeps_no_daemon_preference() {
+    let cli = from_slice::<Cli>(&["sync", "--no-daemon"]).unwrap();
+    let Command::Sync(args) = cli.command else {
+        panic!("expected sync command");
+    };
+
+    assert!(!args.daemon);
+    assert!(args.no_daemon);
 }

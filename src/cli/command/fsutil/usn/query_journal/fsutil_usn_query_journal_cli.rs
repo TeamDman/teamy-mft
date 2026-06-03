@@ -15,6 +15,10 @@ pub struct FsutilUsnQueryJournalArgs {
     #[facet(args::named, default)]
     pub no_daemon: bool,
 
+    /// Ask the machine daemon to query the volume
+    #[facet(args::named, default)]
+    pub daemon: bool,
+
     /// Filter drives by USN journal active state
     #[facet(args::named, default)]
     pub filter: FsutilUsnQueryJournalFilter,
@@ -46,18 +50,14 @@ impl FsutilUsnQueryJournalArgs {
     ///
     /// Returns an error if the journal query fails.
     pub fn invoke(self) -> eyre::Result<()> {
+        eyre::ensure!(
+            !(self.daemon && self.no_daemon),
+            "`--daemon` and `--no-daemon` cannot be used together"
+        );
+
         let filter = self.filter;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
-        if self.no_daemon {
-            ensure_elevated()?;
-            for drive_letter in drive_letters {
-                let status = crate::machine::usn::query_journal_status(drive_letter)?;
-                if !filter.matches(&status) {
-                    continue;
-                }
-                print_usn_journal_status(&status);
-            }
-        } else {
+        if self.daemon {
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
             crate::machine::ipc::ensure_daemon_ready(&config)?;
             for drive_letter in drive_letters {
@@ -70,6 +70,15 @@ impl FsutilUsnQueryJournalArgs {
                     logs_tx,
                 )?;
                 let _ = log_drain.join();
+                if !filter.matches(&status) {
+                    continue;
+                }
+                print_usn_journal_status(&status);
+            }
+        } else {
+            ensure_elevated()?;
+            for drive_letter in drive_letters {
+                let status = crate::machine::usn::query_journal_status(drive_letter)?;
                 if !filter.matches(&status) {
                     continue;
                 }
