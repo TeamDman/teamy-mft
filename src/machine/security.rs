@@ -558,7 +558,7 @@ pub fn warn_if_path_protection_disabled(path: &Path, status: &PathProtectionStat
     tracing::warn!(
         sync_dir = %path.display(),
         broad_read_grant_present = status.broad_read_grant_present,
-        "Machine cache protection is disabled; this should only be expected while developing teamy-mft locally. Run `teamy-mft protection enable` before normal use."
+        "Machine cache protection is disabled; this can be expected while developing teamy-mft locally or primarily using teamy-mft without the daemon. Run `teamy-mft protection enable` before normal daemon-backed use."
     );
 }
 
