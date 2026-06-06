@@ -23,6 +23,10 @@ fn add_exe_resources() {
 /// ```
 fn add_git_revision() {
     // Try to get a short git revision; on failure, set to "unknown".
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "build.rs intentionally shells out to git for embed-time revision metadata"
+    )]
     let rev = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .output()
