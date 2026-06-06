@@ -3,6 +3,7 @@
 
 disallowed-methods = [
   { path = "std::env::set_var", reason = "Avoid setting global environment variables; use helpers (tempfile/TempEnv) or design APIs that accept configuration explicitly" },
+  { path = "std::process::Command::new", reason = "Do not shell out for Windows service management; use windows-rs SCM APIs instead." },
   { path = "serde_json::from_str", reason = "Use facet_json::from_str instead." },
   { path = "serde_json::from_slice", reason = "Use facet_json::from_slice instead." },
   { path = "serde_json::to_string", reason = "Use facet_json::to_string instead." },
