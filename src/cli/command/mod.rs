@@ -1,6 +1,7 @@
 pub mod fsutil;
 pub mod install;
 pub mod list_paths;
+pub mod r#move;
 pub mod profile;
 pub mod protection;
 pub mod query;

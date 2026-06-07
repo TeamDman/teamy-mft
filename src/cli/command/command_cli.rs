@@ -1,6 +1,7 @@
 use crate::cli::command::fsutil::FsutilArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
+use crate::cli::command::r#move::MoveArgs;
 use crate::cli::command::profile::ProfileArgs;
 use crate::cli::command::protection::ProtectionArgs;
 use crate::cli::command::query::QueryArgs;
@@ -32,6 +33,9 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
+    /// Move one file and automatically refresh the published overlay for the old and new paths
+    #[facet(args::alias = "mv")]
+    Move(MoveArgs),
     /// Manage discovered `.teamy_mft_rules` profile rules used to filter query results
     #[facet(args::alias = "rules")]
     Rule(RuleArgs),
@@ -69,6 +73,7 @@ impl Command {
             Command::Install(args) => args.invoke(),
             Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
+            Command::Move(args) => args.invoke(),
             Command::Rule(args) => args.invoke(),
             Command::Profile(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
