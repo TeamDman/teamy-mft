@@ -1,7 +1,6 @@
+use crate::machine::config::published_drive_paths;
 use crate::query::QueryPlan;
-use crate::query::matching_row_indices_for_rule;
-use crate::search_index::load::MappedSearchIndex;
-use crate::search_index::search_index_bytes::SearchIndexBytes;
+use crate::query::visit_drive_search_index_rows;
 use eyre::Context;
 use globset::GlobBuilder;
 use globset::GlobMatcher;
@@ -99,9 +98,12 @@ impl QueryIgnoreRules {
         sync_dir: &Path,
     ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
         let _span = info_span!("discover_query_rule_files").entered();
+        let rules_query = QueryPlan::parse_inputs(&[RULES_FILE_EXTENSION.to_owned()])?;
         let results: Vec<eyre::Result<Vec<DiscoveredRuleFile>>> = drive_letters
             .par_iter()
-            .map(|drive_letter| discover_rule_files_for_drive(*drive_letter, sync_dir))
+            .map(|drive_letter| {
+                discover_rule_files_for_drive(*drive_letter, sync_dir, &rules_query)
+            })
             .collect();
 
         let mut discovered = Vec::new();
@@ -325,66 +327,29 @@ impl CompiledPathRule {
 fn discover_rule_files_for_drive(
     drive_letter: char,
     sync_dir: &Path,
+    rules_query: &QueryPlan,
 ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
-    let index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-    if !index_path.is_file() {
+    let paths = published_drive_paths(sync_dir, drive_letter);
+    if !paths.base_index_path.is_file() {
         return Ok(Vec::new());
     }
 
-    let mapped = MappedSearchIndex::open(&index_path).wrap_err_with(|| {
-        format!(
-            "Failed loading search index for drive {} from {}",
-            drive_letter,
-            index_path.display()
-        )
-    })?;
-    let parsed_index = SearchIndexBytes::new(mapped.bytes())
-        .parse_trusted_for_query()
-        .wrap_err_with(|| {
-            format!(
-                "Failed preparing search index rows for drive {} from {}",
-                drive_letter,
-                index_path.display()
-            )
-        })?;
-    let rules_query = QueryPlan::parse_inputs(&[RULES_FILE_EXTENSION.to_owned()])?;
-    let rule_rows = rules_query
-        .query
-        .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
-        .wrap_err_with(|| {
-            format!(
-                "Failed matching rules rows for drive {} from {}",
-                drive_letter,
-                index_path.display()
-            )
-        })?;
-
     let mut files = Vec::new();
-    for row_index in rule_rows {
-        let row = parsed_index
-            .row_view(row_index as usize)
-            .wrap_err_with(|| {
-                format!(
-                    "Failed reading rules row {row_index} from {}",
-                    index_path.display()
-                )
-            })?;
-        if row.has_deleted_entries {
-            continue;
-        }
-        let path = PathBuf::from(row.path());
+    visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
+        let path = PathBuf::from(row.path.as_path());
         if !path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with(RULES_FILE_EXTENSION))
         {
-            continue;
+            return Ok(true);
         }
         let Some(file) = load_rules_file(drive_letter, &path)? else {
-            continue;
+            return Ok(true);
         };
         files.push(file);
-    }
+        Ok(true)
+    })?;
 
     Ok(files)
 }
@@ -909,6 +874,45 @@ mod tests {
         })?;
 
         assert_eq!(indices, vec![0]);
+        Ok(())
+    }
+
+    #[test]
+    fn discover_rule_files_for_drive_letters_uses_overlay_query_results() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let published_paths = crate::machine::config::published_drive_paths(temp_dir.path(), 'C');
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample{RULES_FILE_EXTENSION}"));
+        std::fs::write(&rules_path, "EXCLUDE C:\\private\n")?;
+
+        let base_rows = vec![SearchIndexPathRow {
+            path: String::from("C:\\repo\\notes.txt"),
+            has_deleted_entries: false,
+        }];
+        let base_bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, base_rows.len() as u64),
+            &base_rows,
+        )?
+        .into_inner()?;
+        std::fs::write(&published_paths.base_index_path, base_bytes)?;
+
+        let overlay_rows = vec![SearchIndexPathRow {
+            path: rules_path.display().to_string(),
+            has_deleted_entries: false,
+        }];
+        let overlay_bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, overlay_rows.len() as u64),
+            &overlay_rows,
+        )?
+        .into_inner()?;
+        std::fs::write(&published_paths.overlay_index_path, overlay_bytes)?;
+
+        let discovered =
+            QueryIgnoreRules::discover_rule_files_for_drive_letters(&['C'], temp_dir.path())?;
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].path, rules_path);
         Ok(())
     }
 

@@ -84,4 +84,12 @@ mod tests {
         };
         assert_eq!(args.plan.drive_letter_pattern.as_ref(), "CD");
     }
+
+    #[test]
+    fn profile_accepts_profiles_alias() {
+        let canonical: Cli = figue::from_slice(&["profile", "list"]).unwrap();
+        let alias: Cli = figue::from_slice(&["profiles", "list"]).unwrap();
+
+        assert_eq!(alias, canonical);
+    }
 }

@@ -1,3 +1,4 @@
+use crate::machine::config::SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_MAGIC;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
@@ -888,7 +889,7 @@ impl SearchIndexBytesMut {
     /// or if the temporary file cannot be renamed into place.
     pub fn write_to_path(self, output_path: impl AsRef<Path>) -> eyre::Result<()> {
         let output_path = output_path.as_ref();
-        let temp_path = output_path.with_extension("mft_search_index.tmp");
+        let temp_path = output_path.with_extension(SEARCH_INDEX_TEMP_FILE_EXTENSION);
         let row_count = self.rows.len();
         let bytes = {
             let _span = info_span!(
