@@ -2658,9 +2658,9 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "teamy-figue"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36b77214cbf7af4fc49947623cda90798dcc56614f8fff31ca68f0dacd335774"
+checksum = "be6d319d86e87b47b367433ea4cfe771191d4a04b841874cd940a0992c897e48"
 dependencies = [
  "arbitrary",
  "ariadne",
@@ -2687,9 +2687,9 @@ dependencies = [
 
 [[package]]
 name = "teamy-figue-attrs"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7db28369c50b18fae13bcff2cac80142c4e4cdd838f31f724373ab565857f49"
+checksum = "353ffc558184150282b7725f0520260bce529d36ef84e99b548ca82ee5d394e1"
 dependencies = [
  "facet",
 ]
