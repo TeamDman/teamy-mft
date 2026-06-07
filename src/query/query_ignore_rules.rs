@@ -341,8 +341,7 @@ fn discover_rule_files_for_drive(
 
     let mut files = Vec::new();
     visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
-        let path = PathBuf::from(row.path.as_path());
-        let Some(file) = load_rules_file(drive_letter, &path)? else {
+        let Some(file) = load_rules_file(drive_letter, row.path.as_ref())? else {
             return Ok(ControlFlow::Continue);
         };
         files.push(file);
