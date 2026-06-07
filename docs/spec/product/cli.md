@@ -5,7 +5,7 @@ This specification covers the current user-facing command line behavior exposed 
 ## Command Surface
 
 cli[command.surface.core]
-The CLI must expose the `sync`, `install`, `uninstall`, `list-paths`, `ignore`, `status`, `query`, and `tray` commands.
+The CLI must expose the `sync`, `install`, `uninstall`, `list-paths`, `rules`, `profile`, `status`, `query`, and `tray` commands.
 
 cli[help.describes-machine-install]
 The top-level CLI help output must mention the `install` command so machine-managed setup is discoverable.
