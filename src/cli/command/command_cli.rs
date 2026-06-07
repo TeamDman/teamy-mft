@@ -12,6 +12,7 @@ use crate::cli::command::tray::TrayArgs;
 use crate::cli::command::uninstall::UninstallArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
+use figue::{self as args};
 
 /// Teamy MFT commands
 // cli[impl command.surface.core]
@@ -34,9 +35,8 @@ pub enum Command {
     /// Manage `.teamy_mft_rules` exclusion rules used to filter query results
     Ignore(IgnoreArgs),
     /// Manage query rule profiles discovered from `.teamy_mft_rules` files
+    #[facet(args::alias = "profiles")]
     Profile(ProfileArgs),
-    /// Compatibility alias for `profile`
-    Profiles(ProfileArgs),
     /// Toggle machine cache ACL protection for development workflows
     Protection(ProtectionArgs),
     /// Native Windows filesystem utilities used by teamy-mft
@@ -69,7 +69,7 @@ impl Command {
             Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),
-            Command::Profile(args) | Command::Profiles(args) => args.invoke(),
+            Command::Profile(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
             Command::Fsutil(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
