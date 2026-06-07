@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn rules_accepts_drive_long_alias() {
-        let args: crate::cli::command::rules::RulesArgs =
+        let args: crate::cli::command::rules::RuleArgs =
             figue::from_slice(&["list", "--drive", "CD"]).unwrap();
 
         let crate::cli::command::rules::RulesCommand::List(args) = args.command else {
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn rules_add_accepts_rules_file_and_drive_alias() {
-        let args: crate::cli::command::rules::RulesArgs = figue::from_slice(&[
+        let args: crate::cli::command::rules::RuleArgs = figue::from_slice(&[
             "add",
             "--profile",
             "my-profile-123",
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn rules_remove_parses_directive_based_shape() {
-        let args: crate::cli::command::rules::RulesArgs = figue::from_slice(&[
+        let args: crate::cli::command::rules::RuleArgs = figue::from_slice(&[
             "remove",
             "--profile",
             "my-profile-123",
