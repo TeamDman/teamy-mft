@@ -8,7 +8,7 @@
     reason = "Windows USN journal IOCTL interop requires raw pointer and integer conversion boilerplate"
 )]
 
-use crate::machine::security::encode_wide;
+use crate::windows_utils::string::EasyPCWSTR;
 use eyre::Context;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -63,7 +63,6 @@ use windows::Win32::System::Ioctl::USN_REASON_TRANSACTED_CHANGE;
 use windows::Win32::System::Ioctl::USN_RECORD_V2;
 use windows::Win32::System::Ioctl::USN_RECORD_V3;
 use windows::core::Owned;
-use windows::core::PCWSTR;
 
 const JOURNAL_BUFFER_BYTES: usize = 1024 * 1024;
 const RELEVANT_REASON_MASK: u32 = USN_REASON_FILE_CREATE
@@ -159,10 +158,10 @@ impl VolumeUsnJournalHandle {
 
     fn open_with_access(drive_letter: char, desired_access: u32) -> eyre::Result<Self> {
         let volume_path = format!(r"\\.\{drive_letter}:");
-        let wide = encode_wide(&volume_path);
+        let volume_path_wide = volume_path.easy_pcwstr()?;
         let handle = unsafe {
             CreateFileW(
-                PCWSTR(wide.as_ptr()),
+                volume_path_wide.as_ref(),
                 desired_access,
                 FILE_SHARE_MODE(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0),
                 None,

@@ -33,6 +33,7 @@ pub struct MachineStatus {
     pub config: Option<MachineConfig>,
     pub config_warning: Option<String>,
     pub service_state: WindowsServiceState,
+    pub service_warning: Option<String>,
     pub current_user_sid: Option<String>,
     pub owner_access: bool,
     pub drives: Vec<MachineDriveStatus>,
@@ -70,8 +71,18 @@ pub fn load_machine_status(
         Err(error) => return Err(error),
     };
     let current_user_sid = current_user_sid_string().ok();
-    let (service_state, owner_access, drives) = if let Some(config) = &config {
-        let service_state = query_service_state(&config.service_name)?;
+    let (service_state, service_warning, owner_access, drives) = if let Some(config) = &config {
+        let (service_state, service_warning) = match query_service_state(&config.service_name) {
+            Ok(service_state) => (service_state, None),
+            Err(error) if crate::machine::service::is_service_query_access_denied(&error) => (
+                WindowsServiceState::Unknown(0),
+                Some(format!(
+                    "failed to query Windows service {} from this session: {error}",
+                    config.service_name
+                )),
+            ),
+            Err(error) => return Err(error),
+        };
         let owner_access = current_user_sid
             .as_deref()
             .is_some_and(|sid| sid == config.owner_sid);
@@ -120,19 +131,26 @@ pub fn load_machine_status(
                 })
             })
             .collect::<eyre::Result<Vec<_>>>()?;
-        (service_state, owner_access, drives)
+        (service_state, service_warning, owner_access, drives)
     } else {
-        (
-            query_service_state(DEFAULT_SERVICE_NAME).unwrap_or(WindowsServiceState::Unknown(0)),
-            false,
-            Vec::new(),
-        )
+        let (service_state, service_warning) = match query_service_state(DEFAULT_SERVICE_NAME) {
+            Ok(service_state) => (service_state, None),
+            Err(error) if crate::machine::service::is_service_query_access_denied(&error) => (
+                WindowsServiceState::Unknown(0),
+                Some(format!(
+                    "failed to query Windows service {DEFAULT_SERVICE_NAME} from this session: {error}"
+                )),
+            ),
+            Err(_) => (WindowsServiceState::Unknown(0), None),
+        };
+        (service_state, service_warning, false, Vec::new())
     };
 
     Ok(MachineStatus {
         config,
         config_warning,
         service_state,
+        service_warning,
         current_user_sid,
         owner_access,
         drives,

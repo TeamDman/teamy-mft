@@ -5,6 +5,7 @@
     reason = "Windows token and SID interop requires raw pointer FFI that is localized in this module"
 )]
 
+use crate::windows_utils::string::EasyPCWSTR;
 use eyre::WrapErr;
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
@@ -219,9 +220,9 @@ enum OwnedSidStorage {
 
 impl OwnedSid {
     fn from_string(sid: &str) -> eyre::Result<Self> {
-        let wide_sid = encode_wide(sid);
+        let wide_sid = sid.easy_pcwstr()?;
         let mut sid_ptr = PSID::default();
-        unsafe { ConvertStringSidToSidW(PCWSTR(wide_sid.as_ptr()), &mut sid_ptr) }?;
+        unsafe { ConvertStringSidToSidW(wide_sid.as_ref(), &mut sid_ptr) }?;
         Ok(Self {
             ptr: sid_ptr,
             storage: OwnedSidStorage::LocalFree,
@@ -379,11 +380,11 @@ fn set_named_security_info(
     owner: Option<PSID>,
     dacl: Option<*const ACL>,
 ) -> eyre::Result<()> {
-    let wide_path = encode_wide(&path.display().to_string());
+    let wide_path = path.easy_pcwstr()?;
     win32_result(
         unsafe {
             SetNamedSecurityInfoW(
-                PCWSTR(wide_path.as_ptr()),
+                wide_path.as_ref(),
                 SE_FILE_OBJECT,
                 security_info,
                 owner,
@@ -515,13 +516,13 @@ impl AllowedAceView {
 }
 
 fn read_path_security(path: &Path) -> eyre::Result<PathSecurity> {
-    let wide_path = encode_wide(&path.display().to_string());
+    let wide_path = path.easy_pcwstr()?;
     let mut dacl = std::ptr::null_mut::<ACL>();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     win32_result(
         unsafe {
             GetNamedSecurityInfoW(
-                PCWSTR(wide_path.as_ptr()),
+                wide_path.as_ref(),
                 SE_FILE_OBJECT,
                 DACL_SECURITY_INFORMATION,
                 None,
@@ -625,11 +626,11 @@ pub fn named_pipe_sddl(owner_sid: &str) -> String {
 /// Returns an error if the named pipe security descriptor cannot be created from SDDL.
 pub fn named_pipe_security_attributes(owner_sid: &str) -> eyre::Result<OwnedSecurityAttributes> {
     let sddl = named_pipe_sddl(owner_sid);
-    let wide = encode_wide(&sddl);
+    let wide = sddl.easy_pcwstr()?;
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     unsafe {
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            PCWSTR(wide.as_ptr()),
+            wide.as_ref(),
             SDDL_REVISION_1,
             &mut descriptor,
             None,
