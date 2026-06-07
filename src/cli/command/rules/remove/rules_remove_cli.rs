@@ -143,6 +143,7 @@ impl RulesRemoveArgs {
             return Ok(());
         }
 
+        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let mut removed_any = false;
         for rules_path in selected_paths {
             if !rules_path.is_file() {
@@ -169,6 +170,24 @@ impl RulesRemoveArgs {
                     rendered_rule,
                     rules_path.display()
                 );
+                let rendered_rules_path = rules_path.to_string_lossy().into_owned();
+                match crate::sync::sync_path_into_published_overlay(&sync_dir, &rendered_rules_path)
+                {
+                    Ok(drive_letter) => {
+                        println!(
+                            "Ran `teamy-mft sync {}` automatically and updated the published overlay for drive {}.",
+                            rules_path.display(),
+                            drive_letter
+                        );
+                    }
+                    Err(error) => {
+                        println!(
+                            "Tried running `teamy-mft sync {}` automatically, but it failed: {}",
+                            rules_path.display(),
+                            error
+                        );
+                    }
+                }
             } else {
                 std::fs::write(&rules_path, rewritten)?;
                 println!("Removed `{}` from {}", rendered_rule, rules_path.display());

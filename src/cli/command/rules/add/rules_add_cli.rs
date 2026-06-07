@@ -191,15 +191,27 @@ impl RulesAddArgs {
         writeln!(writer, "{rendered_rule}")?;
         writer.flush()?;
         println!("Added rule to {}", rules_path.display());
-        if !file_already_existed
-            && !discovered
-                .iter()
-                .any(|file| file.path.as_path() == rules_path.as_path())
+        if !discovered
+            .iter()
+            .any(|file| file.path.as_path() == rules_path.as_path())
         {
-            println!(
-                "Run `teamy-mft sync {}` before querying so the new cwd rules file becomes discoverable from the indexed rule-file path list.",
-                rules_path.display()
-            );
+            let rendered_rules_path = rules_path.to_string_lossy().into_owned();
+            match crate::sync::sync_path_into_published_overlay(&sync_dir, &rendered_rules_path) {
+                Ok(drive_letter) => {
+                    println!(
+                        "Ran `teamy-mft sync {}` automatically and updated the published overlay for drive {}.",
+                        rules_path.display(),
+                        drive_letter
+                    );
+                }
+                Err(error) => {
+                    println!(
+                        "Tried running `teamy-mft sync {}` automatically, but it failed: {}",
+                        rules_path.display(),
+                        error
+                    );
+                }
+            }
         }
         Ok(())
     }
