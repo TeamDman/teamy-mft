@@ -1,5 +1,6 @@
 mod disk_query_executor;
 mod drive_query_result;
+mod query_control_flow;
 mod query_filter;
 mod query_group;
 mod query_ignore_behavior;
@@ -19,6 +20,7 @@ mod search_index_query;
 pub use crate::domain::Pathlike;
 pub use disk_query_executor::DiskQueryExecutor;
 pub(crate) use drive_query_result::DriveQueryResult;
+pub use query_control_flow::ControlFlow;
 pub use query_filter::QueryFilter;
 pub use query_group::QueryGroup;
 pub use query_ignore_behavior::QueryIgnoreBehavior;

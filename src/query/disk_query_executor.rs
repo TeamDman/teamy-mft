@@ -1,4 +1,5 @@
 use crate::machine::config::published_drive_paths;
+use crate::query::ControlFlow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreBehavior;
 use crate::query::QueryIgnoreRules;
@@ -116,9 +117,13 @@ impl DiskQueryExecutor {
                                     only_deleted,
                                     |row| {
                                         let Some(row) = filter.classify_and_match(row) else {
-                                            return Ok(true);
+                                            return Ok(ControlFlow::Continue);
                                         };
-                                        Ok(sink.blocking_send(row).is_ok())
+                                        Ok(if sink.blocking_send(row).is_ok() {
+                                            ControlFlow::Continue
+                                        } else {
+                                            ControlFlow::Break
+                                        })
                                     },
                                 );
                                 match result {
