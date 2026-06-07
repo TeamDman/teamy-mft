@@ -66,6 +66,51 @@ mod tests {
     }
 
     #[test]
+    fn rules_add_accepts_rules_file_and_drive_alias() {
+        let args: crate::cli::command::rules::RulesArgs = figue::from_slice(&[
+            "add",
+            "--profile",
+            "my-profile-123",
+            "--rules-file",
+            r".\teamy-mft-rules.my-profile-123.teamy_mft_rules",
+            "--drive",
+            "CD",
+            "include",
+            r"C:\Repos\teamy-mft\src\**",
+        ])
+        .unwrap();
+
+        let crate::cli::command::rules::RulesCommand::Add(args) = args.command else {
+            panic!("expected rules add command");
+        };
+        assert_eq!(args.drive_letter_pattern.as_ref(), "CD");
+        assert_eq!(
+            args.rules_file.as_deref(),
+            Some(r".\teamy-mft-rules.my-profile-123.teamy_mft_rules")
+        );
+    }
+
+    #[test]
+    fn rules_remove_parses_directive_based_shape() {
+        let args: crate::cli::command::rules::RulesArgs = figue::from_slice(&[
+            "remove",
+            "--profile",
+            "my-profile-123",
+            "--order",
+            "10",
+            "exclude",
+            r"C:\Repos\secret\**",
+        ])
+        .unwrap();
+
+        let crate::cli::command::rules::RulesCommand::Remove(args) = args.command else {
+            panic!("expected rules remove command");
+        };
+        assert_eq!(args.profile.as_deref(), Some("my-profile-123"));
+        assert_eq!(args.order, Some(10));
+    }
+
+    #[test]
     fn sync_accepts_drive_long_alias() {
         let cli: Cli = figue::from_slice(&["sync", "--drive", "CD"]).unwrap();
 
@@ -91,5 +136,18 @@ mod tests {
         let alias: Cli = figue::from_slice(&["profiles", "list"]).unwrap();
 
         assert_eq!(alias, canonical);
+    }
+
+    #[test]
+    fn profile_tutorial_parses() {
+        let cli: Cli = figue::from_slice(&["profile", "tutorial"]).unwrap();
+
+        let Command::Profile(args) = cli.command else {
+            panic!("expected profile command");
+        };
+        assert!(matches!(
+            args.command,
+            crate::cli::command::profile::ProfileCommand::Tutorial(_)
+        ));
     }
 }

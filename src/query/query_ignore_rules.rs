@@ -18,7 +18,6 @@ use tracing::info_span;
 use tracing::warn;
 
 pub const RULES_FILE_EXTENSION: &str = ".teamy_mft_rules";
-pub const SYNCED_RULES_FILE_NAME: &str = "teamy-mft-sync.teamy_mft_rules";
 pub const DEFAULT_PROFILE_NAME: &str = "default";
 
 pub struct QueryIgnoreRules {
@@ -63,6 +62,7 @@ struct CompiledRule {
     order: i64,
     include: bool,
     line_number: usize,
+    raw: String,
     source_path: PathBuf,
     matcher: CompiledPathRule,
 }
@@ -128,6 +128,35 @@ impl QueryIgnoreRules {
         load_rules_file('?', path)
     }
 
+    /// Load direct child `.teamy_mft_rules` files from one directory without requiring index discovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory listing fails or one of the matching files cannot be parsed.
+    pub fn load_rule_files_in_directory(path: &Path) -> eyre::Result<Vec<DiscoveredRuleFile>> {
+        if !path.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            if !entry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(RULES_FILE_EXTENSION))
+            {
+                continue;
+            }
+            if let Some(file) = load_rules_file('?', &entry_path)? {
+                files.push(file);
+            }
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(files)
+    }
+
     /// Discover and resolve the effective rule set for one profile.
     ///
     /// # Errors
@@ -163,6 +192,8 @@ impl QueryIgnoreRules {
         let mut matcher_rules = Vec::<CompiledRule>::new();
         let mut default_source: Option<(DefaultRuleBehavior, PathBuf, usize)> = None;
         let mut duplicate_orders = BTreeMap::<i64, Vec<(PathBuf, usize)>>::new();
+        let mut seen_matcher_rules = BTreeSet::<(i64, String)>::new();
+        let mut added_compiled_rules = BTreeSet::<(i64, String)>::new();
 
         for file in &effective_files {
             for rule in &file.rules {
@@ -206,6 +237,11 @@ impl QueryIgnoreRules {
                         Some((DefaultRuleBehavior::Exclude, _, _)) => {}
                     },
                     RuleDirective::Include(_) | RuleDirective::Exclude(_) => {
+                        if !seen_matcher_rules
+                            .insert((rule.order.unwrap_or(0), rule.render().to_owned()))
+                        {
+                            continue;
+                        }
                         duplicate_orders
                             .entry(rule.order.unwrap_or(0))
                             .or_default()
@@ -213,7 +249,12 @@ impl QueryIgnoreRules {
                     }
                 }
             }
-            matcher_rules.extend(file.compiled_rules.iter().cloned());
+            matcher_rules.extend(
+                file.compiled_rules
+                    .iter()
+                    .filter(|rule| added_compiled_rules.insert((rule.order, rule.raw.clone())))
+                    .cloned(),
+            );
         }
 
         for (order, entries) in &duplicate_orders {
@@ -386,6 +427,7 @@ fn load_rules_file(drive_letter: char, path: &Path) -> eyre::Result<Option<Disco
             order: rule.order.unwrap_or(0),
             include: matches!(rule.directive, RuleDirective::Include(_)),
             line_number: rule.line_number,
+            raw: rule.render().to_owned(),
             source_path: path.to_path_buf(),
             matcher: compile_path_rule(pattern, path, rule.line_number)?,
         });
@@ -591,12 +633,11 @@ pub fn normalize_profile_name(profile: Option<&str>) -> eyre::Result<Option<Stri
     Ok(Some(profile.to_owned()))
 }
 
-#[must_use]
-pub fn managed_rules_file_name(profile: Option<&str>) -> String {
-    match profile {
-        None => SYNCED_RULES_FILE_NAME.to_owned(),
-        Some(profile) => format!("teamy-mft-sync.{profile}{RULES_FILE_EXTENSION}"),
-    }
+/// # Errors
+///
+/// Returns an error if the path is not UTF-8 or does not end with `.teamy_mft_rules`.
+pub fn profile_name_from_rules_path(path: &Path) -> eyre::Result<Option<String>> {
+    detect_profile_from_path(path)
 }
 
 impl std::fmt::Debug for QueryIgnoreRules {
@@ -652,7 +693,6 @@ mod tests {
     use super::QueryIgnoreRules;
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
-    use super::SYNCED_RULES_FILE_NAME;
     use crate::query::QueryNeedle;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
@@ -841,11 +881,6 @@ mod tests {
     }
 
     #[test]
-    fn synced_rules_file_name_uses_expected_extension() {
-        assert!(SYNCED_RULES_FILE_NAME.ends_with(RULES_FILE_EXTENSION));
-    }
-
-    #[test]
     fn rules_file_suffix_query_matches_teamy_rule_paths() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
@@ -970,6 +1005,45 @@ mod tests {
             rule.directive,
             RuleDirective::Include(String::from(r"C:\Repos\**\*.java"))
         );
+    }
+
+    #[test]
+    fn duplicate_identical_rules_are_deduplicated_before_matching() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let path_a = temp_dir.path().join(format!("a{RULES_FILE_EXTENSION}"));
+        let path_b = temp_dir.path().join(format!("b{RULES_FILE_EXTENSION}"));
+        std::fs::write(&path_a, "ORDER 10 INCLUDE C:\\Repos\\**\\*.java\n").expect("write path_a");
+        std::fs::write(&path_b, "ORDER 10 INCLUDE C:\\Repos\\**\\*.java\n").expect("write path_b");
+
+        let rules = QueryIgnoreRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &path_a)
+                    .expect("load path_a")
+                    .expect("path_a exists"),
+                super::load_rules_file('C', &path_b)
+                    .expect("load path_b")
+                    .expect("path_b exists"),
+            ],
+            None,
+        )
+        .expect("build rules");
+
+        assert_eq!(rules.matcher_rules.len(), 1);
+    }
+
+    #[test]
+    fn load_rule_files_in_directory_only_reads_matching_extension() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let rules_path = temp_dir.path().join(format!("a{RULES_FILE_EXTENSION}"));
+        let other_path = temp_dir.path().join("b.txt");
+        std::fs::write(&rules_path, "INCLUDE C:\\Repos\n").expect("write rules file");
+        std::fs::write(&other_path, "ignore me").expect("write other file");
+
+        let files = QueryIgnoreRules::load_rule_files_in_directory(temp_dir.path())
+            .expect("load directory rules");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, rules_path);
     }
 
     use std::path::Path;

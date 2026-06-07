@@ -1,13 +1,10 @@
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryIgnoreRules;
-use crate::query::managed_rules_file_name;
 use crate::query::normalize_profile_name;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct RulesListArgs {
@@ -28,7 +25,6 @@ impl RulesListArgs {
         let profile = normalize_profile_name(self.profile.as_deref())?;
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
-        let mut seen_paths = BTreeSet::<PathBuf>::new();
 
         let rules = QueryIgnoreRules::discover_for_drive_letters(
             &drive_letters,
@@ -36,7 +32,6 @@ impl RulesListArgs {
             profile.as_deref(),
         )?;
         for file in rules.files() {
-            seen_paths.insert(file.path.clone());
             println!("file={}", file.path.display());
             if let Some(profile_name) = &file.profile {
                 println!("profile={profile_name}");
@@ -47,23 +42,7 @@ impl RulesListArgs {
                 println!("  line={}: {}", rule.line_number, rule.render());
             }
         }
-
-        let managed_rules_path = sync_dir.join(managed_rules_file_name(profile.as_deref()));
-        if managed_rules_path.is_file() && !seen_paths.contains(&managed_rules_path) {
-            if let Some(file) = QueryIgnoreRules::load_rule_file(&managed_rules_path)? {
-                println!("file={}", file.path.display());
-                if let Some(profile_name) = &file.profile {
-                    println!("profile={profile_name}");
-                } else {
-                    println!("profile={DEFAULT_PROFILE_NAME}");
-                }
-                for rule in &file.rules {
-                    println!("  line={}: {}", rule.line_number, rule.render());
-                }
-            }
-        }
-
-        if rules.files().is_empty() && !managed_rules_path.is_file() {
+        if rules.files().is_empty() {
             println!(
                 "No {} files discovered for profile {}.",
                 crate::query::RULES_FILE_EXTENSION,

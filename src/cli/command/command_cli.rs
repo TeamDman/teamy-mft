@@ -32,7 +32,7 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
-    /// Manage `.teamy_mft_rules` profile rules used to filter query results
+    /// Manage discovered `.teamy_mft_rules` profile rules used to filter query results
     Rules(RulesArgs),
     /// Manage query rule profiles discovered from `.teamy_mft_rules` files
     #[facet(args::alias = "profiles")]
