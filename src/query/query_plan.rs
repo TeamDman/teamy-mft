@@ -1,5 +1,7 @@
+use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryLimit;
 use crate::query::QueryString;
+use crate::query::normalize_profile_name;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -63,10 +65,46 @@ impl QueryPlan {
     pub fn new(pattern: impl Into<String>) -> Self {
         Self::parse_inputs(&[pattern.into()]).expect("single non-empty query should parse")
     }
+
+    /// # Errors
+    ///
+    /// Returns an error if the current process is not allowed to use the
+    /// logical default profile or if the selected profile name is invalid.
+    pub fn ensure_selected_profile_allowed(&self) -> eyre::Result<()> {
+        let current_sid = crate::machine::security::current_user_sid_string()?;
+        let machine_config = crate::machine::config::load_machine_client_config()?;
+        let is_in_builtin_administrators =
+            crate::windows_utils::elevation::is_in_builtin_administrators()?;
+        self.ensure_selected_profile_allowed_for_identity(
+            machine_config.owner_sid.as_str(),
+            current_sid.as_str(),
+            is_in_builtin_administrators,
+        )
+    }
+
+    fn ensure_selected_profile_allowed_for_identity(
+        &self,
+        owner_sid: &str,
+        current_sid: &str,
+        is_in_builtin_administrators: bool,
+    ) -> eyre::Result<()> {
+        if normalize_profile_name(self.profile.as_deref())?.is_some()
+            || (!owner_sid.is_empty() && owner_sid == current_sid)
+            || is_in_builtin_administrators
+        {
+            return Ok(());
+        }
+        eyre::bail!(
+            "The {} profile is disabled for queries started by users other than the installed machine-cache owner unless the current token is in BUILTIN\\Administrators. This usually means the query is running in a sandboxed or restricted account. Re-run the query with `--profile <name>`.",
+            DEFAULT_PROFILE_NAME
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::query::DEFAULT_PROFILE_NAME;
+
     use super::QueryPlan;
 
     fn matching_paths(query_inputs: &[&str], paths: &[&str]) -> Vec<String> {
@@ -305,5 +343,55 @@ mod tests {
     fn drive_designators_are_allowed_in_queries() {
         let query_inputs = vec!["C:\\src .txt$".to_owned()];
         QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
+    }
+
+    #[test]
+    fn default_profile_is_rejected_for_non_admin_tokens() {
+        let plan = QueryPlan::new("flower");
+        let error = plan
+            .ensure_selected_profile_allowed_for_identity("S-1-5-21-owner", "S-1-5-21-other", false)
+            .expect_err("default profile should be blocked outside administrators");
+        assert!(error.to_string().contains(DEFAULT_PROFILE_NAME));
+        assert!(error.to_string().contains("`--profile <name>`"));
+    }
+
+    #[test]
+    fn default_profile_alias_is_rejected_for_non_admin_tokens() {
+        let plan = QueryPlan {
+            profile: Some(DEFAULT_PROFILE_NAME.to_owned()),
+            ..QueryPlan::new("flower")
+        };
+        let error = plan
+            .ensure_selected_profile_allowed_for_identity("S-1-5-21-owner", "S-1-5-21-other", false)
+            .expect_err("default alias should be blocked outside administrators");
+        assert!(error.to_string().contains(DEFAULT_PROFILE_NAME));
+    }
+
+    #[test]
+    fn named_profile_is_allowed_for_non_admin_tokens() {
+        let plan = QueryPlan {
+            profile: Some(String::from("music")),
+            ..QueryPlan::new("flower")
+        };
+        plan.ensure_selected_profile_allowed_for_identity(
+            "S-1-5-21-owner",
+            "S-1-5-21-other",
+            false,
+        )
+        .expect("named profiles should stay available outside administrators");
+    }
+
+    #[test]
+    fn default_profile_is_allowed_for_admin_tokens() {
+        QueryPlan::new("flower")
+            .ensure_selected_profile_allowed_for_identity("S-1-5-21-owner", "S-1-5-21-other", true)
+            .expect("administrators should keep access to the default profile");
+    }
+
+    #[test]
+    fn default_profile_is_allowed_for_machine_cache_owner() {
+        QueryPlan::new("flower")
+            .ensure_selected_profile_allowed_for_identity("S-1-5-21-owner", "S-1-5-21-owner", false)
+            .expect("the installed machine-cache owner should keep access to the default profile");
     }
 }

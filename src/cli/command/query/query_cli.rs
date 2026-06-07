@@ -131,6 +131,7 @@ impl QueryArgs {
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;
+        self.plan.ensure_selected_profile_allowed()?;
         ensure!(
             !(self.daemon && self.no_daemon),
             "`--daemon` and `--no-daemon` cannot be used together"
