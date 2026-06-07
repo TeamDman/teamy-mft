@@ -582,9 +582,9 @@ fn compile_path_rule(
     path: &Path,
     line_number: usize,
 ) -> eyre::Result<CompiledPathRule> {
-    let normalized_pattern =
-        normalize_path_like(resolve_rule_pattern_path(pattern, path).as_path());
-    if !contains_glob_metacharacters(pattern) {
+    let resolved_pattern = resolve_rule_pattern_path(pattern, path, line_number)?;
+    let normalized_pattern = normalize_path_like(resolved_pattern.as_path());
+    if !contains_glob_metacharacters(&resolved_pattern.to_string_lossy()) {
         return Ok(CompiledPathRule::LiteralSubtree {
             normalized: normalized_pattern,
         });
@@ -666,15 +666,50 @@ fn normalize_path_like(path: &Path) -> String {
     normalized.to_ascii_lowercase()
 }
 
-fn resolve_rule_pattern_path(pattern: &str, rules_path: &Path) -> PathBuf {
-    let pattern_path = Path::new(pattern);
+fn resolve_rule_pattern_path(
+    pattern: &str,
+    rules_path: &Path,
+    line_number: usize,
+) -> eyre::Result<PathBuf> {
+    let expanded_pattern = expand_git_root_placeholder(pattern, rules_path, line_number)?;
+    let pattern_path = Path::new(expanded_pattern.as_str());
     if pattern_path.is_absolute() {
-        return pattern_path.to_path_buf();
+        return Ok(pattern_path.to_path_buf());
     }
-    rules_path
+    Ok(rules_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(pattern_path)
+        .join(pattern_path))
+}
+
+fn expand_git_root_placeholder(
+    pattern: &str,
+    rules_path: &Path,
+    line_number: usize,
+) -> eyre::Result<String> {
+    if !pattern.contains("{GIT_ROOT}") {
+        return Ok(pattern.to_owned());
+    }
+    let git_root = nearest_git_root_for_rules_file(rules_path).ok_or_else(|| {
+        eyre::eyre!(
+            "{}:{}: `{}` uses {{GIT_ROOT}} but no enclosing git root was found",
+            rules_path.display(),
+            line_number,
+            pattern
+        )
+    })?;
+    Ok(pattern.replace("{GIT_ROOT}", &git_root.to_string_lossy()))
+}
+
+fn nearest_git_root_for_rules_file(rules_path: &Path) -> Option<PathBuf> {
+    let mut current = rules_path.parent();
+    while let Some(candidate) = current {
+        if candidate.join(".git").exists() {
+            return Some(candidate.to_path_buf());
+        }
+        current = candidate.parent();
+    }
+    None
 }
 
 fn file_applies_to_profile(file: &DiscoveredRuleFile, profile: Option<&str>) -> bool {
@@ -954,6 +989,54 @@ mod tests {
         let filtered_path = temp_dir.path().join("tests").join("lib.rs");
         assert!(!rules.is_filtered_path(included_path.as_path()));
         assert!(rules.is_filtered_path(filtered_path.as_path()));
+    }
+
+    #[test]
+    fn git_root_placeholder_resolves_to_nearest_enclosing_repo_root() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_root = temp_dir.path().join("repo");
+        let nested_dir = repo_root.join("nested").join("rules");
+        std::fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+        std::fs::create_dir_all(&nested_dir).expect("create nested dir");
+        let rules_path = nested_dir.join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
+        std::fs::write(
+            &rules_path,
+            "DEFAULT RULE IS EXCLUDE\nINCLUDE {GIT_ROOT}\\docs\n",
+        )
+        .expect("write rules file");
+
+        let rules = QueryFilterRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &rules_path)
+                    .expect("load rules file")
+                    .expect("rules file exists"),
+            ],
+            Some("mc-modding"),
+        )
+        .expect("build rules");
+
+        let included_path = repo_root.join("docs").join("guide.md");
+        let filtered_path = nested_dir.join("docs").join("guide.md");
+        assert!(!rules.is_filtered_path(included_path.as_path()));
+        assert!(rules.is_filtered_path(filtered_path.as_path()));
+    }
+
+    #[test]
+    fn git_root_placeholder_requires_enclosing_repo_root() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
+        std::fs::write(&rules_path, "INCLUDE {GIT_ROOT}\\docs\n").expect("write rules file");
+
+        let error =
+            super::load_rules_file('C', &rules_path).expect_err("missing git root should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("uses {GIT_ROOT} but no enclosing git root was found")
+        );
     }
 
     #[test]
