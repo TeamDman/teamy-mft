@@ -30,6 +30,7 @@ use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncPlan;
 use crate::sync::execute_sync;
 use crate::sync::resolve_drive_infos_in_dir_for_letters;
+use crate::windows_utils::string::EasyPCWSTR;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
 use eyre::ContextCompat;
@@ -70,7 +71,6 @@ use windows::Win32::System::Services::SERVICE_TABLE_ENTRYW;
 use windows::Win32::System::Services::SERVICE_WIN32_OWN_PROCESS;
 use windows::Win32::System::Services::SetServiceStatus;
 use windows::Win32::System::Services::StartServiceCtrlDispatcherW;
-use windows::core::PCWSTR;
 
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SERVICE_STATUS_HANDLE_SLOT: AtomicIsize = AtomicIsize::new(0);
@@ -1739,14 +1739,10 @@ fn service_main_impl() -> eyre::Result<()> {
     STOP_REQUESTED.store(false, Ordering::Relaxed);
     let config = load_machine_config()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
-    let service_name = crate::machine::security::encode_wide(&config.service_name);
+    let service_name = config.service_name.as_str().easy_pcwstr()?;
     // SAFETY: The service name pointer remains valid for the call and the handler function has the required ABI.
     let handle = unsafe {
-        RegisterServiceCtrlHandlerExW(
-            PCWSTR(service_name.as_ptr()),
-            Some(service_control_handler),
-            None,
-        )
+        RegisterServiceCtrlHandlerExW(service_name.as_ref(), Some(service_control_handler), None)
     }?;
     SERVICE_STATUS_HANDLE_SLOT.store(handle.0 as isize, Ordering::Relaxed);
     set_service_status(handle, SERVICE_START_PENDING)?;

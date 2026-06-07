@@ -282,6 +282,9 @@ fn print_machine_summary(
     if let Some(config_warning) = &machine_status.config_warning {
         println!("machine-config-warning={config_warning}");
     }
+    if let Some(service_warning) = &machine_status.service_warning {
+        println!("machine-service-warning={service_warning}");
+    }
 
     if let Some(config) = &machine_status.config {
         println!("machine-cache-root={}", config.sync_dir.display());
