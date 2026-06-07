@@ -55,7 +55,7 @@ Interpretation of the sample:
 - Start from \"exclude everything\".
 - Re-include the documents subtree.
 - Re-include the repository source tree, test tree, and README.
-- Everything else stays hidden from query results unless another INCLUDE rule matches it.
+- Everything else stays filtered out of query results unless another INCLUDE rule matches it.
 
 Suggested workflow:
 1. Run `teamy-mft rules add ...` from the project directory, or create/edit a `*.teamy_mft_rules` file there manually.

@@ -12,10 +12,10 @@ use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
-use crate::query::QueryFilter;
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
+use crate::query::QueryRowFilter;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
@@ -240,13 +240,13 @@ impl LiveDriveState {
         request: &QueryPlan,
         cancel: Option<&AtomicBool>,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
-        let ignore_rules = QueryIgnoreRules::discover_for_drive_letters(
+        let filter_rules = QueryFilterRules::discover_for_drive_letters(
             &[self.drive_letter],
             &self.sync_dir,
             request.profile.as_deref(),
         )
         .map_err(|error| MachineError::degraded(error.to_string()))?;
-        let filter = QueryFilter::new(request, Some(ignore_rules))
+        let filter = QueryRowFilter::new(request, Some(filter_rules))
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
 
         let limit = request.limit.get();
@@ -258,7 +258,7 @@ impl LiveDriveState {
             let row = QueryResultRow {
                 path: projected.path.into(),
                 has_deleted_entries: !projected.is_live,
-                is_ignored: false,
+                is_filtered: false,
             };
             if !request.query.matches(row.path.as_str()) {
                 return true;
@@ -1008,7 +1008,7 @@ mod tests {
         let base_request = QueryPlan {
             r#in: Some(scope_dir.path().to_string_lossy().into_owned()),
             include_deleted: true,
-            show_ignored: true,
+            show_filtered: true,
             ..QueryPlan::new(needle.clone())
         };
         assert!(

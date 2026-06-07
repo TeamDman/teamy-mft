@@ -20,7 +20,7 @@ use tracing::warn;
 pub const RULES_FILE_EXTENSION: &str = ".teamy_mft_rules";
 pub const DEFAULT_PROFILE_NAME: &str = "default";
 
-pub struct QueryIgnoreRules {
+pub struct QueryFilterRules {
     matcher_rules: Vec<CompiledRule>,
     files: Vec<DiscoveredRuleFile>,
     default_behavior: DefaultRuleBehavior,
@@ -78,7 +78,7 @@ enum CompiledPathRule {
     },
 }
 
-impl QueryIgnoreRules {
+impl QueryFilterRules {
     /// Build an empty rule set that excludes nothing.
     #[must_use]
     pub fn empty() -> Self {
@@ -299,7 +299,7 @@ impl QueryIgnoreRules {
     }
 
     #[must_use]
-    pub fn is_ignored_path(&self, path: &Path) -> bool {
+    pub fn is_filtered_path(&self, path: &Path) -> bool {
         let normalized_path = normalize_candidate_path(path);
         let mut include = match self.default_behavior {
             DefaultRuleBehavior::Include => true,
@@ -640,9 +640,9 @@ pub fn profile_name_from_rules_path(path: &Path) -> eyre::Result<Option<String>>
     detect_profile_from_path(path)
 }
 
-impl std::fmt::Debug for QueryIgnoreRules {
+impl std::fmt::Debug for QueryFilterRules {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QueryIgnoreRules")
+        f.debug_struct("QueryFilterRules")
             .field("files", &self.files)
             .field("default_behavior", &self.default_behavior)
             .field("profile", &self.profile)
@@ -690,7 +690,7 @@ impl std::fmt::Debug for CompiledPathRule {
 #[cfg(test)]
 mod tests {
     use super::DEFAULT_PROFILE_NAME;
-    use super::QueryIgnoreRules;
+    use super::QueryFilterRules;
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
     use crate::query::QueryNeedle;
@@ -708,7 +708,7 @@ mod tests {
             .join(format!("sample{RULES_FILE_EXTENSION}"));
         std::fs::write(&global_path, "EXCLUDE C:\\private\n").expect("write global rules");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &global_path)
                     .expect("load global file")
@@ -719,7 +719,7 @@ mod tests {
         .expect("build rules");
 
         assert_eq!(rules.profile_name(), DEFAULT_PROFILE_NAME);
-        assert!(rules.is_ignored_path(Path::new(r"C:\private\notes.txt")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\private\notes.txt")));
     }
 
     #[test]
@@ -735,7 +735,7 @@ mod tests {
         std::fs::write(&profile_path, "INCLUDE C:\\Repos\\Minecraft\\**\\*.java\n")
             .expect("write profile rules");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &global_path)
                     .expect("load global file")
@@ -749,8 +749,8 @@ mod tests {
         .expect("build rules");
 
         assert_eq!(rules.files().len(), 2);
-        assert!(rules.is_ignored_path(Path::new(r"C:\private\notes.txt")));
-        assert!(!rules.is_ignored_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\private\notes.txt")));
+        assert!(!rules.is_filtered_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
     }
 
     #[test]
@@ -766,7 +766,7 @@ mod tests {
         std::fs::write(&profile_path, "EXCLUDE C:\\Repos\\Minecraft\n")
             .expect("write profile rules");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &global_path)
                     .expect("load global file")
@@ -780,8 +780,8 @@ mod tests {
         .expect("build rules");
 
         assert_eq!(rules.files().len(), 1);
-        assert!(rules.is_ignored_path(Path::new(r"C:\private\notes.txt")));
-        assert!(!rules.is_ignored_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\private\notes.txt")));
+        assert!(!rules.is_filtered_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
     }
 
     #[test]
@@ -792,7 +792,7 @@ mod tests {
             .join(format!("sample{RULES_FILE_EXTENSION}"));
         std::fs::write(&rules_path, "EXCLUDE C:\\Important\\Taxes\n").expect("write rules file");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &rules_path)
                     .expect("load rules file")
@@ -802,7 +802,7 @@ mod tests {
         )
         .expect("build rules");
 
-        assert!(rules.is_ignored_path(Path::new(r"C:\Important\Taxes\2026\return.pdf")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\Important\Taxes\2026\return.pdf")));
     }
 
     #[test]
@@ -817,7 +817,7 @@ mod tests {
         )
         .expect("write rules file");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &rules_path)
                     .expect("load rules file")
@@ -827,8 +827,8 @@ mod tests {
         )
         .expect("build rules");
 
-        assert!(rules.is_ignored_path(Path::new(r"C:\notes.txt")));
-        assert!(!rules.is_ignored_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\notes.txt")));
+        assert!(!rules.is_filtered_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
     }
 
     #[test]
@@ -843,7 +843,7 @@ mod tests {
         )
         .expect("write rules file");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &rules_path)
                     .expect("load rules file")
@@ -853,7 +853,7 @@ mod tests {
         )
         .expect("build rules");
 
-        assert!(rules.is_ignored_path(Path::new(r"C:\Programming\Main.java")));
+        assert!(rules.is_filtered_path(Path::new(r"C:\Programming\Main.java")));
     }
 
     #[test]
@@ -864,7 +864,7 @@ mod tests {
         std::fs::write(&path_a, "DEFAULT RULE IS INCLUDE\n").expect("write path_a");
         std::fs::write(&path_b, "DEFAULT RULE IS EXCLUDE\n").expect("write path_b");
 
-        let error = QueryIgnoreRules::from_discovered_files(
+        let error = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &path_a)
                     .expect("load path_a")
@@ -945,7 +945,7 @@ mod tests {
         std::fs::write(&published_paths.overlay_index_path, overlay_bytes)?;
 
         let discovered =
-            QueryIgnoreRules::discover_rule_files_for_drive_letters(&['C'], temp_dir.path())?;
+            QueryFilterRules::discover_rule_files_for_drive_letters(&['C'], temp_dir.path())?;
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].path, rules_path);
@@ -989,7 +989,7 @@ mod tests {
                 .expect("profile file exists"),
         ];
 
-        let profiles = QueryIgnoreRules::discovered_profile_names(&files);
+        let profiles = QueryFilterRules::discovered_profile_names(&files);
 
         assert!(profiles.contains(DEFAULT_PROFILE_NAME));
         assert!(profiles.contains("mc-modding"));
@@ -1015,7 +1015,7 @@ mod tests {
         std::fs::write(&path_a, "ORDER 10 INCLUDE C:\\Repos\\**\\*.java\n").expect("write path_a");
         std::fs::write(&path_b, "ORDER 10 INCLUDE C:\\Repos\\**\\*.java\n").expect("write path_b");
 
-        let rules = QueryIgnoreRules::from_discovered_files(
+        let rules = QueryFilterRules::from_discovered_files(
             vec![
                 super::load_rules_file('C', &path_a)
                     .expect("load path_a")
@@ -1039,7 +1039,7 @@ mod tests {
         std::fs::write(&rules_path, "INCLUDE C:\\Repos\n").expect("write rules file");
         std::fs::write(&other_path, "ignore me").expect("write other file");
 
-        let files = QueryIgnoreRules::load_rule_files_in_directory(temp_dir.path())
+        let files = QueryFilterRules::load_rule_files_in_directory(temp_dir.path())
             .expect("load directory rules");
 
         assert_eq!(files.len(), 1);

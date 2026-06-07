@@ -95,7 +95,7 @@ fn load_and_query_search_index(
             matched_rows.push(QueryResultRow {
                 path: Pathlike::from(row.path()),
                 has_deleted_entries: row.has_deleted_entries,
-                is_ignored: false,
+                is_filtered: false,
             });
         }
 
@@ -177,7 +177,7 @@ fn visit_matching_search_index_rows(
         let control_flow = visit(QueryResultRow {
             path: Pathlike::from(row.path()),
             has_deleted_entries: row.has_deleted_entries,
-            is_ignored: false,
+            is_filtered: false,
         })?;
 
         if control_flow == ControlFlow::Break {

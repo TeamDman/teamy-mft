@@ -9,7 +9,7 @@ use std::path::Path;
 pub struct QueryResultRow {
     pub path: Pathlike,
     pub has_deleted_entries: bool,
-    pub is_ignored: bool,
+    pub is_filtered: bool,
 }
 
 // SAFETY: `QueryResultRow` owns all of its fields and does not expose borrowed
@@ -37,7 +37,7 @@ impl QueryResultRow {
         if !colorize {
             return write!(writer, "{}", self.path);
         }
-        if self.is_ignored {
+        if self.is_filtered {
             return write!(writer, "{}", self.path.as_str().yellow());
         }
         if self.has_deleted_entries {

@@ -1,4 +1,4 @@
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryScope;
@@ -10,27 +10,27 @@ use std::path::Path;
     clippy::struct_excessive_bools,
     reason = "Query filter flags mirror independent CLI/RPC filtering switches"
 )]
-pub struct QueryFilter {
+pub struct QueryRowFilter {
     scope: Option<QueryScope>,
-    ignore_rules: Option<QueryIgnoreRules>,
+    filter_rules: Option<QueryFilterRules>,
     include_deleted: bool,
     only_deleted: bool,
-    show_ignored: bool,
-    only_ignored: bool,
+    show_filtered: bool,
+    only_filtered: bool,
 }
 
-impl QueryFilter {
+impl QueryRowFilter {
     /// # Errors
     ///
     /// Returns an error if the query scope cannot be canonicalized.
-    pub fn new(request: &QueryPlan, ignore_rules: Option<QueryIgnoreRules>) -> eyre::Result<Self> {
+    pub fn new(request: &QueryPlan, filter_rules: Option<QueryFilterRules>) -> eyre::Result<Self> {
         Ok(Self {
             scope: resolve_query_scope(request.r#in.as_deref())?,
-            ignore_rules,
+            filter_rules,
             include_deleted: request.include_deleted,
             only_deleted: request.only_deleted,
-            show_ignored: request.show_ignored,
-            only_ignored: request.only_ignored,
+            show_filtered: request.show_filtered,
+            only_filtered: request.only_filtered,
         })
     }
 
@@ -44,12 +44,12 @@ impl QueryFilter {
     }
 
     #[must_use]
-    pub fn include_ignored_state(&self, is_ignored: bool) -> bool {
-        if self.only_ignored {
-            return is_ignored;
+    pub fn include_filtered_state(&self, is_filtered: bool) -> bool {
+        if self.only_filtered {
+            return is_filtered;
         }
 
-        self.show_ignored || !is_ignored
+        self.show_filtered || !is_filtered
     }
 
     #[must_use]
@@ -68,18 +68,18 @@ impl QueryFilter {
             return None;
         }
 
-        row.is_ignored = self
-            .ignore_rules
+        row.is_filtered = self
+            .filter_rules
             .as_ref()
-            .is_some_and(|rules| rules.is_ignored_path(row.path.as_path()));
+            .is_some_and(|rules| rules.is_filtered_path(row.path.as_path()));
 
-        self.include_ignored_state(row.is_ignored).then_some(row)
+        self.include_filtered_state(row.is_filtered).then_some(row)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::QueryFilter;
+    use super::QueryRowFilter;
     use crate::query::Pathlike;
     use crate::query::QueryPlan;
     use crate::query::QueryResultRow;
@@ -92,13 +92,13 @@ mod tests {
         QueryResultRow {
             path: Pathlike::from(String::from(r"C:\music\track.flac")),
             has_deleted_entries,
-            is_ignored: false,
+            is_filtered: false,
         }
     }
 
     #[test]
     fn hides_deleted_rows_by_default() {
-        let filter = QueryFilter::new(&request(), None).expect("filter should build");
+        let filter = QueryRowFilter::new(&request(), None).expect("filter should build");
 
         assert!(filter.classify_and_match(row(false)).is_some());
         assert!(filter.classify_and_match(row(true)).is_none());
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn only_deleted_filters_to_deleted_rows() {
-        let filter = QueryFilter::new(
+        let filter = QueryRowFilter::new(
             &QueryPlan {
                 only_deleted: true,
                 ..request()
@@ -120,40 +120,40 @@ mod tests {
     }
 
     #[test]
-    fn ignored_rows_are_hidden_by_default() {
-        let filter = QueryFilter::new(&request(), None).expect("filter should build");
+    fn filtered_rows_are_hidden_by_default() {
+        let filter = QueryRowFilter::new(&request(), None).expect("filter should build");
 
-        assert!(!filter.include_ignored_state(true));
-        assert!(filter.include_ignored_state(false));
+        assert!(!filter.include_filtered_state(true));
+        assert!(filter.include_filtered_state(false));
     }
 
     #[test]
-    fn show_ignored_includes_both_visible_and_ignored_rows() {
-        let filter = QueryFilter::new(
+    fn show_filtered_includes_both_visible_and_filtered_rows() {
+        let filter = QueryRowFilter::new(
             &QueryPlan {
-                show_ignored: true,
+                show_filtered: true,
                 ..request()
             },
             None,
         )
         .expect("filter should build");
 
-        assert!(filter.include_ignored_state(true));
-        assert!(filter.include_ignored_state(false));
+        assert!(filter.include_filtered_state(true));
+        assert!(filter.include_filtered_state(false));
     }
 
     #[test]
-    fn only_ignored_filters_to_ignored_rows() {
-        let filter = QueryFilter::new(
+    fn only_filtered_filters_to_filtered_rows() {
+        let filter = QueryRowFilter::new(
             &QueryPlan {
-                only_ignored: true,
+                only_filtered: true,
                 ..request()
             },
             None,
         )
         .expect("filter should build");
 
-        assert!(filter.include_ignored_state(true));
-        assert!(!filter.include_ignored_state(false));
+        assert!(filter.include_filtered_state(true));
+        assert!(!filter.include_filtered_state(false));
     }
 }
