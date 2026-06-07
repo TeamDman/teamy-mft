@@ -30,11 +30,17 @@ teamy-mft status
 # Query indexed paths
 teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 
-# Add a privacy-preserving ignore rule
+# Add a privacy-preserving exclusion rule to the default profile
 teamy-mft ignore add FirstName
 
-# See which ignore rules are active and where they came from
-teamy-mft ignore list
+# Query with a profile-specific ruleset
+teamy-mft query ".java$" --profile mc-modding
+
+# See which rule files are active for one profile
+teamy-mft ignore list --profile mc-modding
+
+# See which profiles exist
+teamy-mft profile list
 ```
 
 ## Library Usage
@@ -47,7 +53,7 @@ use teamy_mft::query::QueryExecutionOptions;
 use teamy_mft::query::QueryIgnoreBehavior;
 
 fn main() -> eyre::Result<()> {
-    // By default, queries honor discovered `.teamymftignore` rules.
+    // By default, queries honor discovered `.teamy_mft_rules` files.
     for path in QueryArgs::new(".git$").invoke()? {
         if let Some(repo_root) = path.parent() {
             println!("{} ({})", repo_root.display(), path.display());

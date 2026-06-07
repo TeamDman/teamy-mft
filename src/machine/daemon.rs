@@ -921,7 +921,11 @@ fn query_published_drive(
     request: &QueryPlan,
 ) -> eyre::Result<Vec<QueryResultRow>> {
     let query_plan = request.clone();
-    let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(&[drive], sync_dir) {
+    let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
+        &[drive],
+        sync_dir,
+        request.profile.as_deref(),
+    ) {
         Ok(rules) => Some(rules),
         Err(error) => {
             warn!(

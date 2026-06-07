@@ -2,6 +2,7 @@ use crate::cli::command::fsutil::FsutilArgs;
 use crate::cli::command::ignore::IgnoreArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
+use crate::cli::command::profile::ProfileArgs;
 use crate::cli::command::protection::ProtectionArgs;
 use crate::cli::command::query::QueryArgs;
 use crate::cli::command::service::ServiceArgs;
@@ -30,8 +31,12 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Produce newline-delimited list of file paths for matching drives from cached `.mft` files
     ListPaths(ListPathsArgs),
-    /// Manage `.teamymftignore` rules used to filter query results
+    /// Manage `.teamy_mft_rules` exclusion rules used to filter query results
     Ignore(IgnoreArgs),
+    /// Manage query rule profiles discovered from `.teamy_mft_rules` files
+    Profile(ProfileArgs),
+    /// Compatibility alias for `profile`
+    Profiles(ProfileArgs),
     /// Toggle machine cache ACL protection for development workflows
     Protection(ProtectionArgs),
     /// Native Windows filesystem utilities used by teamy-mft
@@ -64,6 +69,7 @@ impl Command {
             Command::Uninstall(args) => args.invoke(),
             Command::ListPaths(args) => args.invoke(),
             Command::Ignore(args) => args.invoke(),
+            Command::Profile(args) | Command::Profiles(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
             Command::Fsutil(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
