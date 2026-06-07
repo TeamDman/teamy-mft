@@ -10,6 +10,7 @@ use globset::GlobMatcher;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,7 +63,7 @@ struct CompiledRule {
     order: i64,
     include: bool,
     line_number: usize,
-    raw: String,
+    semantic_key: String,
     source_path: PathBuf,
     matcher: CompiledPathRule,
 }
@@ -206,7 +207,7 @@ impl QueryFilterRules {
         let mut default_source: Option<(DefaultRuleBehavior, PathBuf, usize)> = None;
         let mut duplicate_orders = BTreeMap::<i64, Vec<(PathBuf, usize)>>::new();
         let mut seen_matcher_rules = BTreeSet::<(i64, String)>::new();
-        let mut added_compiled_rules = BTreeSet::<(i64, String)>::new();
+        let mut added_compiled_rules = BTreeSet::<(i64, bool, String)>::new();
 
         for file in &effective_files {
             for rule in &file.rules {
@@ -265,7 +266,13 @@ impl QueryFilterRules {
             matcher_rules.extend(
                 file.compiled_rules
                     .iter()
-                    .filter(|rule| added_compiled_rules.insert((rule.order, rule.raw.clone())))
+                    .filter(|rule| {
+                        added_compiled_rules.insert((
+                            rule.order,
+                            rule.include,
+                            rule.semantic_key.clone(),
+                        ))
+                    })
                     .cloned(),
             );
         }
@@ -381,6 +388,15 @@ impl CompiledPathRule {
             Self::Glob { matcher, .. } => matcher.is_match(normalized_path),
         }
     }
+
+    fn semantic_key(&self) -> String {
+        match self {
+            Self::LiteralSubtree { normalized } => format!("literal:{normalized}"),
+            Self::Glob {
+                normalized_pattern, ..
+            } => format!("glob:{normalized_pattern}"),
+        }
+    }
 }
 
 fn discover_rule_files_for_drive(
@@ -436,13 +452,15 @@ fn load_rules_file(drive_letter: char, path: &Path) -> eyre::Result<Option<Disco
         let Some(pattern) = rule.directive.pattern() else {
             continue;
         };
+        let matcher = compile_path_rule(pattern, path, rule.line_number)?;
+        let semantic_key = matcher.semantic_key();
         compiled_rules.push(CompiledRule {
             order: rule.order.unwrap_or(0),
             include: matches!(rule.directive, RuleDirective::Include(_)),
             line_number: rule.line_number,
-            raw: rule.render().to_owned(),
+            semantic_key,
             source_path: path.to_path_buf(),
-            matcher: compile_path_rule(pattern, path, rule.line_number)?,
+            matcher,
         });
     }
 
@@ -564,7 +582,8 @@ fn compile_path_rule(
     path: &Path,
     line_number: usize,
 ) -> eyre::Result<CompiledPathRule> {
-    let normalized_pattern = normalize_pattern(pattern);
+    let normalized_pattern =
+        normalize_path_like(resolve_rule_pattern_path(pattern, path).as_path());
     if !contains_glob_metacharacters(pattern) {
         return Ok(CompiledPathRule::LiteralSubtree {
             normalized: normalized_pattern,
@@ -598,24 +617,64 @@ fn contains_glob_metacharacters(pattern: &str) -> bool {
 }
 
 fn normalize_candidate_path(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    let replaced = raw.replace('\\', "/");
-    let trimmed = if replaced.len() > 3 {
-        replaced.trim_end_matches('/')
-    } else {
-        replaced.as_str()
-    };
-    trimmed.to_ascii_lowercase()
+    normalize_path_like(path)
 }
 
-fn normalize_pattern(pattern: &str) -> String {
-    let replaced = pattern.replace('\\', "/");
-    let trimmed = if replaced.len() > 3 {
-        replaced.trim_end_matches('/')
-    } else {
-        replaced.as_str()
-    };
-    trimmed.to_ascii_lowercase()
+fn normalize_path_like(path: &Path) -> String {
+    let mut prefix = String::new();
+    let mut has_root_dir = false;
+    let mut segments = Vec::<String>::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(value) => {
+                prefix = value.as_os_str().to_string_lossy().replace('\\', "/");
+            }
+            Component::RootDir => {
+                has_root_dir = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if segments.last().is_some_and(|segment| segment != "..") {
+                    let _ = segments.pop();
+                } else if !has_root_dir {
+                    segments.push(String::from(".."));
+                }
+            }
+            Component::Normal(value) => {
+                segments.push(value.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    let mut normalized = String::new();
+    if !prefix.is_empty() {
+        normalized.push_str(&prefix);
+    }
+    if has_root_dir && !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    if !segments.is_empty() {
+        if !normalized.is_empty() && !normalized.ends_with('/') {
+            normalized.push('/');
+        }
+        normalized.push_str(&segments.join("/"));
+    }
+    if normalized.len() > 3 {
+        normalized.truncate(normalized.trim_end_matches('/').len());
+    }
+    normalized.to_ascii_lowercase()
+}
+
+fn resolve_rule_pattern_path(pattern: &str, rules_path: &Path) -> PathBuf {
+    let pattern_path = Path::new(pattern);
+    if pattern_path.is_absolute() {
+        return pattern_path.to_path_buf();
+    }
+    rules_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(pattern_path)
 }
 
 fn file_applies_to_profile(file: &DiscoveredRuleFile, profile: Option<&str>) -> bool {
@@ -844,6 +903,98 @@ mod tests {
     }
 
     #[test]
+    fn relative_dot_rule_resolves_from_rules_file_directory() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
+        std::fs::write(&rules_path, "DEFAULT RULE IS EXCLUDE\nINCLUDE .\n")
+            .expect("write rules file");
+
+        let rules = QueryFilterRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &rules_path)
+                    .expect("load rules file")
+                    .expect("rules file exists"),
+            ],
+            Some("mc-modding"),
+        )
+        .expect("build rules");
+
+        let inside_path = temp_dir.path().join("src").join("main.rs");
+        let outside_path = temp_dir
+            .path()
+            .parent()
+            .expect("temp dir should have parent")
+            .join("outside.txt");
+        assert!(!rules.is_filtered_path(inside_path.as_path()));
+        assert!(rules.is_filtered_path(outside_path.as_path()));
+    }
+
+    #[test]
+    fn relative_glob_rule_resolves_from_rules_file_directory() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
+        std::fs::write(&rules_path, "DEFAULT RULE IS EXCLUDE\nINCLUDE src/**\n")
+            .expect("write rules file");
+
+        let rules = QueryFilterRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &rules_path)
+                    .expect("load rules file")
+                    .expect("rules file exists"),
+            ],
+            Some("mc-modding"),
+        )
+        .expect("build rules");
+
+        let included_path = temp_dir.path().join("src").join("lib.rs");
+        let filtered_path = temp_dir.path().join("tests").join("lib.rs");
+        assert!(!rules.is_filtered_path(included_path.as_path()));
+        assert!(rules.is_filtered_path(filtered_path.as_path()));
+    }
+
+    #[test]
+    fn relative_rules_in_different_directories_do_not_deduplicate() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let global_path = temp_dir
+            .path()
+            .join(format!("global{RULES_FILE_EXTENSION}"));
+        let left_dir = temp_dir.path().join("left");
+        let right_dir = temp_dir.path().join("right");
+        std::fs::create_dir_all(&left_dir).expect("create left dir");
+        std::fs::create_dir_all(&right_dir).expect("create right dir");
+        let left_rules_path = left_dir.join(format!("left.mc-modding{RULES_FILE_EXTENSION}"));
+        let right_rules_path = right_dir.join(format!("right.mc-modding{RULES_FILE_EXTENSION}"));
+        std::fs::write(&global_path, "DEFAULT RULE IS EXCLUDE\n").expect("write global rules");
+        std::fs::write(&left_rules_path, "INCLUDE .\n").expect("write left rules");
+        std::fs::write(&right_rules_path, "INCLUDE .\n").expect("write right rules");
+
+        let rules = QueryFilterRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &global_path)
+                    .expect("load global file")
+                    .expect("global file exists"),
+                super::load_rules_file('C', &left_rules_path)
+                    .expect("load left file")
+                    .expect("left file exists"),
+                super::load_rules_file('C', &right_rules_path)
+                    .expect("load right file")
+                    .expect("right file exists"),
+            ],
+            Some("mc-modding"),
+        )
+        .expect("build rules");
+
+        let left_path = left_dir.join("src").join("main.rs");
+        let right_path = right_dir.join("src").join("main.rs");
+        assert!(!rules.is_filtered_path(left_path.as_path()));
+        assert!(!rules.is_filtered_path(right_path.as_path()));
+    }
+
+    #[test]
     fn default_rule_is_exclude_hides_unmatched_paths() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let rules_path = temp_dir
@@ -877,7 +1028,7 @@ mod tests {
             .join(format!("sample{RULES_FILE_EXTENSION}"));
         std::fs::write(
             &rules_path,
-            "ORDER 100 INCLUDE C:\\Programming\\*.java\nORDER 200 EXCLUDE *\n",
+            "ORDER 100 INCLUDE src/**/*.java\nORDER 200 EXCLUDE .\n",
         )
         .expect("write rules file");
 
@@ -891,7 +1042,8 @@ mod tests {
         )
         .expect("build rules");
 
-        assert!(rules.is_filtered_path(Path::new(r"C:\Programming\Main.java")));
+        let included_then_excluded_path = temp_dir.path().join("src").join("main.java");
+        assert!(rules.is_filtered_path(included_then_excluded_path.as_path()));
     }
 
     #[test]
