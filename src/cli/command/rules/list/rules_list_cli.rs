@@ -1,5 +1,5 @@
 use crate::query::DEFAULT_PROFILE_NAME;
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::query::normalize_profile_name;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -26,7 +26,7 @@ impl RulesListArgs {
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
 
-        let rules = QueryIgnoreRules::discover_for_drive_letters(
+        let rules = QueryFilterRules::discover_for_drive_letters(
             &drive_letters,
             &sync_dir,
             profile.as_deref(),

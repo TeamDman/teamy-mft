@@ -20,11 +20,11 @@ use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournalHandle;
 use crate::query::ControlFlow;
-use crate::query::QueryFilter;
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::query::QueryLimit;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
+use crate::query::QueryRowFilter;
 use crate::query::visit_drive_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::sync::IfExistsOutputBehaviour;
@@ -922,7 +922,7 @@ fn query_published_drive(
     request: &QueryPlan,
 ) -> eyre::Result<Vec<QueryResultRow>> {
     let query_plan = request.clone();
-    let ignore_rules = match QueryIgnoreRules::discover_for_drive_letters(
+    let filter_rules = match QueryFilterRules::discover_for_drive_letters(
         &[drive],
         sync_dir,
         request.profile.as_deref(),
@@ -932,12 +932,12 @@ fn query_published_drive(
             warn!(
                 drive = %drive,
                 error = %error,
-                "Published-cache query could not load ignore rules; treating paths as visible"
+                "Published-cache query could not load filter rules; treating paths as visible"
             );
             None
         }
     };
-    let filter = QueryFilter::new(request, ignore_rules)?;
+    let filter = QueryRowFilter::new(request, filter_rules)?;
     let limit = request.limit.get();
     let mut rows = Vec::with_capacity(limit.unwrap_or_default());
 

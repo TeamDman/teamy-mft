@@ -1,4 +1,4 @@
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -20,9 +20,9 @@ impl ProfileListArgs {
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let files =
-            QueryIgnoreRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;
+            QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;
 
-        for profile in QueryIgnoreRules::discovered_profile_names(&files) {
+        for profile in QueryFilterRules::discovered_profile_names(&files) {
             println!("{profile}");
         }
 

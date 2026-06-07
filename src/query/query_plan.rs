@@ -37,12 +37,12 @@ pub struct QueryPlan {
     /// Show only paths that contain one or more deleted MFT entries
     #[facet(args::named, default)]
     pub only_deleted: bool,
-    /// Include paths hidden by `.teamy_mft_rules` exclusion rules
+    /// Include paths filtered out by `.teamy_mft_rules` filter rules
     #[facet(args::named, default)]
-    pub show_ignored: bool,
-    /// Show only paths hidden by `.teamy_mft_rules` exclusion rules
+    pub show_filtered: bool,
+    /// Show only paths filtered out by `.teamy_mft_rules` filter rules
     #[facet(args::named, default)]
-    pub only_ignored: bool,
+    pub only_filtered: bool,
 }
 
 impl QueryPlan {

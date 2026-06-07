@@ -1,9 +1,9 @@
 use crate::machine::config::published_drive_paths;
 use crate::query::ControlFlow;
-use crate::query::QueryFilter;
-use crate::query::QueryIgnoreBehavior;
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterBehavior;
+use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
+use crate::query::QueryRowFilter;
 use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
 use crate::query::visit_drive_search_index_rows;
@@ -18,7 +18,7 @@ pub struct DiskQueryExecutor {
     pub sync_dir: PathBuf,
     pub mft_files: Vec<(char, PathBuf)>,
     pub request: QueryPlan,
-    pub ignore: QueryIgnoreBehavior,
+    pub filter_behavior: QueryFilterBehavior,
 }
 
 impl DiskQueryExecutor {
@@ -56,13 +56,13 @@ impl DiskQueryExecutor {
             sync_dir,
             mft_files,
             request,
-            ignore: QueryIgnoreBehavior::AutoDiscover,
+            filter_behavior: QueryFilterBehavior::AutoDiscover,
         })
     }
 
     /// # Errors
     ///
-    /// Returns an error if query parsing, scope resolution, or ignore discovery fails.
+    /// Returns an error if query parsing, scope resolution, or filter-rule discovery fails.
     pub fn stream(self) -> eyre::Result<QueryRowStream> {
         let _span = info_span!("query_execute").entered();
         let query_plan = Arc::new(self.request.clone());
@@ -71,21 +71,21 @@ impl DiskQueryExecutor {
             .iter()
             .map(|(drive_letter, _)| *drive_letter)
             .collect::<Vec<_>>();
-        let ignore_rules = {
+        let filter_rules = {
             let _span = info_span!("query_prepare_filters").entered();
-            match self.ignore {
-                QueryIgnoreBehavior::AutoDiscover => {
-                    Some(QueryIgnoreRules::discover_for_drive_letters(
+            match self.filter_behavior {
+                QueryFilterBehavior::AutoDiscover => {
+                    Some(QueryFilterRules::discover_for_drive_letters(
                         &drive_letters,
                         &self.sync_dir,
                         self.request.profile.as_deref(),
                     )?)
                 }
-                QueryIgnoreBehavior::Disabled => None,
-                QueryIgnoreBehavior::Custom(rules) => Some(rules),
+                QueryFilterBehavior::Disabled => None,
+                QueryFilterBehavior::Custom(rules) => Some(rules),
             }
         };
-        let filter = Arc::new(QueryFilter::new(&self.request, ignore_rules)?);
+        let filter = Arc::new(QueryRowFilter::new(&self.request, filter_rules)?);
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         let sink = QueryRowSink::new(tx);
         let drive_count = self.mft_files.len();

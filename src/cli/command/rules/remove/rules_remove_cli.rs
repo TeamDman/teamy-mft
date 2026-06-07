@@ -1,6 +1,6 @@
 use crate::cli::command::rules::RulesMutationDirective;
 use crate::query::DEFAULT_PROFILE_NAME;
-use crate::query::QueryIgnoreRules;
+use crate::query::QueryFilterRules;
 use crate::query::RULES_FILE_EXTENSION;
 use crate::query::normalize_profile_name;
 use crate::query::profile_name_from_rules_path;
@@ -112,9 +112,9 @@ impl RulesRemoveArgs {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
             let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
             let mut discovered =
-                QueryIgnoreRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;
+                QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;
             let current_dir = std::env::current_dir()?;
-            for file in QueryIgnoreRules::load_rule_files_in_directory(&current_dir)? {
+            for file in QueryFilterRules::load_rule_files_in_directory(&current_dir)? {
                 if discovered.iter().any(|known| known.path == file.path) {
                     continue;
                 }

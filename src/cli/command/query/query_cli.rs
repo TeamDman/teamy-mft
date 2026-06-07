@@ -55,7 +55,7 @@ impl QueryArgs {
     /// Returns an error if the query is empty, machine cache cannot be retrieved,
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
-    #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_ignored = self.plan.show_ignored, only_ignored = self.plan.only_ignored, density = ?self.density))]
+    #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_filtered = self.plan.show_filtered, only_filtered = self.plan.only_filtered, density = ?self.density))]
     pub fn invoke_and_print(self) -> eyre::Result<()> {
         let results = self.collect_rows()?;
 
@@ -63,8 +63,8 @@ impl QueryArgs {
         let colorize = stdout_is_terminal
             && (self.plan.include_deleted
                 || self.plan.only_deleted
-                || self.plan.show_ignored
-                || self.plan.only_ignored);
+                || self.plan.show_filtered
+                || self.plan.only_filtered);
         let result_limit = self
             .plan
             .limit
