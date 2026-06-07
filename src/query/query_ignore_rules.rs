@@ -1,10 +1,8 @@
 use crate::machine::config::published_drive_paths;
 use crate::query::ControlFlow;
-use crate::query::QueryGroup;
 use crate::query::QueryNeedle;
 use crate::query::QueryPlan;
 use crate::query::QueryRule;
-use crate::query::QueryString;
 use crate::query::visit_drive_search_index_rows;
 use eyre::Context;
 use globset::GlobBuilder;
@@ -103,16 +101,9 @@ impl QueryIgnoreRules {
         sync_dir: &Path,
     ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
         let _span = info_span!("discover_query_rule_files").entered();
-        let rules_query = QueryPlan {
-            query: QueryString {
-                groups: vec![QueryGroup {
-                    rules: vec![QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(
-                        RULES_FILE_EXTENSION,
-                    ))],
-                }],
-            },
-            ..Default::default()
-        };
+        let rules_query = QueryPlan::single_rule(QueryRule::EndsWithCaseInsensitive(
+            QueryNeedle::new(RULES_FILE_EXTENSION),
+        ));
         let results: Vec<eyre::Result<Vec<DiscoveredRuleFile>>> = drive_letters
             .par_iter()
             .map(|drive_letter| {
@@ -663,11 +654,9 @@ mod tests {
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
     use super::SYNCED_RULES_FILE_NAME;
-    use crate::query::QueryGroup;
     use crate::query::QueryNeedle;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
-    use crate::query::QueryString;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
@@ -878,16 +867,9 @@ mod tests {
         let bytes = Box::leak(bytes.into_boxed_slice());
         let parsed = crate::search_index::search_index_bytes::SearchIndexBytes::new(bytes)
             .parse_trusted_for_query()?;
-        let plan = QueryPlan {
-            query: QueryString {
-                groups: vec![QueryGroup {
-                    rules: vec![QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(
-                        RULES_FILE_EXTENSION,
-                    ))],
-                }],
-            },
-            ..Default::default()
-        };
+        let plan = QueryPlan::single_rule(QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(
+            RULES_FILE_EXTENSION,
+        )));
 
         let indices = plan.query.matching_row_indices(&|rule| {
             crate::query::matching_row_indices_for_rule(&parsed, rule)
