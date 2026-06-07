@@ -1,5 +1,10 @@
 use crate::machine::config::published_drive_paths;
+use crate::query::ControlFlow;
+use crate::query::QueryGroup;
+use crate::query::QueryNeedle;
 use crate::query::QueryPlan;
+use crate::query::QueryRule;
+use crate::query::QueryString;
 use crate::query::visit_drive_search_index_rows;
 use eyre::Context;
 use globset::GlobBuilder;
@@ -98,7 +103,16 @@ impl QueryIgnoreRules {
         sync_dir: &Path,
     ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
         let _span = info_span!("discover_query_rule_files").entered();
-        let rules_query = QueryPlan::parse_inputs(&[RULES_FILE_EXTENSION.to_owned()])?;
+        let rules_query = QueryPlan {
+            query: QueryString {
+                groups: vec![QueryGroup {
+                    rules: vec![QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(
+                        RULES_FILE_EXTENSION,
+                    ))],
+                }],
+            },
+            ..Default::default()
+        };
         let results: Vec<eyre::Result<Vec<DiscoveredRuleFile>>> = drive_letters
             .par_iter()
             .map(|drive_letter| {
@@ -337,18 +351,11 @@ fn discover_rule_files_for_drive(
     let mut files = Vec::new();
     visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
         let path = PathBuf::from(row.path.as_path());
-        if !path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(RULES_FILE_EXTENSION))
-        {
-            return Ok(true);
-        }
         let Some(file) = load_rules_file(drive_letter, &path)? else {
-            return Ok(true);
+            return Ok(ControlFlow::Continue);
         };
         files.push(file);
-        Ok(true)
+        Ok(ControlFlow::Continue)
     })?;
 
     Ok(files)
@@ -656,7 +663,11 @@ mod tests {
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
     use super::SYNCED_RULES_FILE_NAME;
+    use crate::query::QueryGroup;
+    use crate::query::QueryNeedle;
     use crate::query::QueryPlan;
+    use crate::query::QueryRule;
+    use crate::query::QueryString;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
@@ -867,7 +878,16 @@ mod tests {
         let bytes = Box::leak(bytes.into_boxed_slice());
         let parsed = crate::search_index::search_index_bytes::SearchIndexBytes::new(bytes)
             .parse_trusted_for_query()?;
-        let plan = QueryPlan::parse_inputs(&[RULES_FILE_EXTENSION.to_owned()])?;
+        let plan = QueryPlan {
+            query: QueryString {
+                groups: vec![QueryGroup {
+                    rules: vec![QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(
+                        RULES_FILE_EXTENSION,
+                    ))],
+                }],
+            },
+            ..Default::default()
+        };
 
         let indices = plan.query.matching_row_indices(&|rule| {
             crate::query::matching_row_indices_for_rule(&parsed, rule)
