@@ -17,7 +17,7 @@ pub enum RulesMutationDirective {
 }
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
-pub struct RulesArgs {
+pub struct RuleArgs {
     #[facet(args::subcommand)]
     pub command: RulesCommand,
 }
@@ -34,7 +34,7 @@ pub enum RulesCommand {
     Remove(RulesRemoveArgs),
 }
 
-impl RulesArgs {
+impl RuleArgs {
     /// # Errors
     ///
     /// Returns an error if the selected rules subcommand fails.
