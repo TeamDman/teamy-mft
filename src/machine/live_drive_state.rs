@@ -239,9 +239,12 @@ impl LiveDriveState {
         request: &QueryPlan,
         cancel: Option<&AtomicBool>,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
-        let ignore_rules =
-            QueryIgnoreRules::discover_for_drive_letters(&[self.drive_letter], &self.sync_dir)
-                .map_err(|error| MachineError::degraded(error.to_string()))?;
+        let ignore_rules = QueryIgnoreRules::discover_for_drive_letters(
+            &[self.drive_letter],
+            &self.sync_dir,
+            request.profile.as_deref(),
+        )
+        .map_err(|error| MachineError::degraded(error.to_string()))?;
         let filter = QueryFilter::new(request, Some(ignore_rules))
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
 

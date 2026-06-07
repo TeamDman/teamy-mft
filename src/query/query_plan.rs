@@ -18,6 +18,9 @@ pub struct QueryPlan {
     /// Restrict results to this path. Directories include descendants; files match exactly.
     #[facet(args::named, default)]
     pub r#in: Option<String>,
+    /// Apply profile-specific `.teamy_mft_rules` files in addition to global rules.
+    #[facet(args::named, default)]
+    pub profile: Option<String>,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
     #[facet(args::named, default)]
     pub drive_letter_pattern: DriveLetterPattern,
@@ -30,10 +33,10 @@ pub struct QueryPlan {
     /// Show only paths that contain one or more deleted MFT entries
     #[facet(args::named, default)]
     pub only_deleted: bool,
-    /// Include paths hidden by `.teamymftignore` rules
+    /// Include paths hidden by `.teamy_mft_rules` exclusion rules
     #[facet(args::named, default)]
     pub show_ignored: bool,
-    /// Show only paths hidden by `.teamymftignore` rules
+    /// Show only paths hidden by `.teamy_mft_rules` exclusion rules
     #[facet(args::named, default)]
     pub only_ignored: bool,
 }
