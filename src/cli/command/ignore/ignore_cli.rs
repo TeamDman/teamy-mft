@@ -81,8 +81,8 @@ impl IgnoreAddArgs {
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct IgnoreListArgs {
-    /// Restrict ignore discovery to drives matching this pattern
-    #[facet(args::named, default)]
+    /// Restrict ignore discovery to drives matching this pattern. Compatibility alias: `--drive`.
+    #[facet(args::named, args::long_alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 }
 

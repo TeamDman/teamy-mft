@@ -6,8 +6,8 @@ use figue::{self as args};
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 pub struct SyncPlan {
-    /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D")
-    #[facet(args::named, default)]
+    /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D"). Compatibility alias: `--drive`.
+    #[facet(args::named, args::long_alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
     /// How to handle existing output files

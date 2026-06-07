@@ -38,3 +38,50 @@ impl Cli {
         self.command.invoke()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use crate::cli::command::Command;
+
+    #[test]
+    fn status_accepts_drive_long_alias() {
+        let cli: Cli = figue::from_slice(&["status", "--drive", "CD"]).unwrap();
+
+        let Command::Status(args) = cli.command else {
+            panic!("expected status command");
+        };
+        assert_eq!(args.drive_letter_pattern.as_ref(), "CD");
+    }
+
+    #[test]
+    fn ignore_accepts_drive_long_alias() {
+        let args: crate::cli::command::ignore::IgnoreArgs =
+            figue::from_slice(&["list", "--drive", "CD"]).unwrap();
+
+        let crate::cli::command::ignore::IgnoreCommand::List(args) = args.command else {
+            panic!("expected ignore list command");
+        };
+        assert_eq!(args.drive_letter_pattern.as_ref(), "CD");
+    }
+
+    #[test]
+    fn sync_accepts_drive_long_alias() {
+        let cli: Cli = figue::from_slice(&["sync", "--drive", "CD"]).unwrap();
+
+        let Command::Sync(args) = cli.command else {
+            panic!("expected sync command");
+        };
+        assert_eq!(args.plan.drive_letter_pattern.as_ref(), "CD");
+    }
+
+    #[test]
+    fn query_accepts_drive_long_alias() {
+        let cli: Cli = figue::from_slice(&["query", "flowers", "--drive", "CD"]).unwrap();
+
+        let Command::Query(args) = cli.command else {
+            panic!("expected query command");
+        };
+        assert_eq!(args.plan.drive_letter_pattern.as_ref(), "CD");
+    }
+}

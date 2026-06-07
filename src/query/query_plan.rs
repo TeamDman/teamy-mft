@@ -18,8 +18,8 @@ pub struct QueryPlan {
     /// Restrict results to this path. Directories include descendants; files match exactly.
     #[facet(args::named, default)]
     pub r#in: Option<String>,
-    /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D")
-    #[facet(args::named, default)]
+    /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D"). Compatibility alias: `--drive`.
+    #[facet(args::named, args::long_alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
     /// Maximum number of results to show
     #[facet(args::named, default)]

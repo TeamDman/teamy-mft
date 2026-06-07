@@ -9,8 +9,8 @@ use std::time::SystemTime;
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 #[facet(rename_all = "kebab-case")]
 pub struct StatusArgs {
-    /// Drive letter pattern to inspect (e.g., `*`, `C`, `CD`, `C,D`).
-    #[facet(args::named, default)]
+    /// Drive letter pattern to inspect (e.g., `*`, `C`, `CD`, `C,D`). Compatibility alias: `--drive`.
+    #[facet(args::named, args::long_alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
     /// Show per-drive artifact paths and timestamps.
