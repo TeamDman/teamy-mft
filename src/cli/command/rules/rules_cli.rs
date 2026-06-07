@@ -5,6 +5,17 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 
+#[derive(Facet, Arbitrary, PartialEq, Eq, Debug, Default)]
+#[repr(u8)]
+#[facet(rename_all = "kebab-case")]
+pub enum RulesMutationDirective {
+    #[default]
+    Include,
+    Exclude,
+    DefaultInclude,
+    DefaultExclude,
+}
+
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct RulesArgs {
     #[facet(args::subcommand)]
@@ -15,11 +26,11 @@ pub struct RulesArgs {
 #[repr(u8)]
 #[facet(rename_all = "kebab-case")]
 pub enum RulesCommand {
-    /// Append one rule to the managed rules file for a profile
+    /// Ensure one rule exists in a discovered rules file, a new cwd rules file, or a selected `--rules-file`
     Add(RulesAddArgs),
     /// List effective `.teamy_mft_rules` files and directives for one profile
     List(RulesListArgs),
-    /// Remove one managed rule line from a profile by line number
+    /// Ensure one rule is absent from discovered rules files or a selected `--rules-file`
     Remove(RulesRemoveArgs),
 }
 

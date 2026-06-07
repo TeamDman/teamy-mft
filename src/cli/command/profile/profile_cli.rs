@@ -1,5 +1,6 @@
 use crate::cli::command::profile::list::ProfileListArgs;
 use crate::cli::command::profile::reset::ProfileResetArgs;
+use crate::cli::command::profile::tutorial::ProfileTutorialArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -18,6 +19,8 @@ pub enum ProfileCommand {
     List(ProfileListArgs),
     /// Disable discovered query rule files for one profile by renaming them
     Reset(ProfileResetArgs),
+    /// Print an LLM-ready explanation of profile rules plus a sample profile file
+    Tutorial(ProfileTutorialArgs),
 }
 
 impl ProfileArgs {
@@ -28,6 +31,7 @@ impl ProfileArgs {
         match self.command {
             ProfileCommand::List(args) => args.invoke(),
             ProfileCommand::Reset(args) => args.invoke(),
+            ProfileCommand::Tutorial(args) => args.invoke(),
         }
     }
 }
