@@ -74,6 +74,7 @@ tokio-stream = "0.1.18"
 futures = "0.3.32"
 zerotrie = { version = "0.2.3", features = ["alloc"] }
 ignore = "0.4.24"
+globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
 vox = { version = "0.8.2", features = ["transport-local"] }

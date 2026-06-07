@@ -2,6 +2,7 @@ pub mod fsutil;
 pub mod ignore;
 pub mod install;
 pub mod list_paths;
+pub mod profile;
 pub mod protection;
 pub mod query;
 pub mod service;
