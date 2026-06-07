@@ -111,6 +111,26 @@ mod tests {
     }
 
     #[test]
+    fn move_accepts_source_and_directory_target() {
+        let cli: Cli = figue::from_slice(&["move", r".\a.teamy_mft_rules", ".\\rules\\"]).unwrap();
+
+        let Command::Move(args) = cli.command else {
+            panic!("expected move command");
+        };
+        assert_eq!(args.source, r".\a.teamy_mft_rules");
+        assert_eq!(args.destination, ".\\rules\\");
+    }
+
+    #[test]
+    fn mv_alias_matches_move() {
+        let canonical: Cli =
+            figue::from_slice(&["move", r".\a.teamy_mft_rules", ".\\rules\\"]).unwrap();
+        let alias: Cli = figue::from_slice(&["mv", r".\a.teamy_mft_rules", ".\\rules\\"]).unwrap();
+
+        assert_eq!(alias, canonical);
+    }
+
+    #[test]
     fn sync_accepts_drive_long_alias() {
         let cli: Cli = figue::from_slice(&["sync", "--drive", "CD"]).unwrap();
 
