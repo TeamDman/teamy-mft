@@ -19,6 +19,7 @@ use crate::machine::ipc::StatusResponse;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournalHandle;
+use crate::query::ControlFlow;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreRules;
 use crate::query::QueryLimit;
@@ -950,7 +951,11 @@ fn query_published_drive(
             if let Some(row) = filter.classify_and_match(row) {
                 rows.push(row);
             }
-            Ok(limit.is_none_or(|limit| rows.len() < limit))
+            Ok(if limit.is_none_or(|limit| rows.len() < limit) {
+                ControlFlow::Continue
+            } else {
+                ControlFlow::Break
+            })
         },
     )?;
 

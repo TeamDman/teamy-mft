@@ -1,4 +1,5 @@
 use crate::machine::config::published_drive_paths;
+use crate::query::ControlFlow;
 use crate::query::DriveQueryResult;
 use crate::query::Pathlike;
 use crate::query::QueryPlan;
@@ -114,8 +115,8 @@ fn visit_matching_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<bool>,
-) -> eyre::Result<(usize, bool)> {
+    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+) -> eyre::Result<(usize, ControlFlow)> {
     let _span = info_span!("load_drive_search_index").entered();
     {
         let _span = info_span!("validate_search_index_file").entered();
@@ -173,18 +174,18 @@ fn visit_matching_search_index_rows(
             continue;
         }
 
-        let keep_going = visit(QueryResultRow {
+        let control_flow = visit(QueryResultRow {
             path: Pathlike::from(row.path()),
             has_deleted_entries: row.has_deleted_entries,
             is_ignored: false,
         })?;
 
-        if !keep_going {
-            return Ok((loaded_rows, false));
+        if control_flow == ControlFlow::Break {
+            return Ok((loaded_rows, ControlFlow::Break));
         }
     }
 
-    Ok((loaded_rows, true))
+    Ok((loaded_rows, ControlFlow::Continue))
 }
 
 fn search_index_has_rows(index_path: &Path) -> eyre::Result<bool> {
@@ -239,7 +240,7 @@ pub(crate) fn visit_drive_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<bool>,
+    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
 ) -> eyre::Result<usize> {
     let paths = published_drive_paths(sync_dir, drive_letter);
 
@@ -253,7 +254,7 @@ pub(crate) fn visit_drive_search_index_rows(
         )?;
         let loaded_rows = result.loaded_rows;
         for row in result.matched_rows {
-            if !visit(row)? {
+            if visit(row)? == ControlFlow::Break {
                 break;
             }
         }
