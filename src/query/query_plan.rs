@@ -1,4 +1,6 @@
+use crate::query::QueryGroup;
 use crate::query::QueryLimit;
+use crate::query::QueryRule;
 use crate::query::QueryString;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -42,6 +44,16 @@ pub struct QueryPlan {
 }
 
 impl QueryPlan {
+    #[must_use]
+    pub fn single_rule(rule: QueryRule) -> Self {
+        Self {
+            query: QueryString {
+                groups: vec![QueryGroup { rules: vec![rule] }],
+            },
+            ..Default::default()
+        }
+    }
+
     /// Build a query plan from CLI positional inputs.
     ///
     /// # Errors
@@ -68,6 +80,8 @@ impl QueryPlan {
 #[cfg(test)]
 mod tests {
     use super::QueryPlan;
+    use crate::query::QueryNeedle;
+    use crate::query::QueryRule;
 
     fn matching_paths(query_inputs: &[&str], paths: &[&str]) -> Vec<String> {
         let query_inputs = query_inputs
@@ -305,5 +319,16 @@ mod tests {
     fn drive_designators_are_allowed_in_queries() {
         let query_inputs = vec!["C:\\src .txt$".to_owned()];
         QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
+    }
+
+    #[test]
+    fn single_rule_builds_one_group_with_one_rule() {
+        let plan =
+            QueryPlan::single_rule(QueryRule::EndsWithCaseInsensitive(QueryNeedle::new(".jar")));
+
+        assert_eq!(plan.query.groups.len(), 1);
+        assert_eq!(plan.query.groups[0].rules.len(), 1);
+        assert!(plan.query.matches("flower.jar"));
+        assert!(!plan.query.matches("flower.zip"));
     }
 }
