@@ -31,13 +31,16 @@ teamy-mft status
 teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
 
 # Add a privacy-preserving exclusion rule to the default profile
-teamy-mft ignore add FirstName
+teamy-mft rules add exclude FirstName
+
+# Add a profile-specific include rule with explicit ordering
+teamy-mft rules add --profile mc-modding --order 100 include "C:\\Repos\\Minecraft\\**\\*.java"
 
 # Query with a profile-specific ruleset
 teamy-mft query ".java$" --profile mc-modding
 
 # See which rule files are active for one profile
-teamy-mft ignore list --profile mc-modding
+teamy-mft rules list --profile mc-modding
 
 # See which profiles exist
 teamy-mft profile list
