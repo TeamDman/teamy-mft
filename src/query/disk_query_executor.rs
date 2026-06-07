@@ -69,9 +69,13 @@ impl DiskQueryExecutor {
         let ignore_rules = {
             let _span = info_span!("query_prepare_filters").entered();
             match self.ignore {
-                QueryIgnoreBehavior::AutoDiscover => Some(
-                    QueryIgnoreRules::discover_for_drive_letters(&drive_letters, &self.sync_dir)?,
-                ),
+                QueryIgnoreBehavior::AutoDiscover => {
+                    Some(QueryIgnoreRules::discover_for_drive_letters(
+                        &drive_letters,
+                        &self.sync_dir,
+                        self.request.profile.as_deref(),
+                    )?)
+                }
                 QueryIgnoreBehavior::Disabled => None,
                 QueryIgnoreBehavior::Custom(rules) => Some(rules),
             }
