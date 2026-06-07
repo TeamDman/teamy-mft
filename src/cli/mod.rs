@@ -55,12 +55,12 @@ mod tests {
     }
 
     #[test]
-    fn ignore_accepts_drive_long_alias() {
-        let args: crate::cli::command::ignore::IgnoreArgs =
+    fn rules_accepts_drive_long_alias() {
+        let args: crate::cli::command::rules::RulesArgs =
             figue::from_slice(&["list", "--drive", "CD"]).unwrap();
 
-        let crate::cli::command::ignore::IgnoreCommand::List(args) = args.command else {
-            panic!("expected ignore list command");
+        let crate::cli::command::rules::RulesCommand::List(args) = args.command else {
+            panic!("expected rules list command");
         };
         assert_eq!(args.drive_letter_pattern.as_ref(), "CD");
     }
