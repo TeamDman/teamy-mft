@@ -932,6 +932,9 @@ fn query_published_drive(
     ) {
         Ok(rules) => Some(rules),
         Err(error) => {
+            if crate::query::normalize_profile_name(request.profile.as_deref())?.is_some() {
+                return Err(error);
+            }
             warn!(
                 drive = %drive,
                 error = %error,

@@ -188,6 +188,19 @@ impl QueryFilterRules {
             .filter(|file| file_applies_to_profile(file, profile.as_deref()))
             .collect::<Vec<_>>();
         effective_files.sort_by(|left, right| left.path.cmp(&right.path));
+        if let Some(profile_name) = profile.as_deref() {
+            if !effective_files
+                .iter()
+                .any(|file| file.profile.as_deref() == Some(profile_name))
+            {
+                eyre::bail!(
+                    "No {} files were discovered for profile {}. Create or sync a *.{profile_name}{} file first.",
+                    RULES_FILE_EXTENSION,
+                    profile_name,
+                    RULES_FILE_EXTENSION
+                );
+            }
+        }
 
         let mut matcher_rules = Vec::<CompiledRule>::new();
         let mut default_source: Option<(DefaultRuleBehavior, PathBuf, usize)> = None;
@@ -754,6 +767,31 @@ mod tests {
     }
 
     #[test]
+    fn non_default_profile_without_specific_rules_is_rejected() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let global_path = temp_dir
+            .path()
+            .join(format!("sample{RULES_FILE_EXTENSION}"));
+        std::fs::write(&global_path, "EXCLUDE C:\\private\n").expect("write global rules");
+
+        let error = QueryFilterRules::from_discovered_files(
+            vec![
+                super::load_rules_file('C', &global_path)
+                    .expect("load global file")
+                    .expect("global file exists"),
+            ],
+            Some("mc-modding"),
+        )
+        .expect_err("missing profile-specific rules should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("No .teamy_mft_rules files were discovered for profile mc-modding")
+        );
+    }
+
+    #[test]
     fn default_profile_ignores_profile_specific_files() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let global_path = temp_dir
@@ -810,7 +848,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let rules_path = temp_dir
             .path()
-            .join(format!("sample{RULES_FILE_EXTENSION}"));
+            .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
         std::fs::write(
             &rules_path,
             "DEFAULT RULE IS EXCLUDE\nINCLUDE C:\\Repos\\Minecraft\\**\\*.java\n",
