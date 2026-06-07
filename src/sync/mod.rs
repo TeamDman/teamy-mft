@@ -3,6 +3,7 @@ mod if_exists_output_behaviour;
 mod sync_executor;
 mod sync_index;
 mod sync_mft;
+mod sync_path;
 mod sync_plan;
 
 pub use drive_sync_info::DriveSyncInfo;
@@ -14,4 +15,5 @@ pub use sync_executor::execute_sync;
 pub use sync_index::SyncIndex;
 pub use sync_mft::SyncMft;
 pub use sync_mft::read_physical_mft_stream_with_info;
+pub use sync_path::sync_path_into_published_overlay;
 pub use sync_plan::SyncPlan;

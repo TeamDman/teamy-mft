@@ -779,20 +779,23 @@ fn run_daemon_worker(
             }) => {
                 state.active_jobs += 1;
                 publish_worker_status(state, status);
-                let drive_letters = match request.drive_letter_pattern.clone().into_drive_letters()
-                {
-                    Ok(drive_letters) => drive_letters,
-                    Err(error) => {
-                        state.active_jobs = state.active_jobs.saturating_sub(1);
-                        publish_worker_status(state, status);
-                        let _ = response.send(Err(MachineError::degraded(error.to_string())));
-                        continue;
-                    }
-                };
-                if let Ok(mut workers) = drive_workers.lock() {
-                    for drive in &drive_letters {
-                        if let Some(worker) = workers.remove(drive) {
-                            worker.stop();
+                if request.path.is_none() {
+                    let drive_letters =
+                        match request.drive_letter_pattern.clone().into_drive_letters() {
+                            Ok(drive_letters) => drive_letters,
+                            Err(error) => {
+                                state.active_jobs = state.active_jobs.saturating_sub(1);
+                                publish_worker_status(state, status);
+                                let _ =
+                                    response.send(Err(MachineError::degraded(error.to_string())));
+                                continue;
+                            }
+                        };
+                    if let Ok(mut workers) = drive_workers.lock() {
+                        for drive in &drive_letters {
+                            if let Some(worker) = workers.remove(drive) {
+                                worker.stop();
+                            }
                         }
                     }
                 }
@@ -1013,42 +1016,49 @@ impl DaemonRuntimeState {
     }
 
     async fn sync(&mut self, request: SyncPlan) -> Result<(), MachineError> {
-        let drive_letters = request
-            .drive_letter_pattern
-            .clone()
-            .into_drive_letters()
-            .map_err(|error| MachineError::degraded(error.to_string()))?;
         self.flush_dirty_drives();
-        info!(
-            drives = ?drive_letters,
-            if_exists = ?request.if_exists,
-            "daemon sync request starting"
-        );
         crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
-        repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
-            .map_err(|error| MachineError::degraded(error.to_string()))?;
-        let sync_result =
-            sync_machine_cache_async(&self.sync_dir, &drive_letters, request.if_exists)
-                .await
+        if let Some(path) = request.path.as_deref() {
+            info!(path, "daemon path sync request starting");
+            let drive = crate::sync::sync_path_into_published_overlay(&self.sync_dir, path)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
-
-        debug!(
-            synced_drives = ?sync_result.synced_drives,
-            live_drives = ?sync_result.live_drives,
-            skipped_drives = ?sync_result.skipped_drives,
-            "Machine-managed sync completed"
-        );
-
-        for &drive in &drive_letters {
-            self.drives.remove(&drive);
-            self.degraded.remove(&drive);
-        }
-        for &drive in &sync_result.live_drives {
-            self.refresh_drive(drive)?;
-            self.drive_mut(drive)?
-                .flush_published()
+            debug!(drive = %drive, path, "Machine-managed path sync completed");
+        } else {
+            let drive_letters = request
+                .drive_letter_pattern
+                .clone()
+                .into_drive_letters()
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
+            info!(
+                drives = ?drive_letters,
+                if_exists = ?request.if_exists,
+                "daemon sync request starting"
+            );
+            repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
+                .map_err(|error| MachineError::degraded(error.to_string()))?;
+            let sync_result =
+                sync_machine_cache_async(&self.sync_dir, &drive_letters, request.if_exists)
+                    .await
+                    .map_err(|error| MachineError::degraded(error.to_string()))?;
+
+            debug!(
+                synced_drives = ?sync_result.synced_drives,
+                live_drives = ?sync_result.live_drives,
+                skipped_drives = ?sync_result.skipped_drives,
+                "Machine-managed sync completed"
+            );
+
+            for &drive in &drive_letters {
+                self.drives.remove(&drive);
+                self.degraded.remove(&drive);
+            }
+            for &drive in &sync_result.live_drives {
+                self.refresh_drive(drive)?;
+                self.drive_mut(drive)?
+                    .flush_published()
+                    .map_err(|error| MachineError::degraded(error.to_string()))?;
+            }
         }
 
         Ok(())
@@ -1411,12 +1421,6 @@ impl MachineDaemonRpc for MachineDaemonService {
     ) -> Result<(), MachineError> {
         let correlation_id = next_correlation_id("sync");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
-        let drive_count = request
-            .drive_letter_pattern
-            .clone()
-            .into_drive_letters()
-            .map_err(|error| MachineError::degraded(error.to_string()))?
-            .len();
         let worker = self.worker.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -1424,14 +1428,34 @@ impl MachineDaemonRpc for MachineDaemonService {
             rpc_method = "sync"
         );
         let response = async move {
-            tracing::info!(
-                drive_count,
-                if_exists = ?request.if_exists,
-                "Starting daemon sync"
-            );
+            if let Some(path) = request.path.as_deref() {
+                tracing::info!(path, "Starting daemon path sync");
+            } else {
+                let drive_count = request
+                    .drive_letter_pattern
+                    .clone()
+                    .into_drive_letters()
+                    .map_err(|error| MachineError::degraded(error.to_string()))?
+                    .len();
+                tracing::info!(
+                    drive_count,
+                    if_exists = ?request.if_exists,
+                    "Starting daemon sync"
+                );
+            }
             match worker.sync(request.clone(), correlation_id.clone()).await {
                 Ok(()) => {
-                    tracing::info!(drive_count, "Daemon sync completed");
+                    if let Some(path) = request.path.as_deref() {
+                        tracing::info!(path, "Daemon path sync completed");
+                    } else {
+                        let drive_count = request
+                            .drive_letter_pattern
+                            .clone()
+                            .into_drive_letters()
+                            .map_err(|error| MachineError::degraded(error.to_string()))?
+                            .len();
+                        tracing::info!(drive_count, "Daemon sync completed");
+                    }
                     Ok(())
                 }
                 Err(error) => {
@@ -2006,13 +2030,11 @@ async fn sync_machine_cache_async(
 
     for info in drive_infos {
         let paths = published_drive_paths(sync_dir, info.drive_letter);
-        if !paths.overlay_index_path.is_file() {
-            crate::search_index::search_index_bytes::SearchIndexBytesMut::from_rows(
-                crate::search_index::format::SearchIndexHeader::new(info.drive_letter, 0, 0),
-                &[],
-            )?
-            .write_to_path(&paths.overlay_index_path)?;
-        }
+        crate::search_index::search_index_bytes::SearchIndexBytesMut::from_rows(
+            crate::search_index::format::SearchIndexHeader::new(info.drive_letter, 0, 0),
+            &[],
+        )?
+        .write_to_path(&paths.overlay_index_path)?;
         let cursor = snapshot_cursors.get(&info.drive_letter).copied();
         let checkpoint = if let Some(cursor) = cursor {
             PublishedCheckpoint {

@@ -37,7 +37,7 @@ Queries opt into a named profile with `teamy-mft query <needle> --profile <name>
 
 `teamy-mft rules add` creates a new rules file in the current working directory by default unless `--rules-file` is provided.
 
-After creating a brand-new rules file, run `teamy-mft sync` so the file path enters the indexed rule discovery set used by queries.
+After creating a brand-new rules file, run `teamy-mft sync <rules-file>` so the file path enters the indexed rule discovery set used by queries without a full drive rebuild.
 
 Sample profile name: `my-profile-123`
 Sample profile filename: `teamy-mft-rules-20260607-120000.my-profile-123.teamy_mft_rules`
@@ -61,7 +61,7 @@ Suggested workflow:
 1. Run `teamy-mft rules add ...` from the project directory, or create/edit a `*.teamy_mft_rules` file there manually.
 2. Put `DEFAULT RULE IS EXCLUDE` at the top when you want an allowlist-style profile.
 3. Add a few INCLUDE rules for the directories or files that matter.
-4. Run `teamy-mft sync` after creating a new project rules file so query discovery can find its path.
+4. Run `teamy-mft sync teamy-mft-rules-20260607-120000.my-profile-123.teamy_mft_rules` after creating a new project rules file so query discovery can find its path.
 5. Run `teamy-mft query <needle> --profile my-profile-123` to search with that narrowed view.
 6. Run `teamy-mft rules list --profile my-profile-123` to inspect the effective rules."
         );
