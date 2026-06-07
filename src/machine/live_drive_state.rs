@@ -1,3 +1,4 @@
+use crate::machine::config::OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::PublishedDrivePaths;
 use crate::machine::config::current_unix_ms;
@@ -727,7 +728,7 @@ fn load_rows_from_index_path(path: &Path) -> eyre::Result<Vec<SearchIndexPathRow
 }
 
 fn write_search_index_bytes(path: &Path, bytes: &[u8]) -> eyre::Result<()> {
-    let temp_path = path.with_extension("mft_overlay_search_index.tmp");
+    let temp_path = path.with_extension(OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION);
     std::fs::write(&temp_path, bytes).wrap_err_with(|| {
         format!(
             "Failed writing temporary overlay search index {}",

@@ -1,3 +1,4 @@
+use crate::machine::config::published_drive_paths;
 use crate::windows_utils::storage::DriveLetterPattern;
 use eyre::bail;
 use std::fs::create_dir_all;
@@ -46,12 +47,15 @@ pub fn resolve_drive_infos_in_dir_for_letters(
 
     let mut drive_infos = drive_letters
         .into_iter()
-        .map(|drive_letter| DriveSyncInfo {
-            drive_letter,
-            mft_output_path: sync_dir.join(format!("{drive_letter}.mft")),
-            index_output_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
-            overlay_output_path: sync_dir.join(format!("{drive_letter}.mft_overlay_search_index")),
-            checkpoint_output_path: sync_dir.join(format!("{drive_letter}.mft_checkpoint.json")),
+        .map(|drive_letter| {
+            let paths = published_drive_paths(sync_dir, drive_letter);
+            DriveSyncInfo {
+                drive_letter,
+                mft_output_path: paths.mft_path,
+                index_output_path: paths.base_index_path,
+                overlay_output_path: paths.overlay_index_path,
+                checkpoint_output_path: paths.checkpoint_path,
+            }
         })
         .collect::<Vec<_>>();
 

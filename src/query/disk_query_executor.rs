@@ -1,3 +1,4 @@
+use crate::machine::config::published_drive_paths;
 use crate::query::QueryFilter;
 use crate::query::QueryIgnoreBehavior;
 use crate::query::QueryIgnoreRules;
@@ -32,7 +33,10 @@ impl DiskQueryExecutor {
             drive_letters
                 .iter()
                 .copied()
-                .map(|drive_letter| (drive_letter, sync_dir.join(format!("{drive_letter}.mft"))))
+                .map(|drive_letter| {
+                    let paths = published_drive_paths(&sync_dir, drive_letter);
+                    (drive_letter, paths.mft_path)
+                })
                 .map(|(drive_letter, drive_mft_file_path)| {
                     if drive_mft_file_path.is_file() {
                         Ok((drive_letter, drive_mft_file_path))

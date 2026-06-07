@@ -14,6 +14,12 @@ pub const MACHINE_CONFIG_FILE_NAME: &str = "machine_config.json";
 pub const DEFAULT_SERVICE_NAME: &str = "teamy-mft-daemon";
 pub const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\teamy-mft-daemon";
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
+pub const MFT_CACHE_FILE_EXTENSION: &str = ".mft";
+pub const SEARCH_INDEX_FILE_EXTENSION: &str = ".mft_search_index";
+pub const SEARCH_INDEX_TEMP_FILE_EXTENSION: &str = "mft_search_index.tmp";
+pub const OVERLAY_SEARCH_INDEX_FILE_EXTENSION: &str = ".mft_overlay_search_index";
+pub const OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION: &str = "mft_overlay_search_index.tmp";
+pub const CHECKPOINT_FILE_EXTENSION: &str = ".mft_checkpoint.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct MachineConfig {
@@ -215,10 +221,12 @@ pub fn default_sync_dir() -> PathBuf {
 pub fn published_drive_paths(sync_dir: &Path, drive_letter: char) -> PublishedDrivePaths {
     PublishedDrivePaths {
         drive_letter,
-        mft_path: sync_dir.join(format!("{drive_letter}.mft")),
-        base_index_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
-        overlay_index_path: sync_dir.join(format!("{drive_letter}.mft_overlay_search_index")),
-        checkpoint_path: sync_dir.join(format!("{drive_letter}.mft_checkpoint.json")),
+        mft_path: sync_dir.join(format!("{drive_letter}{MFT_CACHE_FILE_EXTENSION}")),
+        base_index_path: sync_dir.join(format!("{drive_letter}{SEARCH_INDEX_FILE_EXTENSION}")),
+        overlay_index_path: sync_dir.join(format!(
+            "{drive_letter}{OVERLAY_SEARCH_INDEX_FILE_EXTENSION}"
+        )),
+        checkpoint_path: sync_dir.join(format!("{drive_letter}{CHECKPOINT_FILE_EXTENSION}")),
     }
 }
 

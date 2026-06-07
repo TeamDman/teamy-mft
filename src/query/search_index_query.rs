@@ -1,3 +1,4 @@
+use crate::machine::config::published_drive_paths;
 use crate::query::DriveQueryResult;
 use crate::query::Pathlike;
 use crate::query::QueryPlan;
@@ -199,10 +200,9 @@ pub(crate) fn load_and_query_drive_search_index(
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<DriveQueryResult> {
-    let base_index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-    let overlay_index_path = sync_dir.join(format!("{drive_letter}.mft_overlay_search_index"));
+    let paths = published_drive_paths(sync_dir, drive_letter);
     let mut result = load_and_query_search_index(
-        &base_index_path,
+        &paths.base_index_path,
         drive_letter,
         "base",
         query_plan,
@@ -212,14 +212,14 @@ pub(crate) fn load_and_query_drive_search_index(
     .wrap_err_with(|| {
         format!(
             "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-            base_index_path.display(),
+            paths.base_index_path.display(),
             drive_letter
         )
     })?;
 
-    if overlay_index_path.is_file() {
+    if paths.overlay_index_path.is_file() {
         let overlay_result = load_and_query_search_index(
-            &overlay_index_path,
+            &paths.overlay_index_path,
             drive_letter,
             "overlay",
             query_plan,
@@ -241,10 +241,9 @@ pub(crate) fn visit_drive_search_index_rows(
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<bool>,
 ) -> eyre::Result<usize> {
-    let base_index_path = sync_dir.join(format!("{drive_letter}.mft_search_index"));
-    let overlay_index_path = sync_dir.join(format!("{drive_letter}.mft_overlay_search_index"));
+    let paths = published_drive_paths(sync_dir, drive_letter);
 
-    if overlay_index_path.is_file() && search_index_has_rows(&overlay_index_path)? {
+    if paths.overlay_index_path.is_file() && search_index_has_rows(&paths.overlay_index_path)? {
         let result = load_and_query_drive_search_index(
             drive_letter,
             sync_dir,
@@ -262,7 +261,7 @@ pub(crate) fn visit_drive_search_index_rows(
     }
 
     let (loaded_rows, _) = visit_matching_search_index_rows(
-        &base_index_path,
+        &paths.base_index_path,
         drive_letter,
         "base",
         query_plan,
@@ -273,7 +272,7 @@ pub(crate) fn visit_drive_search_index_rows(
     .wrap_err_with(|| {
         format!(
             "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-            base_index_path.display(),
+            paths.base_index_path.display(),
             drive_letter
         )
     })?;

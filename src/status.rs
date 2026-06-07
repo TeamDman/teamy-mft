@@ -1,3 +1,4 @@
+use crate::machine::config::published_drive_paths;
 use crate::windows_utils::storage::DriveLetterPattern;
 use std::path::Path;
 use std::path::PathBuf;
@@ -72,12 +73,15 @@ impl TeamyMftStatus {
     ) -> eyre::Result<Self> {
         let mut drives = drive_letters
             .into_iter()
-            .map(|drive_letter| DriveCacheStatus {
-                drive_letter,
-                mft_path: sync_dir.join(format!("{drive_letter}.mft")),
-                mft_modified_at: None,
-                index_path: sync_dir.join(format!("{drive_letter}.mft_search_index")),
-                index_modified_at: None,
+            .map(|drive_letter| {
+                let paths = published_drive_paths(sync_dir, drive_letter);
+                DriveCacheStatus {
+                    drive_letter,
+                    mft_path: paths.mft_path,
+                    mft_modified_at: None,
+                    index_path: paths.base_index_path,
+                    index_modified_at: None,
+                }
             })
             .collect::<Vec<_>>();
 
