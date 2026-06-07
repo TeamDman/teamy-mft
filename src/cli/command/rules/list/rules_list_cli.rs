@@ -7,96 +7,19 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use std::collections::BTreeSet;
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
-#[derive(Facet, Arbitrary, PartialEq, Debug)]
-pub struct IgnoreArgs {
-    #[facet(args::subcommand)]
-    pub command: IgnoreCommand,
-}
-
-#[derive(Facet, Arbitrary, PartialEq, Debug)]
-#[repr(u8)]
-#[facet(rename_all = "kebab-case")]
-pub enum IgnoreCommand {
-    /// Append an EXCLUDE rule to the synced rules file in the current sync directory
-    Add(IgnoreAddArgs),
-    /// List effective `.teamy_mft_rules` files and directives for one profile
-    List(IgnoreListArgs),
-}
-
-impl IgnoreArgs {
-    /// # Errors
-    ///
-    /// Returns an error if the selected ignore subcommand fails.
-    pub fn invoke(self) -> eyre::Result<()> {
-        match self.command {
-            IgnoreCommand::Add(args) => args.invoke(),
-            IgnoreCommand::List(args) => args.invoke(),
-        }
-    }
-}
-
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
-pub struct IgnoreAddArgs {
-    /// Write to the managed rules file for this profile; omit for the logical default profile
-    #[facet(args::named, default)]
-    pub profile: Option<String>,
-    /// Rule pattern to exclude
-    #[facet(args::positional)]
-    pub pattern: String,
-}
-
-impl IgnoreAddArgs {
-    /// # Errors
-    ///
-    /// Returns an error if the machine cache is unavailable or the managed rules file cannot be written.
-    pub fn invoke(self) -> eyre::Result<()> {
-        let pattern = self.pattern.trim();
-        if pattern.is_empty() {
-            eyre::bail!("ignore pattern cannot be empty");
-        }
-
-        let profile = normalize_profile_name(self.profile.as_deref())?;
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
-        fs::create_dir_all(&sync_dir)?;
-        let rules_path = sync_dir.join(managed_rules_file_name(profile.as_deref()));
-        let rendered_rule = format!("EXCLUDE {pattern}");
-        let existing = if rules_path.is_file() {
-            fs::read_to_string(&rules_path)?
-        } else {
-            String::new()
-        };
-        if existing.lines().any(|line| line.trim() == rendered_rule) {
-            println!("Rule already present in {}", rules_path.display());
-            return Ok(());
-        }
-
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&rules_path)?;
-        let mut writer = std::io::BufWriter::new(file);
-        writeln!(writer, "{rendered_rule}")?;
-        writer.flush()?;
-        println!("Added rule to {}", rules_path.display());
-        Ok(())
-    }
-}
-
-#[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
-pub struct IgnoreListArgs {
+pub struct RulesListArgs {
     /// Show effective files for this profile; omit for the logical default profile
     #[facet(args::named, default)]
     pub profile: Option<String>,
-    /// Restrict ignore discovery to drives matching this pattern. Compatibility alias: `--drive`.
+    /// Restrict rule discovery to drives matching this pattern. Compatibility alias: `--drive`.
     #[facet(args::named, args::long_alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 }
 
-impl IgnoreListArgs {
+impl RulesListArgs {
     /// # Errors
     ///
     /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
