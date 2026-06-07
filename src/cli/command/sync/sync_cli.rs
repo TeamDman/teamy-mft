@@ -41,15 +41,20 @@ impl SyncArgs {
             let _ = log_drain.join();
         } else {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
-            let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
-            let drive_infos = crate::sync::resolve_drive_infos_in_dir_for_letters(
-                &sync_dir,
-                drive_letters.iter().copied(),
-            )?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(crate::sync::execute_sync(drive_infos, &plan.if_exists))?;
+            if let Some(path) = plan.path.as_deref() {
+                let drive_letter = crate::sync::sync_path_into_published_overlay(&sync_dir, path)?;
+                println!(
+                    "Updated published overlay for drive {} with path {}",
+                    drive_letter, path
+                );
+            } else {
+                let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
+                crate::machine::daemon::sync_machine_cache(
+                    &sync_dir,
+                    &drive_letters,
+                    plan.if_exists,
+                )?;
+            }
         }
 
         Ok(())

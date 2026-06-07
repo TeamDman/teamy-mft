@@ -13,4 +13,8 @@ pub struct SyncPlan {
     /// How to handle existing output files
     #[facet(args::named, default)]
     pub if_exists: IfExistsOutputBehaviour,
+
+    /// Optional path to reflect into the published overlay index without rebuilding a full drive index
+    #[facet(args::positional, default)]
+    pub path: Option<String>,
 }

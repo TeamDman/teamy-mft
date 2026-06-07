@@ -121,6 +121,19 @@ mod tests {
     }
 
     #[test]
+    fn sync_accepts_target_path() {
+        let cli: Cli = figue::from_slice(&["sync", r".\filters.teamy_mft_rules"]).unwrap();
+
+        let Command::Sync(args) = cli.command else {
+            panic!("expected sync command");
+        };
+        assert_eq!(
+            args.plan.path.as_deref(),
+            Some(r".\filters.teamy_mft_rules")
+        );
+    }
+
+    #[test]
     fn query_accepts_drive_long_alias() {
         let cli: Cli = figue::from_slice(&["query", "flowers", "--drive", "CD"]).unwrap();
 

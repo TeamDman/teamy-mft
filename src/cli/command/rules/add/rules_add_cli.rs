@@ -197,7 +197,8 @@ impl RulesAddArgs {
                 .any(|file| file.path.as_path() == rules_path.as_path())
         {
             println!(
-                "Run `teamy-mft sync` before querying so the new cwd rules file becomes discoverable from the indexed rule-file path list."
+                "Run `teamy-mft sync {}` before querying so the new cwd rules file becomes discoverable from the indexed rule-file path list.",
+                rules_path.display()
             );
         }
         Ok(())
