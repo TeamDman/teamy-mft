@@ -115,9 +115,8 @@ impl QueryPlan {
 
 #[cfg(test)]
 mod tests {
-    use crate::query::DEFAULT_PROFILE_NAME;
-
     use super::QueryPlan;
+    use crate::query::DEFAULT_PROFILE_NAME;
     use crate::query::QueryNeedle;
     use crate::query::QueryRule;
 
