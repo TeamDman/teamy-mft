@@ -96,7 +96,7 @@ impl QuerySession {
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<Vec<QueryResultRow>> {
         let mut rows = Vec::new();
-        let _: ControlFlow<()> = self.visit_rows_with_cancel(
+        self.visit_rows_with_cancel(
             query_plan,
             cancel,
             |row| -> eyre::Result<ControlFlow<()>> {
@@ -111,19 +111,18 @@ impl QuerySession {
     ///
     /// Returns an error if the configured backend cannot answer the query.
     /// Cancellation is best-effort and returns after the rows visited so far.
-    pub fn visit_rows_with_cancel<B>(
+    pub fn visit_rows_with_cancel(
         &mut self,
         query_plan: QueryPlan,
         cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<B>>,
-    ) -> eyre::Result<ControlFlow<B>> {
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<()> {
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-            return Ok(ControlFlow::Continue(()));
+            return Ok(());
         }
 
         let limit = query_plan.limit.get();
         let mut visited_rows = 0_usize;
-        let mut visitor_break = None;
         let mut visit_with_limit = |row| {
             visited_rows += 1;
             match visit(row)? {
@@ -135,8 +134,7 @@ impl QuerySession {
                     }
                     Ok(ControlFlow::Continue(()))
                 }
-                ControlFlow::Break(break_value) => {
-                    visitor_break = Some(break_value);
+                ControlFlow::Break(()) => {
                     Ok(ControlFlow::Break(()))
                 }
             }
@@ -153,10 +151,7 @@ impl QuerySession {
             }
         }
 
-        Ok(match visitor_break {
-            Some(break_value) => ControlFlow::Break(break_value),
-            None => ControlFlow::Continue(()),
-        })
+        Ok(())
     }
 
     /// # Errors
@@ -174,7 +169,7 @@ impl QuerySession {
                 let sink = QueryRowSink::new(tx);
                 let query_join = std::thread::spawn(move || {
                     let mut session = self;
-                    let _: ControlFlow<()> = session.visit_rows_with_cancel(
+                    session.visit_rows_with_cancel(
                         query_plan,
                         Some(cancel.as_ref()),
                         |row| -> eyre::Result<ControlFlow<()>> {
@@ -497,7 +492,7 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
         let mut visited = Vec::new();
-        let _: ControlFlow<()> = session.visit_rows_with_cancel(
+        session.visit_rows_with_cancel(
             QueryPlan::new("Repos"),
             None,
             |row| -> eyre::Result<ControlFlow<()>> {
@@ -508,7 +503,7 @@ mod tests {
 
         let count = {
             let mut count = 0_usize;
-            let _: ControlFlow<()> = session.visit_rows_with_cancel(
+            session.visit_rows_with_cancel(
                 QueryPlan::new("Repos"),
                 None,
                 |_row| -> eyre::Result<ControlFlow<()>> {
@@ -551,7 +546,7 @@ mod tests {
         plan.limit = 1_usize.into();
         let mut visited = 0_usize;
 
-        let _: ControlFlow<()> = session.visit_rows_with_cancel(
+        session.visit_rows_with_cancel(
             plan,
             None,
             |_row| -> eyre::Result<ControlFlow<()>> {
