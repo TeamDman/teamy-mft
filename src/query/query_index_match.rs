@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn contains_rules_return_rows_from_trigram_candidates() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
-        let rule = QueryRule::parse("ower").expect("rule should parse");
+        let rule = "ower".parse::<QueryRule>().expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
 
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn prefix_rules_match_segment_prefixes_in_indexed_queries() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
-        let rule = QueryRule::parse("<flo").expect("rule should parse");
+        let rule = "<flo".parse::<QueryRule>().expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
 
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn short_contains_rules_still_match_without_trigrams() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
-        let rule = QueryRule::parse("fl").expect("rule should parse");
+        let rule = "fl".parse::<QueryRule>().expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
 
@@ -237,7 +237,7 @@ mod tests {
                 has_deleted_entries: false,
             },
         ])?;
-        let rule = QueryRule::parse(".git>").expect("rule should parse");
+        let rule = ".git>".parse::<QueryRule>().expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
 
@@ -264,7 +264,9 @@ mod tests {
                 has_deleted_entries: false,
             },
         ])?;
-        let rule = QueryRule::parse("<package.json>").expect("rule should parse");
+        let rule = "<package.json>"
+            .parse::<QueryRule>()
+            .expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
 

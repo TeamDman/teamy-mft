@@ -3,6 +3,7 @@ use crate::query::query_string::validate_query_input;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use std::fmt::Display;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Facet)]
 #[facet(opaque, proxy = String)]
@@ -11,21 +12,31 @@ pub struct QueryGroup {
 }
 
 impl QueryGroup {
-    pub fn parse(raw_group: &str) -> Option<Self> {
-        if !raw_group.is_empty() && raw_group.trim().is_empty() {
-            return QueryRule::parse(raw_group).map(|rule| Self { rules: vec![rule] });
+    /// # Errors
+    ///
+    /// Returns an error if any non-empty rule in the group has invalid query
+    /// syntax.
+    pub fn parse(raw_group: &str) -> eyre::Result<Option<Self>> {
+        if raw_group.is_empty() {
+            return Ok(None);
+        }
+
+        if raw_group.trim().is_empty() {
+            return Ok(Some(Self {
+                rules: vec![QueryRule::from_str(raw_group)?],
+            }));
         }
 
         let rules = raw_group
             .split_whitespace()
-            .filter_map(QueryRule::parse)
-            .collect::<Vec<_>>();
+            .map(QueryRule::from_str)
+            .collect::<eyre::Result<Vec<_>>>()?;
 
         if rules.is_empty() {
-            return None;
+            return Ok(None);
         }
 
-        Some(Self { rules })
+        Ok(Some(Self { rules }))
     }
 
     #[must_use]
@@ -68,12 +79,10 @@ impl QueryGroup {
                             rule.matches_preprocessed(segment, Some(normalized_segment))
                         })
                 }
+            } else if rule.matches_only_terminal_segment() {
+                terminal_path_segment(haystack).is_some_and(|segment| rule.matches(segment))
             } else {
-                if rule.matches_only_terminal_segment() {
-                    terminal_path_segment(haystack).is_some_and(|segment| rule.matches(segment))
-                } else {
-                    path_segments(haystack).any(|segment| rule.matches(segment))
-                }
+                path_segments(haystack).any(|segment| rule.matches(segment))
             }
         })
     }
@@ -124,7 +133,9 @@ impl TryFrom<String> for QueryGroup {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         validate_query_input(&value).map_err(|error| error.to_string())?;
-        Self::parse(&value).ok_or_else(|| "query group cannot be empty".to_owned())
+        Self::parse(&value)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "query group cannot be empty".to_owned())
     }
 }
 
@@ -144,11 +155,15 @@ impl<'a> Arbitrary<'a> for QueryGroup {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let input = String::arbitrary(u)?;
         Ok(if validate_query_input(&input).is_ok() {
-            Self::parse(&input)
+            Self::parse(&input).ok().flatten()
         } else {
             None
         }
-        .unwrap_or_else(|| Self::parse("query").expect("fallback query should parse")))
+        .unwrap_or_else(|| {
+            Self::parse("query")
+                .expect("fallback query should parse")
+                .expect("fallback query should produce a group")
+        }))
     }
 }
 

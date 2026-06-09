@@ -19,10 +19,10 @@
 //!
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
+use color_eyre::owo_colors::OwoColorize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use color_eyre::owo_colors::OwoColorize;
 use teamy_mft::query::QueryNeedle;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
