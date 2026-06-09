@@ -1,6 +1,7 @@
 use crate::query::QueryNeedle;
 use crate::query::query_needle::QUERY_TRIGRAM_LEN;
 use std::fmt::Display;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryRule {
@@ -11,36 +12,6 @@ pub enum QueryRule {
 }
 
 impl QueryRule {
-    #[must_use]
-    pub fn parse(raw_term: &str) -> Option<Self> {
-        if raw_term.is_empty() {
-            return None;
-        }
-
-        if let Some(inner) = raw_term.strip_prefix('<') {
-            if let Some(exact) = inner.strip_suffix('>') {
-                if exact.is_empty() {
-                    return None;
-                }
-                return Some(Self::EqualsCaseInsensitive(QueryNeedle::new(exact)));
-            }
-
-            if inner.is_empty() {
-                return None;
-            }
-            return Some(Self::PrefixCaseInsensitive(QueryNeedle::new(inner)));
-        }
-
-        if let Some(suffix) = raw_term.strip_suffix('>') {
-            if suffix.is_empty() {
-                return None;
-            }
-            Some(Self::EndsWithCaseInsensitive(QueryNeedle::new(suffix)))
-        } else {
-            Some(Self::ContainsCaseInsensitive(QueryNeedle::new(raw_term)))
-        }
-    }
-
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
@@ -116,6 +87,39 @@ impl QueryRule {
     }
 }
 
+impl FromStr for QueryRule {
+    type Err = eyre::Error;
+
+    fn from_str(raw_term: &str) -> Result<Self, Self::Err> {
+        if raw_term.is_empty() {
+            eyre::bail!("query rule cannot be empty");
+        }
+
+        if let Some(inner) = raw_term.strip_prefix('<') {
+            if let Some(exact) = inner.strip_suffix('>') {
+                if exact.is_empty() {
+                    eyre::bail!("exact query rule cannot be empty");
+                }
+                return Ok(Self::EqualsCaseInsensitive(QueryNeedle::new(exact)));
+            }
+
+            if inner.is_empty() {
+                eyre::bail!("prefix query rule cannot be empty");
+            }
+            return Ok(Self::PrefixCaseInsensitive(QueryNeedle::new(inner)));
+        }
+
+        if let Some(suffix) = raw_term.strip_suffix('>') {
+            if suffix.is_empty() {
+                eyre::bail!("suffix query rule cannot be empty");
+            }
+            return Ok(Self::EndsWithCaseInsensitive(QueryNeedle::new(suffix)));
+        }
+
+        Ok(Self::ContainsCaseInsensitive(QueryNeedle::new(raw_term)))
+    }
+}
+
 impl Display for QueryRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -124,5 +128,47 @@ impl Display for QueryRule {
             Self::EndsWithCaseInsensitive(needle) => write!(f, "{}>", needle.normalized_str()),
             Self::EqualsCaseInsensitive(needle) => write!(f, "<{}>", needle.normalized_str()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueryRule;
+    use std::str::FromStr;
+
+    #[test]
+    fn empty_rule_reports_a_helpful_error() {
+        let error = QueryRule::from_str("").expect_err("empty rules should be rejected");
+        assert!(error.to_string().contains("query rule cannot be empty"));
+    }
+
+    #[test]
+    fn empty_prefix_rule_reports_a_helpful_error() {
+        let error = QueryRule::from_str("<").expect_err("empty prefix should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("prefix query rule cannot be empty")
+        );
+    }
+
+    #[test]
+    fn empty_suffix_rule_reports_a_helpful_error() {
+        let error = QueryRule::from_str(">").expect_err("empty suffix should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("suffix query rule cannot be empty")
+        );
+    }
+
+    #[test]
+    fn empty_exact_rule_reports_a_helpful_error() {
+        let error = QueryRule::from_str("<>").expect_err("empty exact should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("exact query rule cannot be empty")
+        );
     }
 }

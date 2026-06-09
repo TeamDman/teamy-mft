@@ -26,11 +26,15 @@ impl QueryString {
             validate_query_input(query_input)?;
         }
 
-        let groups = query_inputs
+        let mut groups = Vec::new();
+        for raw_group in query_inputs
             .iter()
             .flat_map(|query_input| query_input.split('|'))
-            .filter_map(QueryGroup::parse)
-            .collect::<Vec<_>>();
+        {
+            if let Some(group) = QueryGroup::parse(raw_group)? {
+                groups.push(group);
+            }
+        }
 
         if groups.is_empty() {
             eyre::bail!("query string required");
@@ -123,7 +127,7 @@ pub(crate) fn validate_query_input(query_input: &str) -> eyre::Result<()> {
 
         match ch {
             '"' | '?' | '*' => {
-                // < and > are special characters used in our query parsing logic
+                // | and < and > are special characters used in our query parsing logic
                 eyre::bail!(
                     "query contains Windows-invalid path character {:?} in {:?}",
                     ch,

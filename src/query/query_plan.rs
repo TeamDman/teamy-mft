@@ -255,6 +255,18 @@ mod tests {
     }
 
     #[test]
+    fn empty_exact_rule_error_is_preserved() {
+        let query_inputs = vec!["<>".to_owned()];
+        let error =
+            QueryPlan::parse_inputs(&query_inputs).expect_err("empty exact rule should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("exact query rule cannot be empty")
+        );
+    }
+
+    #[test]
     fn whitespace_only_inputs_are_preserved_as_literal_queries() {
         let query_inputs = vec!["   ".to_owned()];
         let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
