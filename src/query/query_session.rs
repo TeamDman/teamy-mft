@@ -1,6 +1,5 @@
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
-use crate::query::ControlFlow;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -17,6 +16,7 @@ use eyre::Context;
 use eyre::ContextCompat;
 use eyre::ensure;
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -96,10 +96,14 @@ impl QuerySession {
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<Vec<QueryResultRow>> {
         let mut rows = Vec::new();
-        self.visit_rows_with_cancel(query_plan, cancel, |row| {
-            rows.push(row);
-            Ok(ControlFlow::Continue)
-        })?;
+        let _: ControlFlow<()> = self.visit_rows_with_cancel(
+            query_plan,
+            cancel,
+            |row| -> eyre::Result<ControlFlow<()>> {
+                rows.push(row);
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
         Ok(rows)
     }
 
@@ -107,40 +111,52 @@ impl QuerySession {
     ///
     /// Returns an error if the configured backend cannot answer the query.
     /// Cancellation is best-effort and returns after the rows visited so far.
-    pub fn visit_rows_with_cancel(
+    pub fn visit_rows_with_cancel<B>(
         &mut self,
         query_plan: QueryPlan,
         cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
-    ) -> eyre::Result<()> {
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<B>>,
+    ) -> eyre::Result<ControlFlow<B>> {
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-            return Ok(());
+            return Ok(ControlFlow::Continue(()));
         }
 
         let limit = query_plan.limit.get();
         let mut visited_rows = 0_usize;
+        let mut visitor_break = None;
         let mut visit_with_limit = |row| {
             visited_rows += 1;
-            let control_flow = visit(row)?;
-            if control_flow == ControlFlow::Break {
-                return Ok(ControlFlow::Break);
+            match visit(row)? {
+                ControlFlow::Continue(()) => {
+                    if let Some(limit) = limit
+                        && visited_rows >= limit
+                    {
+                        return Ok(ControlFlow::Break(()));
+                    }
+                    Ok(ControlFlow::Continue(()))
+                }
+                ControlFlow::Break(break_value) => {
+                    visitor_break = Some(break_value);
+                    Ok(ControlFlow::Break(()))
+                }
             }
-            if let Some(limit) = limit
-                && visited_rows >= limit
-            {
-                return Ok(ControlFlow::Break);
-            }
-            Ok(ControlFlow::Continue)
         };
 
         match self.backend {
             QuerySessionBackend::PublishedIndexOnly => {
-                self.visit_published_index_rows(&query_plan, cancel, &mut visit_with_limit)
+                self.visit_published_index_rows(&query_plan, cancel, &mut visit_with_limit)?;
             }
-            QuerySessionBackend::DaemonRpc => QueryRuntime::daemon_rpc()
-                .prepare_stream(query_plan)?
-                .visit_rows(&mut visit_with_limit),
+            QuerySessionBackend::DaemonRpc => {
+                QueryRuntime::daemon_rpc()
+                    .prepare_stream(query_plan)?
+                    .visit_rows(&mut visit_with_limit)?;
+            }
         }
+
+        Ok(match visitor_break {
+            Some(break_value) => ControlFlow::Break(break_value),
+            None => ControlFlow::Continue(()),
+        })
     }
 
     /// # Errors
@@ -158,13 +174,17 @@ impl QuerySession {
                 let sink = QueryRowSink::new(tx);
                 let query_join = std::thread::spawn(move || {
                     let mut session = self;
-                    session.visit_rows_with_cancel(query_plan, Some(cancel.as_ref()), |row| {
-                        Ok(if sink.blocking_send(row).is_ok() {
-                            ControlFlow::Continue
-                        } else {
-                            ControlFlow::Break
-                        })
-                    })?;
+                    let _: ControlFlow<()> = session.visit_rows_with_cancel(
+                        query_plan,
+                        Some(cancel.as_ref()),
+                        |row| -> eyre::Result<ControlFlow<()>> {
+                            Ok(if sink.blocking_send(row).is_ok() {
+                                ControlFlow::Continue(())
+                            } else {
+                                ControlFlow::Break(())
+                            })
+                        },
+                    )?;
                     Ok(())
                 });
                 Ok(SpawnedQuerySessionStream {
@@ -182,7 +202,7 @@ impl QuerySession {
         &mut self,
         query_plan: &QueryPlan,
         cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let drive_letters = query_plan
             .drive_letter_pattern
@@ -206,7 +226,7 @@ impl QuerySession {
                 .wrap_err_with(|| {
                     format!("failed querying cached published index for drive {drive}")
                 })?;
-            if control_flow == ControlFlow::Break {
+            if control_flow == ControlFlow::Break(()) {
                 break;
             }
         }
@@ -270,10 +290,10 @@ impl CachedPublishedDriveQuery {
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
         cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
-    ) -> eyre::Result<ControlFlow> {
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<ControlFlow<()>> {
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-            return Ok(ControlFlow::Break);
+            return Ok(ControlFlow::Break(()));
         }
 
         if let Some(overlay_index) = self.overlay_index.as_ref() {
@@ -282,7 +302,7 @@ impl CachedPublishedDriveQuery {
                     format!("failed querying cached base index for drive {}", self.drive)
                 })?;
             if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                return Ok(ControlFlow::Break);
+                return Ok(ControlFlow::Break(()));
             }
             let overlay_rows = Self::collect_index_rows(overlay_index, query_plan, cancel)
                 .wrap_err_with(|| {
@@ -294,16 +314,16 @@ impl CachedPublishedDriveQuery {
             result = merge_rows(result, overlay_rows);
             for row in result {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                    return Ok(ControlFlow::Break);
+                    return Ok(ControlFlow::Break(()));
                 }
                 let Some(row) = filter.classify_and_match(row) else {
                     continue;
                 };
-                if visit(row)? == ControlFlow::Break {
-                    return Ok(ControlFlow::Break);
+                if visit(row)? == ControlFlow::Break(()) {
+                    return Ok(ControlFlow::Break(()));
                 }
             }
-            return Ok(ControlFlow::Continue);
+            return Ok(ControlFlow::Continue(()));
         }
 
         Self::visit_index_rows(&self.base_index, query_plan, filter, cancel, &mut visit)
@@ -315,8 +335,8 @@ impl CachedPublishedDriveQuery {
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
         cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
-    ) -> eyre::Result<ControlFlow> {
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<ControlFlow<()>> {
         let parsed_index = SearchIndexBytes::new(mapped.bytes()).parse_trusted_for_query()?;
         let (_loaded_rows, control_flow) = visit_parsed_search_index_rows(
             &parsed_index,
@@ -325,10 +345,10 @@ impl CachedPublishedDriveQuery {
             query_plan.only_deleted,
             |row| {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                    return Ok(ControlFlow::Break);
+                    return Ok(ControlFlow::Break(()));
                 }
                 let Some(row) = filter.classify_and_match(row) else {
-                    return Ok(ControlFlow::Continue);
+                    return Ok(ControlFlow::Continue(()));
                 };
                 visit(row)
             },
@@ -349,10 +369,10 @@ impl CachedPublishedDriveQuery {
             query_plan.only_deleted,
             |row| {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                    return Ok(ControlFlow::Break);
+                    return Ok(ControlFlow::Break(()));
                 }
                 rows.push(row);
-                Ok(ControlFlow::Continue)
+                Ok(ControlFlow::Continue(()))
             },
         )?;
         Ok(rows)
@@ -364,11 +384,11 @@ mod tests {
     use super::QuerySession;
     use super::SpawnedQuerySessionStream;
     use crate::machine::config::published_drive_paths;
-    use crate::query::ControlFlow;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use std::ops::ControlFlow;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
@@ -477,17 +497,25 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
         let mut visited = Vec::new();
-        session.visit_rows_with_cancel(QueryPlan::new("Repos"), None, |row| {
-            visited.push(row.path.to_string());
-            Ok(ControlFlow::Continue)
-        })?;
+        let _: ControlFlow<()> = session.visit_rows_with_cancel(
+            QueryPlan::new("Repos"),
+            None,
+            |row| -> eyre::Result<ControlFlow<()>> {
+                visited.push(row.path.to_string());
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
 
         let count = {
             let mut count = 0_usize;
-            session.visit_rows_with_cancel(QueryPlan::new("Repos"), None, |_row| {
-                count += 1;
-                Ok(ControlFlow::Continue)
-            })?;
+            let _: ControlFlow<()> = session.visit_rows_with_cancel(
+                QueryPlan::new("Repos"),
+                None,
+                |_row| -> eyre::Result<ControlFlow<()>> {
+                    count += 1;
+                    Ok(ControlFlow::Continue(()))
+                },
+            )?;
             eyre::Ok(count)
         }?;
 
@@ -523,10 +551,14 @@ mod tests {
         plan.limit = 1_usize.into();
         let mut visited = 0_usize;
 
-        session.visit_rows_with_cancel(plan, None, |_row| {
-            visited += 1;
-            Ok(ControlFlow::Continue)
-        })?;
+        let _: ControlFlow<()> = session.visit_rows_with_cancel(
+            plan,
+            None,
+            |_row| -> eyre::Result<ControlFlow<()>> {
+                visited += 1;
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
 
         assert_eq!(visited, 1);
         Ok(())

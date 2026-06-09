@@ -19,7 +19,6 @@ use crate::machine::ipc::StatusResponse;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournalHandle;
-use crate::query::ControlFlow;
 use crate::query::QueryFilterRules;
 use crate::query::QueryLimit;
 use crate::query::QueryPlan;
@@ -37,6 +36,7 @@ use crossbeam_channel::Sender;
 use eyre::ContextCompat;
 use rustc_hash::FxHashMap;
 use std::ffi::c_void;
+use std::ops::ControlFlow;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -1008,9 +1008,9 @@ fn query_published_drive(
                 rows.push(row);
             }
             Ok(if limit.is_none_or(|limit| rows.len() < limit) {
-                ControlFlow::Continue
+                ControlFlow::Continue(())
             } else {
-                ControlFlow::Break
+                ControlFlow::Break(())
             })
         },
     )?;

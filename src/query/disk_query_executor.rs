@@ -1,5 +1,4 @@
 use crate::machine::config::published_drive_paths;
-use crate::query::ControlFlow;
 use crate::query::QueryFilterBehavior;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
@@ -8,6 +7,7 @@ use crate::query::QueryRowSink;
 use crate::query::QueryRowStream;
 use crate::query::visit_drive_search_index_rows;
 use eyre::bail;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::debug;
@@ -123,12 +123,12 @@ impl DiskQueryExecutor {
                                     only_deleted,
                                     |row| {
                                         let Some(row) = filter.classify_and_match(row) else {
-                                            return Ok(ControlFlow::Continue);
+                                            return Ok(ControlFlow::Continue(()));
                                         };
                                         Ok(if sink.blocking_send(row).is_ok() {
-                                            ControlFlow::Continue
+                                            ControlFlow::Continue(())
                                         } else {
-                                            ControlFlow::Break
+                                            ControlFlow::Break(())
                                         })
                                     },
                                 );

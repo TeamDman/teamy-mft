@@ -1,9 +1,9 @@
-use crate::query::ControlFlow;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowStream;
 use crate::query::QuerySession;
 use eyre::WrapErr;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -153,7 +153,7 @@ impl PreparedQueryStream {
     /// backend-specific cleanup fails after visiting completes.
     pub fn visit_rows(
         self,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -164,7 +164,7 @@ impl PreparedQueryStream {
         } = self;
         runtime.block_on(async {
             while let Some(row) = stream.next().await? {
-                if visit(row)? == ControlFlow::Break {
+                if visit(row)? == ControlFlow::Break(()) {
                     break;
                 }
             }
@@ -174,9 +174,7 @@ impl PreparedQueryStream {
         cleanup.finish()?;
         Ok(())
     }
-}
-
-impl QueryStreamCleanup {
+}impl QueryStreamCleanup {
     fn finish(self) -> eyre::Result<()> {
         match self {
             Self::Local(cleanup) => cleanup.finish(),
@@ -305,3 +303,8 @@ mod tests {
         assert_eq!(QueryRuntime::daemon_rpc(), QueryRuntime::DaemonRpc);
     }
 }
+
+
+
+
+
