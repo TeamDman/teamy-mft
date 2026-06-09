@@ -122,7 +122,8 @@ pub(crate) fn validate_query_input(query_input: &str) -> eyre::Result<()> {
         }
 
         match ch {
-            '"' | '<' | '>' | '?' | '*' => {
+            '"' | '?' | '*' => {
+                // < and > are special characters used in our query parsing logic
                 eyre::bail!(
                     "query contains Windows-invalid path character {:?} in {:?}",
                     ch,
@@ -197,7 +198,7 @@ mod tests {
         .into_inner()?;
         let bytes = Box::leak(bytes.into_boxed_slice());
         let parsed = SearchIndexBytes::new(bytes).parse_trusted_for_query()?;
-        let query = QueryString::parse_inputs(&[String::from("flow .jar$")])?;
+        let query = QueryString::parse_inputs(&[String::from("flow .jar>")])?;
 
         assert_eq!(
             query.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(

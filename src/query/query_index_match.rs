@@ -202,6 +202,16 @@ mod tests {
     }
 
     #[test]
+    fn prefix_rules_match_segment_prefixes_in_indexed_queries() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = QueryRule::parse("<flo").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
     fn short_contains_rules_still_match_without_trigrams() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
         let rule = QueryRule::parse("fl").expect("rule should parse");
@@ -227,7 +237,34 @@ mod tests {
                 has_deleted_entries: false,
             },
         ])?;
-        let rule = QueryRule::parse(".git$").expect("rule should parse");
+        let rule = QueryRule::parse(".git>").expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn exact_rules_match_only_terminal_segments_in_indexed_queries() -> eyre::Result<()> {
+        let parsed = parse_index(&[
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\package.json"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\my-package.json"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\package.json.backup"),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: String::from("C:\\repo\\package.json\\README.md"),
+                has_deleted_entries: false,
+            },
+        ])?;
+        let rule = QueryRule::parse("<package.json>").expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
 

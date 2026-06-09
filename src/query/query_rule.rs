@@ -4,8 +4,10 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryRule {
+    PrefixCaseInsensitive(QueryNeedle),
     ContainsCaseInsensitive(QueryNeedle),
     EndsWithCaseInsensitive(QueryNeedle),
+    EqualsCaseInsensitive(QueryNeedle),
 }
 
 impl QueryRule {
@@ -15,7 +17,21 @@ impl QueryRule {
             return None;
         }
 
-        if let Some(suffix) = raw_term.strip_suffix('$') {
+        if let Some(inner) = raw_term.strip_prefix('<') {
+            if let Some(exact) = inner.strip_suffix('>') {
+                if exact.is_empty() {
+                    return None;
+                }
+                return Some(Self::EqualsCaseInsensitive(QueryNeedle::new(exact)));
+            }
+
+            if inner.is_empty() {
+                return None;
+            }
+            return Some(Self::PrefixCaseInsensitive(QueryNeedle::new(inner)));
+        }
+
+        if let Some(suffix) = raw_term.strip_suffix('>') {
             if suffix.is_empty() {
                 return None;
             }
@@ -28,9 +44,10 @@ impl QueryRule {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::ContainsCaseInsensitive(needle) | Self::EndsWithCaseInsensitive(needle) => {
-                needle.is_empty()
-            }
+            Self::PrefixCaseInsensitive(needle)
+            | Self::ContainsCaseInsensitive(needle)
+            | Self::EndsWithCaseInsensitive(needle)
+            | Self::EqualsCaseInsensitive(needle) => needle.is_empty(),
         }
     }
 
@@ -42,11 +59,17 @@ impl QueryRule {
     #[must_use]
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         match self {
+            Self::PrefixCaseInsensitive(needle) => {
+                needle.matches_prefix_preprocessed(haystack, normalized_haystack)
+            }
             Self::ContainsCaseInsensitive(needle) => {
                 needle.matches_contains_preprocessed(haystack, normalized_haystack)
             }
             Self::EndsWithCaseInsensitive(needle) => {
                 needle.matches_suffix_preprocessed(haystack, normalized_haystack)
+            }
+            Self::EqualsCaseInsensitive(needle) => {
+                needle.matches_exact_preprocessed(haystack, normalized_haystack)
             }
         }
     }
@@ -58,7 +81,10 @@ impl QueryRule {
 
     #[must_use]
     pub fn matches_only_terminal_segment(&self) -> bool {
-        matches!(self, Self::EndsWithCaseInsensitive(_))
+        matches!(
+            self,
+            Self::EndsWithCaseInsensitive(_) | Self::EqualsCaseInsensitive(_)
+        )
     }
 
     #[must_use]
@@ -68,7 +94,9 @@ impl QueryRule {
                 let suffix = needle.normalized_str();
                 (suffix.starts_with('.') && suffix.len() > 1).then_some(suffix)
             }
-            Self::ContainsCaseInsensitive(_) => None,
+            Self::PrefixCaseInsensitive(_)
+            | Self::ContainsCaseInsensitive(_)
+            | Self::EqualsCaseInsensitive(_) => None,
         }
     }
 
@@ -80,7 +108,10 @@ impl QueryRule {
             {
                 Some(needle.normalized_trigrams())
             }
-            Self::ContainsCaseInsensitive(_) | Self::EndsWithCaseInsensitive(_) => None,
+            Self::PrefixCaseInsensitive(_)
+            | Self::ContainsCaseInsensitive(_)
+            | Self::EndsWithCaseInsensitive(_)
+            | Self::EqualsCaseInsensitive(_) => None,
         }
     }
 }
@@ -88,8 +119,10 @@ impl QueryRule {
 impl Display for QueryRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::PrefixCaseInsensitive(needle) => write!(f, "<{}", needle.normalized_str()),
             Self::ContainsCaseInsensitive(needle) => write!(f, "{}", needle.normalized_str()),
-            Self::EndsWithCaseInsensitive(needle) => write!(f, "{}$", needle.normalized_str()),
+            Self::EndsWithCaseInsensitive(needle) => write!(f, "{}>", needle.normalized_str()),
+            Self::EqualsCaseInsensitive(needle) => write!(f, "<{}>", needle.normalized_str()),
         }
     }
 }

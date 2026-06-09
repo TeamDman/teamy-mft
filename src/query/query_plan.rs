@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn suffix_rule_matches_extension_case_insensitively() {
         assert_eq!(
-            matching_paths(&[".webm$"], &["a.txt", "c.WEBM"]),
+            matching_paths(&[".webm>"], &["a.txt", "c.WEBM"]),
             vec!["c.WEBM"]
         );
     }
@@ -151,10 +151,18 @@ mod tests {
     }
 
     #[test]
+    fn prefix_rule_matches_case_insensitively() {
+        assert_eq!(
+            matching_paths(&["<flow"], &["FLOWER.jar", "reflower.zip", "trees.zip"]),
+            vec!["FLOWER.jar"]
+        );
+    }
+
+    #[test]
     fn whitespace_separated_terms_are_anded_within_one_group() {
         assert_eq!(
             matching_paths(
-                &["flower .jar$"],
+                &["flower .jar>"],
                 &["flower.jar", "flower.zip", "other.jar"]
             ),
             vec!["flower.jar"]
@@ -165,7 +173,7 @@ mod tests {
     fn repeated_positional_args_are_ored() {
         assert_eq!(
             matching_paths(
-                &["flower .jar$", "trees.zip"],
+                &["flower .jar>", "trees.zip"],
                 &["flower.jar", "trees.zip", "other.bin"]
             ),
             vec!["flower.jar", "trees.zip"]
@@ -176,7 +184,7 @@ mod tests {
     fn pipe_separator_within_one_argument_is_ored() {
         assert_eq!(
             matching_paths(
-                &["flower .jar$ | trees.zip"],
+                &["flower .jar> | trees.zip"],
                 &["flower.jar", "trees.zip", "other.bin"]
             ),
             vec!["flower.jar", "trees.zip"]
@@ -186,11 +194,11 @@ mod tests {
     #[test]
     fn pipes_and_argument_array_unify_to_the_same_plan() {
         let via_pipe = matching_paths(
-            &["flower .jar$ | trees.zip"],
+            &["flower .jar> | trees.zip"],
             &["flower.jar", "trees.zip", "other.bin"],
         );
         let via_args = matching_paths(
-            &["flower .jar$", "trees.zip"],
+            &["flower .jar>", "trees.zip"],
             &["flower.jar", "trees.zip", "other.bin"],
         );
         assert_eq!(via_pipe, via_args);
@@ -200,7 +208,7 @@ mod tests {
     fn apostrophe_is_treated_as_a_literal_query_character() {
         assert_eq!(
             matching_paths(
-                &["o'connor .txt$", "trees"],
+                &["o'connor .txt>", "trees"],
                 &["O'Connor.txt", "oconnor.txt", "trees.zip"]
             ),
             vec!["O'Connor.txt", "trees.zip"]
@@ -211,7 +219,7 @@ mod tests {
     fn multiple_pipe_segments_and_blank_segments_are_ignored() {
         assert_eq!(
             matching_paths(
-                &[" | flower .jar$ |  | trees.zip | "],
+                &[" | flower .jar> |  | trees.zip | "],
                 &["flower.jar", "trees.zip", "other.bin"]
             ),
             vec!["flower.jar", "trees.zip"]
@@ -257,7 +265,7 @@ mod tests {
 
     #[test]
     fn preprocessed_normalized_haystack_matches_the_same_result() {
-        let query_inputs = vec!["FLOWER .jar$".to_owned()];
+        let query_inputs = vec!["FLOWER .jar>".to_owned()];
         let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
 
         assert!(
@@ -299,7 +307,7 @@ mod tests {
     #[test]
     fn suffix_rules_apply_only_to_terminal_segments() {
         assert_eq!(
-            matching_paths(&[".txt$"], &["a/b/c.txt", "a/b/c.zip", "a/.txt/c.zip"]),
+            matching_paths(&[".txt>"], &["a/b/c.txt", "a/b/c.zip", "a/.txt/c.zip"]),
             vec!["a/b/c.txt"]
         );
     }
@@ -308,7 +316,7 @@ mod tests {
     fn suffix_rules_do_not_match_non_terminal_segments() {
         assert_eq!(
             matching_paths(
-                &[".git$"],
+                &[".git>"],
                 &[
                     "repo/project.git",
                     "repo/.git/objects/pack/pack-a.rev",
@@ -316,6 +324,38 @@ mod tests {
                 ]
             ),
             vec!["repo/project.git"]
+        );
+    }
+
+    #[test]
+    fn exact_rules_match_only_terminal_segments_case_insensitively() {
+        assert_eq!(
+            matching_paths(
+                &["<package.json>"],
+                &[
+                    "repo/package.json",
+                    "repo/PACKAGE.JSON",
+                    "repo/my-package.json",
+                    "repo/package.json.backup",
+                    "repo/package.json/README.md"
+                ]
+            ),
+            vec!["repo/package.json", "repo/PACKAGE.JSON"]
+        );
+    }
+
+    #[test]
+    fn exact_rules_do_not_match_non_terminal_segments() {
+        assert_eq!(
+            matching_paths(
+                &["<.git>"],
+                &[
+                    "repo/.git",
+                    "repo/.git/objects/pack/pack-a.rev",
+                    "repo/project.git"
+                ]
+            ),
+            vec!["repo/.git"]
         );
     }
 
@@ -354,7 +394,7 @@ mod tests {
 
     #[test]
     fn drive_designators_are_allowed_in_queries() {
-        let query_inputs = vec!["C:\\src .txt$".to_owned()];
+        let query_inputs = vec!["C:\\src .txt>".to_owned()];
         QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
     }
 
@@ -367,6 +407,19 @@ mod tests {
         assert_eq!(plan.query.groups[0].rules.len(), 1);
         assert!(plan.query.matches("flower.jar"));
         assert!(!plan.query.matches("flower.zip"));
+    }
+
+    #[test]
+    fn single_exact_rule_builds_one_group_with_one_rule() {
+        let plan = QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(
+            "Cargo.toml",
+        )));
+
+        assert_eq!(plan.query.groups.len(), 1);
+        assert_eq!(plan.query.groups[0].rules.len(), 1);
+        assert!(plan.query.matches("repo/cargo.toml"));
+        assert!(!plan.query.matches("repo/my-cargo.toml"));
+        assert!(!plan.query.matches("repo/Cargo.toml.backup"));
     }
 
     #[test]

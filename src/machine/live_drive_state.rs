@@ -1197,7 +1197,7 @@ mod tests {
         let mut state = state_from_graph(cache_dir.path(), 'C', graph);
         let request = QueryPlan {
             limit: QueryLimit::from(1),
-            ..QueryPlan::new(".txt$")
+            ..QueryPlan::new(".txt>")
         };
 
         let rows = state
@@ -1234,7 +1234,7 @@ mod tests {
         let mut state = state_from_graph(cache_dir.path(), 'C', graph);
         let request = QueryPlan {
             only_deleted: true,
-            ..QueryPlan::new(".txt$")
+            ..QueryPlan::new(".txt>")
         };
 
         let rows = state
@@ -1322,7 +1322,7 @@ mod tests {
         let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
         let request = QueryPlan {
             r#in: Some(scope_dir.to_string_lossy().into_owned()),
-            ..QueryPlan::new(".mp3$")
+            ..QueryPlan::new(".mp3>")
         };
 
         let rows = state
@@ -1533,3 +1533,4 @@ mod tests {
         Ok(())
     }
 }
+
