@@ -20,6 +20,7 @@
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
 use color_eyre::owo_colors::OwoColorize;
+use teamy_mft::query::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -54,9 +55,14 @@ fn main() -> eyre::Result<()> {
 
     println!("{:<20} count", "name");
     for segment in SOFTWARE_TERMINAL_SEGMENTS {
-        let count = session.count_rows_with_cancel(
+        let mut count = 0_usize;
+        session.visit_rows_with_cancel(
             QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
             Some(&cancel),
+            |_row| {
+                count += 1;
+                Ok(ControlFlow::Continue)
+            },
         )?;
         if cancel.load(Ordering::Relaxed) {
             break;
