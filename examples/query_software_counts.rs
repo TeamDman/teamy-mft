@@ -59,7 +59,7 @@ fn main() -> eyre::Result<()> {
         session.visit_rows_with_cancel(
             QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
             Some(&cancel),
-            |_row| -> eyre::Result<ControlFlow<(), ()>> {
+            |_row| {
                 count += 1;
                 Ok(ControlFlow::Continue(()))
             },
