@@ -25,6 +25,80 @@ fn should_include_indexed_row(
     include_deleted || !has_deleted_entries
 }
 
+pub(crate) fn visit_parsed_search_index_rows(
+    parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+) -> eyre::Result<(usize, ControlFlow)> {
+    let loaded_rows = parsed_index.row_count();
+    let matched_row_indices = {
+        let _span = info_span!("match_search_index_postings").entered();
+        query_plan
+            .query
+            .matching_row_indices(&|rule| matching_row_indices_for_rule(parsed_index, rule))?
+    };
+
+    let _span = info_span!("materialize_matched_index_rows").entered();
+    for row_index in matched_row_indices {
+        let row = parsed_index.row_view(row_index as usize)?;
+
+        if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
+            continue;
+        }
+
+        let control_flow = visit(QueryResultRow {
+            path: Pathlike::from(row.path()),
+            has_deleted_entries: row.has_deleted_entries,
+            is_filtered: false,
+        })?;
+
+        if control_flow == ControlFlow::Break {
+            return Ok((loaded_rows, ControlFlow::Break));
+        }
+    }
+
+    Ok((loaded_rows, ControlFlow::Continue))
+}
+
+fn query_parsed_search_index(
+    parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<DriveQueryResult> {
+    let mut matched_rows = Vec::new();
+    let (loaded_rows, _) = visit_parsed_search_index_rows(
+        parsed_index,
+        query_plan,
+        include_deleted,
+        only_deleted,
+        |row| {
+            matched_rows.push(row);
+            Ok(ControlFlow::Continue)
+        },
+    )?;
+
+    Ok(DriveQueryResult {
+        loaded_rows,
+        matched_rows,
+    })
+}
+
+pub(crate) fn query_mapped_search_index(
+    mapped: &MappedSearchIndex,
+    query_plan: &QueryPlan,
+    include_deleted: bool,
+    only_deleted: bool,
+) -> eyre::Result<DriveQueryResult> {
+    let parsed_index = {
+        let _span = info_span!("parse_search_index_for_query").entered();
+        SearchIndexBytes::new(mapped.bytes()).parse_trusted_for_query()?
+    };
+    query_parsed_search_index(&parsed_index, query_plan, include_deleted, only_deleted)
+}
+
 fn load_and_query_search_index(
     index_path: &Path,
     _drive_letter: char,
@@ -48,64 +122,14 @@ fn load_and_query_search_index(
         })?
     };
 
-    let parsed_index = {
-        let _span = info_span!("parse_search_index_for_query").entered();
-        SearchIndexBytes::new(mapped.bytes())
-            .parse_trusted_for_query()
-            .wrap_err_with(|| {
-                format!(
-                    "Failed preparing search index rows from {}",
-                    index_path.display()
-                )
-            })?
-    };
-
-    let loaded_rows = parsed_index.row_count();
-    let matched_row_indices = {
-        let _span = info_span!("match_search_index_postings").entered();
-        query_plan
-            .query
-            .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
-            .wrap_err_with(|| {
-                format!(
-                    "Failed matching search index rows from {}",
-                    index_path.display()
-                )
-            })?
-    };
-    let matched_rows = {
-        let _span = info_span!("materialize_matched_index_rows").entered();
-        let mut matched_rows = Vec::with_capacity(matched_row_indices.len());
-
-        for row_index in matched_row_indices {
-            let row = parsed_index
-                .row_view(row_index as usize)
-                .wrap_err_with(|| {
-                    format!(
-                        "Failed materializing search index row {} from {}",
-                        row_index,
-                        index_path.display()
-                    )
-                })?;
-
-            if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
-                continue;
-            }
-
-            matched_rows.push(QueryResultRow {
-                path: Pathlike::from(row.path()),
-                has_deleted_entries: row.has_deleted_entries,
-                is_filtered: false,
-            });
-        }
-
-        matched_rows
-    };
-
-    Ok(DriveQueryResult {
-        loaded_rows,
-        matched_rows,
-    })
+    query_mapped_search_index(&mapped, query_plan, include_deleted, only_deleted).wrap_err_with(
+        || {
+            format!(
+                "Failed querying search index rows from {}",
+                index_path.display()
+            )
+        },
+    )
 }
 
 fn visit_matching_search_index_rows(
@@ -115,7 +139,7 @@ fn visit_matching_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+    visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
 ) -> eyre::Result<(usize, ControlFlow)> {
     let _span = info_span!("load_drive_search_index").entered();
     {
@@ -144,54 +168,29 @@ fn visit_matching_search_index_rows(
             })?
     };
 
-    let loaded_rows = parsed_index.row_count();
-    let matched_row_indices = {
-        let _span = info_span!("match_search_index_postings").entered();
-        query_plan
-            .query
-            .matching_row_indices(&|rule| matching_row_indices_for_rule(&parsed_index, rule))
-            .wrap_err_with(|| {
-                format!(
-                    "Failed matching search index rows from {}",
-                    index_path.display()
-                )
-            })?
-    };
+    visit_parsed_search_index_rows(
+        &parsed_index,
+        query_plan,
+        include_deleted,
+        only_deleted,
+        visit,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "Failed visiting matched search index rows from {}",
+            index_path.display()
+        )
+    })
+}
 
-    let _span = info_span!("materialize_matched_index_rows").entered();
-    for row_index in matched_row_indices {
-        let row = parsed_index
-            .row_view(row_index as usize)
-            .wrap_err_with(|| {
-                format!(
-                    "Failed materializing search index row {} from {}",
-                    row_index,
-                    index_path.display()
-                )
-            })?;
-
-        if !should_include_indexed_row(include_deleted, only_deleted, row.has_deleted_entries) {
-            continue;
-        }
-
-        let control_flow = visit(QueryResultRow {
-            path: Pathlike::from(row.path()),
-            has_deleted_entries: row.has_deleted_entries,
-            is_filtered: false,
-        })?;
-
-        if control_flow == ControlFlow::Break {
-            return Ok((loaded_rows, ControlFlow::Break));
-        }
-    }
-
-    Ok((loaded_rows, ControlFlow::Continue))
+pub(crate) fn mapped_search_index_has_rows(mapped: &MappedSearchIndex) -> bool {
+    mapped.header.node_count > 0
 }
 
 fn search_index_has_rows(index_path: &Path) -> eyre::Result<bool> {
     let mapped = MappedSearchIndex::open(index_path)
         .wrap_err_with(|| format!("Failed loading search index from {}", index_path.display()))?;
-    Ok(SearchIndexBytes::new(mapped.bytes()).header()?.node_count > 0)
+    Ok(mapped_search_index_has_rows(&mapped))
 }
 
 pub(crate) fn load_and_query_drive_search_index(

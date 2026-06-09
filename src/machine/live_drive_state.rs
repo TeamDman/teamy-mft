@@ -12,10 +12,12 @@ use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
+use crate::query::ControlFlow;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
+use crate::query::visit_parsed_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
@@ -240,38 +242,20 @@ impl LiveDriveState {
         request: &QueryPlan,
         cancel: Option<&AtomicBool>,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            return Ok(Vec::new());
+        }
         let filter_rules = QueryFilterRules::discover_for_drive_letters(
             &[self.drive_letter],
             &self.sync_dir,
             request.profile.as_deref(),
         )
-        .map_err(|error| MachineError::degraded(error.to_string()))?;
+        .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
         let filter = QueryRowFilter::new(request, Some(filter_rules))
-            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
+            .map_err(|error| MachineError::request_invalid(format!("{error:#}")))?;
 
-        let limit = request.limit.get();
-        let mut rows = Vec::with_capacity(limit.unwrap_or_default());
-        self.current_graph.visit_projected_rows(|projected| {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                return false;
-            }
-            let row = QueryResultRow {
-                path: projected.path.into(),
-                has_deleted_entries: !projected.is_live,
-                is_filtered: false,
-            };
-            if !request.query.matches(row.path.as_str()) {
-                return true;
-            }
-            if let Some(row) = filter.classify_and_match(row) {
-                rows.push(row);
-                if limit.is_some_and(|limit| rows.len() >= limit) {
-                    return false;
-                }
-            }
-            true
-        });
-        Ok(rows)
+        // dwrk[impl worker.live.queries-use-index-cache]
+        self.query_indexed_with_cancel(request, &filter, cancel)
     }
 
     /// # Errors
@@ -362,6 +346,13 @@ impl LiveDriveState {
     }
 
     fn ensure_current_query_cache(&mut self) -> eyre::Result<()> {
+        self.ensure_current_query_cache_with_cancel(None)
+    }
+
+    fn ensure_current_query_cache_with_cancel(
+        &mut self,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<()> {
         if !self.query_cache_dirty
             && self.current_rows_cache.is_some()
             && self.current_index_bytes_cache.is_some()
@@ -375,7 +366,13 @@ impl LiveDriveState {
             published_dirty = self.published_dirty
         )
         .entered();
-        let current_rows = self.current_graph.project_rows();
+        let current_rows = self.current_graph.project_rows_with_cancel(cancel)?;
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            eyre::bail!(
+                "Cancelled rebuilding live query cache for drive {}",
+                self.drive_letter
+            );
+        }
         let current_index_bytes = SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(
                 self.drive_letter,
@@ -436,6 +433,49 @@ impl LiveDriveState {
         self.overlay_rows_cache = Some(overlay_rows);
         self.overlay_index_bytes_cache = Some(overlay_index_bytes);
         Ok(())
+    }
+
+    fn query_indexed_with_cancel(
+        &mut self,
+        request: &QueryPlan,
+        filter: &QueryRowFilter,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Vec<QueryResultRow>, MachineError> {
+        self.ensure_current_query_cache_with_cancel(cancel)
+            .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            return Ok(Vec::new());
+        }
+
+        let current_index_bytes = self
+            .current_index_bytes_cache
+            .as_deref()
+            .wrap_err("Missing current query index cache")
+            .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+        let parsed_index = SearchIndexBytes::new(current_index_bytes)
+            .parse_trusted_for_query()
+            .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+
+        let limit = request.limit.get();
+        let mut rows = Vec::with_capacity(limit.unwrap_or_default());
+        visit_parsed_search_index_rows(&parsed_index, request, true, false, |row| {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                return Ok(ControlFlow::Break);
+            }
+
+            if let Some(row) = filter.classify_and_match(row) {
+                rows.push(row);
+                if limit.is_some_and(|limit| rows.len() >= limit) {
+                    return Ok(ControlFlow::Break);
+                }
+            }
+
+            Ok(ControlFlow::Continue)
+        })
+        .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+
+        Ok(rows)
     }
 }
 
@@ -565,22 +605,47 @@ impl LiveDriveGraph {
         }
     }
 
+    #[cfg(test)]
     fn project_rows(&self) -> Vec<SearchIndexPathRow> {
-        self.projected_rows()
-            .into_iter()
-            .map(|projected| SearchIndexPathRow {
-                path: projected.path,
-                has_deleted_entries: !projected.is_live,
-            })
-            .collect()
+        self.project_rows_with_cancel(None)
+            .expect("project_rows without cancellation should not fail")
     }
 
-    fn projected_rows(&self) -> Vec<ProjectedPath> {
+    fn project_rows_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<Vec<SearchIndexPathRow>> {
+        self.projected_rows_with_cancel(cancel).map(|rows| {
+            rows.into_iter()
+                .map(|projected| SearchIndexPathRow {
+                    path: projected.path,
+                    has_deleted_entries: !projected.is_live,
+                })
+                .collect()
+        })
+    }
+
+    fn projected_rows_with_cancel(
+        &self,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<Vec<ProjectedPath>> {
         let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
         let mut visiting = FxHashSet::<u64>::default();
         let mut path_states = BTreeMap::<String, bool>::new();
         for frn in self.nodes.keys().copied() {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                eyre::bail!(
+                    "Cancelled projecting live drive rows for drive {}",
+                    self.drive_letter
+                );
+            }
             for projected in self.projected_paths_for(frn, &mut memo, &mut visiting) {
+                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                    eyre::bail!(
+                        "Cancelled projecting live drive rows for drive {}",
+                        self.drive_letter
+                    );
+                }
                 path_states
                     .entry(projected.path)
                     .and_modify(|is_live| *is_live |= projected.is_live)
@@ -588,22 +653,10 @@ impl LiveDriveGraph {
             }
         }
 
-        path_states
+        Ok(path_states
             .into_iter()
             .map(|(path, is_live)| ProjectedPath { path, is_live })
-            .collect()
-    }
-
-    fn visit_projected_rows(&self, mut visit: impl FnMut(ProjectedPath) -> bool) {
-        let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
-        let mut visiting = FxHashSet::<u64>::default();
-        for frn in self.nodes.keys().copied() {
-            for projected in self.projected_paths_for(frn, &mut memo, &mut visiting) {
-                if !visit(projected) {
-                    return;
-                }
-            }
-        }
+            .collect())
     }
 
     fn projected_paths_for(
@@ -811,19 +864,26 @@ mod tests {
     use super::LiveDriveState;
     use super::LiveNode;
     use super::LiveNodeLink;
+    use super::PublishedDrivePaths;
     use super::current_unix_ms;
     use super::diff_overlay_rows;
     use super::join_windows_path;
     use super::validate_active_cursor;
+    use crate::daemon::MachineErrorKind;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
+    use crate::query::QueryLimit;
     use crate::query::QueryPlan;
+    use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use crate::sync::IfExistsOutputBehaviour;
     use eyre::ContextCompat;
     use rustc_hash::FxHashMap;
+    use std::path::Path;
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     fn base_graph() -> LiveDriveGraph {
@@ -848,6 +908,160 @@ mod tests {
         );
         LiveDriveGraph {
             drive_letter: 'C',
+            root_frn: 5,
+            nodes,
+        }
+    }
+
+    fn state_from_graph(
+        cache_dir: &Path,
+        drive_letter: char,
+        graph: LiveDriveGraph,
+    ) -> LiveDriveState {
+        LiveDriveState {
+            drive_letter,
+            sync_dir: cache_dir.to_path_buf(),
+            paths: published_drive_paths(cache_dir, drive_letter),
+            volume_serial_number: None,
+            snapshot_usn: 0,
+            published_last_usn: 0,
+            current_next_usn: 0,
+            journal_id: 1,
+            base_source_mft_len_bytes: 0,
+            base_rows: Vec::new(),
+            current_graph: graph,
+            current_rows_cache: None,
+            current_index_bytes_cache: None,
+            overlay_rows_cache: None,
+            overlay_index_bytes_cache: None,
+            published_dirty: false,
+            query_cache_dirty: true,
+        }
+    }
+
+    fn write_rule_discovery_index(
+        paths: &PublishedDrivePaths,
+        rule_file_paths: &[&Path],
+    ) -> eyre::Result<()> {
+        let rows = rule_file_paths
+            .iter()
+            .map(|path| SearchIndexPathRow {
+                path: path.display().to_string(),
+                has_deleted_entries: false,
+            })
+            .collect::<Vec<_>>();
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(paths.drive_letter, 123, rows.len() as u64),
+            &rows,
+        )?
+        .into_inner()?;
+        std::fs::write(&paths.base_index_path, bytes)?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn drive_letter_from_path(path: &Path) -> char {
+        path.to_string_lossy()
+            .chars()
+            .next()
+            .expect("windows path should start with a drive letter")
+            .to_ascii_uppercase()
+    }
+
+    #[cfg(windows)]
+    fn windows_components_below_root(path: &Path) -> Vec<String> {
+        use std::path::Component;
+
+        path.components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+                Component::Prefix(_) | Component::RootDir => None,
+                Component::CurDir | Component::ParentDir => {
+                    panic!("canonical windows test path should not contain relative components")
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(windows)]
+    fn graph_from_file_paths(paths: &[&Path]) -> LiveDriveGraph {
+        let drive_letter = drive_letter_from_path(
+            paths
+                .first()
+                .copied()
+                .expect("graph should include at least one path"),
+        );
+        let mut nodes = FxHashMap::default();
+        nodes.insert(
+            5,
+            LiveNode {
+                is_directory: true,
+                links: Vec::new(),
+            },
+        );
+        let mut directory_frns = FxHashMap::<Vec<String>, u64>::default();
+        directory_frns.insert(Vec::new(), 5);
+        let mut file_frns = FxHashMap::<Vec<String>, u64>::default();
+        let mut next_frn = 6u64;
+
+        for path in paths {
+            let components = windows_components_below_root(path);
+            assert!(
+                !components.is_empty(),
+                "graph file path should contain at least one component below the drive root"
+            );
+
+            let mut prefix = Vec::<String>::new();
+            let mut parent_frn = 5u64;
+            for directory_name in &components[..components.len() - 1] {
+                prefix.push(directory_name.clone());
+                if let Some(existing_frn) = directory_frns.get(&prefix).copied() {
+                    parent_frn = existing_frn;
+                    continue;
+                }
+
+                let frn = next_frn;
+                next_frn += 1;
+                nodes.insert(
+                    frn,
+                    LiveNode {
+                        is_directory: true,
+                        links: vec![LiveNodeLink {
+                            parent_frn,
+                            name: directory_name.clone(),
+                            is_deleted: false,
+                        }],
+                    },
+                );
+                directory_frns.insert(prefix.clone(), frn);
+                parent_frn = frn;
+            }
+
+            if file_frns.contains_key(&components) {
+                continue;
+            }
+
+            let frn = next_frn;
+            next_frn += 1;
+            nodes.insert(
+                frn,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn,
+                        name: components
+                            .last()
+                            .expect("file path should have a leaf component")
+                            .clone(),
+                        is_deleted: false,
+                    }],
+                },
+            );
+            file_frns.insert(components, frn);
+        }
+
+        LiveDriveGraph {
+            drive_letter,
             root_frn: 5,
             nodes,
         }
@@ -932,25 +1146,7 @@ mod tests {
                 }],
             },
         );
-        let mut state = LiveDriveState {
-            drive_letter: 'C',
-            sync_dir: cache_dir.path().to_path_buf(),
-            paths: published_drive_paths(cache_dir.path(), 'C'),
-            volume_serial_number: None,
-            snapshot_usn: 0,
-            published_last_usn: 0,
-            current_next_usn: 0,
-            journal_id: 1,
-            base_source_mft_len_bytes: 0,
-            base_rows: Vec::new(),
-            current_graph: graph,
-            current_rows_cache: None,
-            current_index_bytes_cache: None,
-            overlay_rows_cache: None,
-            overlay_index_bytes_cache: None,
-            published_dirty: false,
-            query_cache_dirty: true,
-        };
+        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
 
         let rows = state
             .query(&QueryPlan::new("music"))
@@ -958,7 +1154,307 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path.as_str(), r"C:\music.flac");
+        assert!(state.current_index_bytes_cache.is_some());
         Ok(())
+    }
+
+    #[test]
+    fn live_query_cancelled_before_index_query_returns_no_rows() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let mut state = state_from_graph(cache_dir.path(), 'C', base_graph());
+        let cancel = AtomicBool::new(true);
+
+        let rows = state
+            .query_with_cancel(&QueryPlan::new("alpha"), Some(&cancel))
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        assert!(rows.is_empty());
+        assert!(state.current_index_bytes_cache.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn live_query_limit_applies_after_deleted_filtering() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let mut graph = base_graph();
+        graph
+            .nodes
+            .get_mut(&10)
+            .expect("alpha node should exist")
+            .links[0]
+            .is_deleted = true;
+        graph.nodes.insert(
+            11,
+            LiveNode {
+                is_directory: false,
+                links: vec![LiveNodeLink {
+                    parent_frn: 5,
+                    name: String::from("beta.txt"),
+                    is_deleted: false,
+                }],
+            },
+        );
+        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+        let request = QueryPlan {
+            limit: QueryLimit::from(1),
+            ..QueryPlan::new(".txt$")
+        };
+
+        let rows = state
+            .query(&request)
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path.as_str(), r"C:\beta.txt");
+        assert!(!rows[0].has_deleted_entries);
+        Ok(())
+    }
+
+    #[test]
+    fn live_query_only_deleted_preserves_deleted_state_filtering() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let mut graph = base_graph();
+        graph
+            .nodes
+            .get_mut(&10)
+            .expect("alpha node should exist")
+            .links[0]
+            .is_deleted = true;
+        graph.nodes.insert(
+            11,
+            LiveNode {
+                is_directory: false,
+                links: vec![LiveNodeLink {
+                    parent_frn: 5,
+                    name: String::from("beta.txt"),
+                    is_deleted: false,
+                }],
+            },
+        );
+        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+        let request = QueryPlan {
+            only_deleted: true,
+            ..QueryPlan::new(".txt$")
+        };
+
+        let rows = state
+            .query(&request)
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path.as_str(), r"C:\alpha.txt");
+        assert!(rows[0].has_deleted_entries);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_query_returns_request_invalid_for_unresolvable_scope() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let drive_letter = drive_letter_from_path(cache_dir.path());
+        let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
+        let missing_scope = cache_dir.path().join("missing-scope-dir");
+
+        let error = state
+            .query(&QueryPlan {
+                r#in: Some(missing_scope.to_string_lossy().into_owned()),
+                ..QueryPlan::new("alpha")
+            })
+            .expect_err("missing scope should be rejected");
+
+        assert_eq!(error.kind, MachineErrorKind::RequestInvalid);
+        assert!(error.message.contains("Failed resolving query scope"));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_query_returns_degraded_for_invalid_discovered_rule_file() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let drive_letter = drive_letter_from_path(cache_dir.path());
+        let bad_rules_path = cache_dir.path().join("broken.teamy_mft_rules");
+        std::fs::write(&bad_rules_path, "THIS IS NOT A VALID RULE\n")?;
+
+        let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
+        write_rule_discovery_index(&state.paths, &[bad_rules_path.as_path()])?;
+
+        let error = state
+            .query(&QueryPlan::new("alpha"))
+            .expect_err("invalid discovered rules should degrade live query");
+
+        assert_eq!(error.kind, MachineErrorKind::Degraded);
+        assert!(
+            error.message.contains("unsupported rule syntax"),
+            "unexpected degraded message: {}",
+            error.message
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_query_preserves_directory_scope_filtering_against_canonical_paths() -> eyre::Result<()>
+    {
+        let fixture_dir = tempfile::tempdir()?;
+        let cache_dir = tempfile::tempdir()?;
+        let scope_dir = fixture_dir.path().join("repo");
+        let nested_file = scope_dir.join("music").join("song.mp3");
+        let sibling_file = fixture_dir.path().join("repo2").join("song.mp3");
+
+        std::fs::create_dir_all(
+            nested_file
+                .parent()
+                .expect("nested file should have a parent directory"),
+        )?;
+        std::fs::create_dir_all(
+            sibling_file
+                .parent()
+                .expect("sibling file should have a parent directory"),
+        )?;
+        std::fs::write(&nested_file, [])?;
+        std::fs::write(&sibling_file, [])?;
+
+        let scope_dir = dunce::canonicalize(&scope_dir)?;
+        let nested_file = dunce::canonicalize(&nested_file)?;
+        let sibling_file = dunce::canonicalize(&sibling_file)?;
+        let drive_letter = drive_letter_from_path(&scope_dir);
+        let graph = graph_from_file_paths(&[nested_file.as_path(), sibling_file.as_path()]);
+        let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
+        let request = QueryPlan {
+            r#in: Some(scope_dir.to_string_lossy().into_owned()),
+            ..QueryPlan::new(".mp3$")
+        };
+
+        let rows = state
+            .query(&request)
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path.as_str(), nested_file.to_string_lossy());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_query_preserves_exact_file_scope_filtering_against_canonical_paths() -> eyre::Result<()>
+    {
+        let fixture_dir = tempfile::tempdir()?;
+        let cache_dir = tempfile::tempdir()?;
+        let scope_file = fixture_dir.path().join("track.flac");
+        let other_file = fixture_dir.path().join("track.flac.bak");
+
+        std::fs::write(&scope_file, [])?;
+        std::fs::write(&other_file, [])?;
+
+        let scope_file = dunce::canonicalize(&scope_file)?;
+        let other_file = dunce::canonicalize(&other_file)?;
+        let drive_letter = drive_letter_from_path(&scope_file);
+        let graph = graph_from_file_paths(&[scope_file.as_path(), other_file.as_path()]);
+        let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
+        let request = QueryPlan {
+            r#in: Some(scope_file.to_string_lossy().into_owned()),
+            ..QueryPlan::new("track")
+        };
+
+        let rows = state
+            .query(&request)
+            .map_err(|error| eyre::eyre!(error.message))?;
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path.as_str(), scope_file.to_string_lossy());
+        Ok(())
+    }
+
+    #[test]
+    fn live_query_preserves_filtered_row_semantics() -> eyre::Result<()> {
+        let cache_dir = tempfile::tempdir()?;
+        let rules_path = cache_dir.path().join("sample.teamy_mft_rules");
+        std::fs::write(&rules_path, "EXCLUDE C:\\filtered_music.txt\n")?;
+
+        let mut graph = base_graph();
+        graph.nodes.insert(
+            11,
+            LiveNode {
+                is_directory: false,
+                links: vec![LiveNodeLink {
+                    parent_frn: 5,
+                    name: String::from("filtered_music.txt"),
+                    is_deleted: false,
+                }],
+            },
+        );
+        graph.nodes.insert(
+            12,
+            LiveNode {
+                is_directory: false,
+                links: vec![LiveNodeLink {
+                    parent_frn: 5,
+                    name: String::from("visible_music.txt"),
+                    is_deleted: false,
+                }],
+            },
+        );
+
+        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+        write_rule_discovery_index(&state.paths, &[rules_path.as_path()])?;
+
+        let default_rows = state
+            .query(&QueryPlan::new("music"))
+            .map_err(|error| eyre::eyre!(error.message.clone()))?;
+        assert_eq!(
+            default_rows
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![r"C:\visible_music.txt"]
+        );
+        assert!(default_rows.iter().all(|row| !row.is_filtered));
+
+        let show_filtered_rows = state
+            .query(&QueryPlan {
+                show_filtered: true,
+                ..QueryPlan::new("music")
+            })
+            .map_err(|error| eyre::eyre!(error.message.clone()))?;
+        assert_eq!(
+            show_filtered_rows
+                .iter()
+                .map(|row| (row.path.as_str(), row.is_filtered))
+                .collect::<Vec<_>>(),
+            vec![
+                (r"C:\filtered_music.txt", true),
+                (r"C:\visible_music.txt", false),
+            ]
+        );
+
+        let only_filtered_rows = state
+            .query(&QueryPlan {
+                only_filtered: true,
+                ..QueryPlan::new("music")
+            })
+            .map_err(|error| eyre::eyre!(error.message.clone()))?;
+        assert_eq!(only_filtered_rows.len(), 1);
+        assert_eq!(
+            only_filtered_rows[0].path.as_str(),
+            r"C:\filtered_music.txt"
+        );
+        assert!(only_filtered_rows[0].is_filtered);
+        Ok(())
+    }
+
+    #[test]
+    fn live_query_reports_degraded_error_for_invalid_cached_index_bytes() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let mut state = state_from_graph(temp_dir.path(), 'C', base_graph());
+        state.current_rows_cache = Some(Vec::new());
+        state.current_index_bytes_cache = Some(vec![1, 2, 3]);
+        state.query_cache_dirty = false;
+
+        let error = state
+            .query(&QueryPlan::new("alpha"))
+            .expect_err("invalid cache bytes should degrade");
+
+        assert_eq!(error.kind, MachineErrorKind::Degraded);
     }
 
     #[test]
