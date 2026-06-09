@@ -9,6 +9,8 @@ mod stop;
 mod uninstall;
 
 pub use install::ServiceInstallArgs;
+pub use install::install_machine_config;
+pub use install::install_machine_daemon_service;
 pub use is_running::ServiceIsRunningArgs;
 pub use logs::ServiceLogsArgs;
 pub use service_cli::ServiceArgs;
