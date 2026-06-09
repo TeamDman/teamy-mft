@@ -1,5 +1,4 @@
 use crate::machine::config::published_drive_paths;
-use crate::query::ControlFlow;
 use crate::query::DriveQueryResult;
 use crate::query::Pathlike;
 use crate::query::QueryPlan;
@@ -9,6 +8,7 @@ use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use eyre::Context;
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::Path;
 use tracing::info_span;
 
@@ -30,8 +30,8 @@ pub(crate) fn visit_parsed_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
-) -> eyre::Result<(usize, ControlFlow)> {
+    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
+) -> eyre::Result<(usize, ControlFlow<(), ()>)> {
     let loaded_rows = parsed_index.row_count();
     let matched_row_indices = {
         let _span = info_span!("match_search_index_postings").entered();
@@ -54,12 +54,12 @@ pub(crate) fn visit_parsed_search_index_rows(
             is_filtered: false,
         })?;
 
-        if control_flow == ControlFlow::Break {
-            return Ok((loaded_rows, ControlFlow::Break));
+        if control_flow == ControlFlow::Break(()) {
+            return Ok((loaded_rows, ControlFlow::Break(())));
         }
     }
 
-    Ok((loaded_rows, ControlFlow::Continue))
+    Ok((loaded_rows, ControlFlow::Continue(())))
 }
 
 fn query_parsed_search_index(
@@ -76,7 +76,7 @@ fn query_parsed_search_index(
         only_deleted,
         |row| {
             matched_rows.push(row);
-            Ok(ControlFlow::Continue)
+            Ok(ControlFlow::Continue(()))
         },
     )?;
 
@@ -139,8 +139,8 @@ fn visit_matching_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
-) -> eyre::Result<(usize, ControlFlow)> {
+    visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
+) -> eyre::Result<(usize, ControlFlow<(), ()>)> {
     let _span = info_span!("load_drive_search_index").entered();
     {
         let _span = info_span!("validate_search_index_file").entered();
@@ -239,7 +239,7 @@ pub(crate) fn visit_drive_search_index_rows(
     query_plan: &QueryPlan,
     include_deleted: bool,
     only_deleted: bool,
-    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow>,
+    mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
 ) -> eyre::Result<usize> {
     let paths = published_drive_paths(sync_dir, drive_letter);
 
@@ -253,7 +253,7 @@ pub(crate) fn visit_drive_search_index_rows(
         )?;
         let loaded_rows = result.loaded_rows;
         for row in result.matched_rows {
-            if visit(row)? == ControlFlow::Break {
+            if visit(row)? == ControlFlow::Break(()) {
                 break;
             }
         }
@@ -293,3 +293,4 @@ pub(crate) fn merge_rows(
     }
     merged.into_values().collect()
 }
+

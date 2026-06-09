@@ -1,5 +1,4 @@
 use crate::machine::config::published_drive_paths;
-use crate::query::ControlFlow;
 use crate::query::QueryNeedle;
 use crate::query::QueryPlan;
 use crate::query::QueryRule;
@@ -10,6 +9,7 @@ use globset::GlobMatcher;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::ops::ControlFlow;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -412,10 +412,10 @@ fn discover_rule_files_for_drive(
     let mut files = Vec::new();
     visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
         let Some(file) = load_rules_file(drive_letter, row.path.as_ref())? else {
-            return Ok(ControlFlow::Continue);
+            return Ok(ControlFlow::Continue(()));
         };
         files.push(file);
-        Ok(ControlFlow::Continue)
+        Ok(ControlFlow::Continue(()))
     })?;
 
     Ok(files)

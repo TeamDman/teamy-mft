@@ -12,7 +12,6 @@ use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
-use crate::query::ControlFlow;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -28,6 +27,7 @@ use eyre::ContextCompat;
 use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -459,21 +459,22 @@ impl LiveDriveState {
 
         let limit = request.limit.get();
         let mut rows = Vec::with_capacity(limit.unwrap_or_default());
-        visit_parsed_search_index_rows(&parsed_index, request, true, false, |row| {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
-                return Ok(ControlFlow::Break);
-            }
-
-            if let Some(row) = filter.classify_and_match(row) {
-                rows.push(row);
-                if limit.is_some_and(|limit| rows.len() >= limit) {
-                    return Ok(ControlFlow::Break);
+        let (_loaded_rows, _control_flow) =
+            visit_parsed_search_index_rows(&parsed_index, request, true, false, |row| {
+                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                    return Ok(ControlFlow::Break(()));
                 }
-            }
 
-            Ok(ControlFlow::Continue)
-        })
-        .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+                if let Some(row) = filter.classify_and_match(row) {
+                    rows.push(row);
+                    if limit.is_some_and(|limit| rows.len() >= limit) {
+                        return Ok(ControlFlow::Break(()));
+                    }
+                }
+
+                Ok(ControlFlow::Continue(()))
+            })
+            .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
 
         Ok(rows)
     }

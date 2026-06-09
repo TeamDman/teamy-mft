@@ -20,10 +20,10 @@
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
 use color_eyre::owo_colors::OwoColorize;
-use teamy_mft::query::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryNeedle;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
@@ -59,9 +59,9 @@ fn main() -> eyre::Result<()> {
         session.visit_rows_with_cancel(
             QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
             Some(&cancel),
-            |_row| {
+            |_row| -> eyre::Result<ControlFlow<(), ()>> {
                 count += 1;
-                Ok(ControlFlow::Continue)
+                Ok(ControlFlow::Continue(()))
             },
         )?;
         if cancel.load(Ordering::Relaxed) {
@@ -72,3 +72,4 @@ fn main() -> eyre::Result<()> {
 
     Ok(())
 }
+
