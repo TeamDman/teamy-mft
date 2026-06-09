@@ -27,7 +27,7 @@ pub enum Command {
     Service(ServiceArgs),
     /// Write `.mft` and `.mft_search_index` files (will auto-elevate via UAC if not already running as administrator)
     Sync(SyncArgs),
-    /// Helper for `service install`
+    /// Configure the machine-wide cache and optionally install the daemon service
     Install(InstallArgs),
     /// Helper for `service uninstall`
     Uninstall(UninstallArgs),
