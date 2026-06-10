@@ -28,7 +28,7 @@ teamy-mft sync
 teamy-mft status
 
 # Query indexed paths
-teamy-mft query ".mp4$ album" ".opus$ album" ".mp3$ album"
+teamy-mft query ".mp4> album" ".opus> album" ".mp3> album"
 
 # Add a privacy-preserving exclusion rule to the default profile
 teamy-mft rules add exclude FirstName
@@ -37,7 +37,7 @@ teamy-mft rules add exclude FirstName
 teamy-mft rules add --profile mc-modding --order 100 include "C:\\Repos\\Minecraft\\**\\*.java"
 
 # Query with a profile-specific ruleset
-teamy-mft query ".java$" --profile mc-modding
+teamy-mft query ".java>" --profile mc-modding
 
 # See which rule files are active for one profile
 teamy-mft rules list --profile mc-modding
@@ -57,7 +57,7 @@ use teamy_mft::query::QueryIgnoreBehavior;
 
 fn main() -> eyre::Result<()> {
     // By default, queries honor discovered `.teamy_mft_rules` files.
-    for path in QueryArgs::new(".git$").invoke()? {
+    for path in QueryArgs::new("<.git>").invoke()? {
         if let Some(repo_root) = path.parent() {
             println!("{} ({})", repo_root.display(), path.display());
         }
@@ -122,3 +122,4 @@ Implementation:
     src\cli\mod.rs
     https://github.com/TeamDman/teamy-mft/blob/12b4a4f/src/cli/mod.rs
 ```
+

@@ -67,6 +67,18 @@ specs (
         )
     }
     {
+        name teamy-mft-daemon-worker-runtime
+        source_url https://github.com/TeamDman/teamy-mft
+        include (docs/spec/product/daemon-worker-runtime.md)
+        impls (
+            {
+                name rust
+                include (src/**/*.rs)
+                test_include (tests/**/*.rs)
+            }
+        )
+    }
+    {
         name teamy-mft-mft-io
         source_url https://github.com/TeamDman/teamy-mft
         include (docs/spec/product/mft-io.md)

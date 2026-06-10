@@ -1,8 +1,8 @@
 //! Find all git repositories visible in the MFT search index.
 //!
 // repo[impl examples.rs-files]
-//! Uses `.git$` (ends-with) so it returns exact `.git` directories without
-//! matching `.gitignore`, `.github`, etc.
+//! Uses `<.git>` (exact terminal-segment match) so it returns exact `.git`
+//! directories without matching `.gitignore`, `.github`, `project.git`, etc.
 //!
 //! # Usage
 //!
@@ -17,8 +17,8 @@ use teamy_mft::cli::command::query::QueryArgs;
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
-    // `.git$` means "path ends with .git" — matches dirs named exactly `.git`
-    let rows = QueryArgs::new(".git$").collect_rows()?;
+    // `<.git>` means "terminal segment equals .git".
+    let rows = QueryArgs::new("<.git>").collect_rows()?;
     for path in rows {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = path.parent() {

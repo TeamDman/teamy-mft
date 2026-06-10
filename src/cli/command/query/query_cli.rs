@@ -1,10 +1,8 @@
 use crate::presentation::ResultListPresentation;
-use crate::query::DiskQueryExecutor;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
-use crate::query::QueryRowStream;
+use crate::query::QueryRuntime;
 use arbitrary::Arbitrary;
-use eyre::Context;
 use eyre::ensure;
 use facet::Facet;
 use figue::{self as args};
@@ -131,73 +129,13 @@ impl QueryArgs {
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;
-        self.plan.ensure_selected_profile_allowed()?;
         ensure!(
             !(self.daemon && self.no_daemon),
             "`--daemon` and `--no-daemon` cannot be used together"
         );
+        self.plan.ensure_selected_profile_allowed()?;
 
-        let rtn = if self.daemon {
-            let _ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
-            let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-            crate::machine::ipc::ensure_daemon_ready(&config)?;
-            let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
-            let (logs_tx, logs_rx) =
-                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-            let (cancel_tx, cancel_rx) = vox::channel::<u8>();
-            let row_drain = {
-                let stream = QueryRowStream::Vox(rows_rx);
-                let limit = self.plan.limit;
-                std::thread::spawn(move || {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()?;
-                    runtime.block_on(stream.collect_filtered_limit(limit))
-                })
-            };
-            let _cancel_signal = std::thread::spawn(move || {
-                while !crate::windows_utils::ctrl_c::interrupted() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(async move {
-                    let _ = cancel_tx.send(1).await;
-                    let _ = cancel_tx.close(Vec::new()).await;
-                });
-                Ok::<(), eyre::Report>(())
-            });
-            let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-            let response = crate::machine::ipc::query_stream(
-                &config,
-                self.plan.clone(),
-                rows_tx,
-                logs_tx,
-                cancel_rx,
-            )
-            .wrap_err(
-                "Daemon query failed, re-run without `--daemon` to query the published disk cache",
-            )?;
-            let response_rows = row_drain.join().map_err(|join_error| {
-                eyre::eyre!("Daemon row drain thread panicked: {join_error:?}")
-            })??;
-            let () = log_drain.join().map_err(|join_error| {
-                eyre::eyre!("Daemon log drain thread panicked: {join_error:?}")
-            })?;
-            debug!(
-                correlation_id = %response,
-                "Daemon-only streamed query completed"
-            );
-            response_rows
-        } else {
-            let executor = DiskQueryExecutor::new(self.plan.clone())?;
-            let stream = executor.stream()?;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(stream.collect_filtered_limit(self.plan.limit))?
-        };
+        let rtn = self.query_runtime().collect_rows(self.plan.clone())?;
         if let Some(limit) = **self.plan.limit {
             ensure!(
                 rtn.len() <= limit.into(),
@@ -207,5 +145,66 @@ impl QueryArgs {
             );
         }
         Ok(rtn)
+    }
+
+    fn query_runtime(&self) -> QueryRuntime {
+        if self.daemon {
+            QueryRuntime::daemon_rpc()
+        } else {
+            QueryRuntime::published_index_only()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::QueryArgs;
+    use crate::query::QueryRuntime;
+
+    #[test]
+    fn default_and_no_daemon_query_args_use_published_index_runtime() {
+        let default_args = QueryArgs::new("Cargo.toml");
+        let no_daemon_args = QueryArgs {
+            no_daemon: true,
+            ..QueryArgs::new("Cargo.toml")
+        };
+
+        assert_eq!(
+            default_args.query_runtime(),
+            QueryRuntime::PublishedIndexOnly
+        );
+        assert_eq!(
+            no_daemon_args.query_runtime(),
+            QueryRuntime::PublishedIndexOnly
+        );
+    }
+
+    #[test]
+    fn daemon_query_args_use_daemon_runtime() {
+        let args = QueryArgs {
+            daemon: true,
+            ..QueryArgs::new("Cargo.toml")
+        };
+
+        assert_eq!(args.query_runtime(), QueryRuntime::DaemonRpc);
+    }
+
+    #[test]
+    fn conflicting_daemon_flags_fail_before_runtime_access() {
+        let args = QueryArgs {
+            daemon: true,
+            no_daemon: true,
+            ..QueryArgs::new("Cargo.toml")
+        };
+
+        let error = args
+            .collect_rows()
+            .expect_err("conflicting daemon flags should fail early");
+
+        assert!(
+            error
+                .to_string()
+                .contains("`--daemon` and `--no-daemon` cannot be used together")
+        );
     }
 }
