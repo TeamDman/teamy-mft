@@ -40,6 +40,10 @@ impl RulesAddArgs {
     ///
     /// Returns an error if the machine cache is unavailable, rule discovery fails, or the
     /// selected rules file cannot be written.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Rule mutation stays procedural here to keep the file-selection flow direct"
+    )]
     pub fn invoke(self) -> eyre::Result<()> {
         let profile = normalize_profile_name(self.profile.as_deref())?;
         let pattern = self.pattern.trim();

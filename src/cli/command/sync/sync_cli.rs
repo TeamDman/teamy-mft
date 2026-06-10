@@ -43,10 +43,7 @@ impl SyncArgs {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
             if let Some(path) = plan.path.as_deref() {
                 let drive_letter = crate::sync::sync_path_into_published_overlay(&sync_dir, path)?;
-                println!(
-                    "Updated published overlay for drive {} with path {}",
-                    drive_letter, path
-                );
+                println!("Updated published overlay for drive {drive_letter} with path {path}");
             } else {
                 let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
                 crate::machine::daemon::sync_machine_cache(

@@ -85,7 +85,11 @@ fn load_rows_from_index(path: &Path) -> eyre::Result<Vec<SearchIndexPathRow>> {
         .wrap_err_with(|| format!("Failed reading search index rows from {}", path.display()))?;
     SearchIndexBytes::new(&bytes)
         .row_views()?
-        .map(|row| row.map(|view| view.to_owned()))
+        .map(|row| {
+            row.map(
+                super::super::search_index::search_index_bytes::SearchIndexPathRowView::to_owned,
+            )
+        })
         .collect()
 }
 

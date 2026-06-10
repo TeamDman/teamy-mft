@@ -8,6 +8,10 @@ use std::time::SystemTime;
 /// Show freshness information for cached `.mft` and `.mft_search_index` files.
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 #[facet(rename_all = "kebab-case")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "These booleans are independent CLI flags rather than internal state"
+)]
 pub struct StatusArgs {
     /// Drive letter pattern to inspect (e.g., `*`, `C`, `CD`, `C,D`). Compatibility alias: `--drive`.
     #[facet(args::named, args::long_alias = "drive", default)]

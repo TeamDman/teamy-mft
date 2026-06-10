@@ -56,10 +56,7 @@ impl ProfileResetArgs {
 
         let profile_name = requested_profile.as_deref().unwrap_or(DEFAULT_PROFILE_NAME);
         if !self.yes {
-            println!(
-                "The following files will be disabled for profile {}:",
-                profile_name
-            );
+            println!("The following files will be disabled for profile {profile_name}:");
             for path in &selected_paths {
                 println!("{}", path.display());
             }
