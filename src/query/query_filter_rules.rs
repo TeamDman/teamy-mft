@@ -179,6 +179,10 @@ impl QueryFilterRules {
     ///
     /// Returns an error if the selected profile name is invalid or the effective file set
     /// contains invalid or contradictory rule syntax.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Rule precedence, deduplication, and conflict checks are clearer as one pass"
+    )]
     pub fn from_discovered_files(
         files: Vec<DiscoveredRuleFile>,
         profile: Option<&str>,
@@ -189,18 +193,17 @@ impl QueryFilterRules {
             .filter(|file| file_applies_to_profile(file, profile.as_deref()))
             .collect::<Vec<_>>();
         effective_files.sort_by(|left, right| left.path.cmp(&right.path));
-        if let Some(profile_name) = profile.as_deref() {
-            if !effective_files
+        if let Some(profile_name) = profile.as_deref()
+            && !effective_files
                 .iter()
                 .any(|file| file.profile.as_deref() == Some(profile_name))
-            {
-                eyre::bail!(
-                    "No {} files were discovered for profile {}. Create or sync a *.{profile_name}{} file first.",
-                    RULES_FILE_EXTENSION,
-                    profile_name,
-                    RULES_FILE_EXTENSION
-                );
-            }
+        {
+            eyre::bail!(
+                "No {} files were discovered for profile {}. Create or sync a *.{profile_name}{} file first.",
+                RULES_FILE_EXTENSION,
+                profile_name,
+                RULES_FILE_EXTENSION
+            );
         }
 
         let mut matcher_rules = Vec::<CompiledRule>::new();
@@ -719,6 +722,10 @@ fn file_applies_to_profile(file: &DiscoveredRuleFile, profile: Option<&str>) -> 
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the profile name contains `.` characters, control characters, or path
+/// separators that would make the derived rules filename ambiguous or invalid.
 pub fn normalize_profile_name(profile: Option<&str>) -> eyre::Result<Option<String>> {
     let Some(profile) = profile.map(str::trim) else {
         return Ok(None);
