@@ -19,7 +19,6 @@ use crate::machine::ipc::StatusResponse;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::usn::JournalCursor;
 use crate::machine::usn::VolumeUsnJournalHandle;
-use crate::query::ControlFlow;
 use crate::query::QueryFilterRules;
 use crate::query::QueryLimit;
 use crate::query::QueryPlan;
@@ -37,6 +36,7 @@ use crossbeam_channel::Sender;
 use eyre::ContextCompat;
 use rustc_hash::FxHashMap;
 use std::ffi::c_void;
+use std::ops::ControlFlow;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -152,6 +152,14 @@ struct DriveWorkerStatusSnapshot {
     active_jobs: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriveWorkerRuntimeMode {
+    // dwrk[impl worker.mode.live-observed]
+    LiveObserved,
+    // dwrk[impl worker.mode.published-index-only]
+    PublishedIndexOnly,
+}
+
 #[derive(Clone)]
 struct DriveWorker {
     drive: char,
@@ -206,6 +214,7 @@ impl std::fmt::Debug for DriveWorker {
 struct DriveWorkerState {
     drive: char,
     sync_dir: std::path::PathBuf,
+    mode: DriveWorkerRuntimeMode,
     state: Option<LiveDriveState>,
     snapshot_only: Option<String>,
     degraded: Option<String>,
@@ -214,7 +223,7 @@ struct DriveWorkerState {
 }
 
 impl DriveWorker {
-    fn start(drive: char, sync_dir: std::path::PathBuf) -> Self {
+    fn start(drive: char, sync_dir: std::path::PathBuf, mode: DriveWorkerRuntimeMode) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let status = Arc::new(StdMutex::new(DriveWorkerStatusSnapshot::default()));
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -227,6 +236,7 @@ impl DriveWorker {
                     let mut state = DriveWorkerState {
                         drive,
                         sync_dir,
+                        mode,
                         state: None,
                         snapshot_only: None,
                         degraded: None,
@@ -293,16 +303,29 @@ impl DriveWorker {
 }
 
 impl DriveWorkerState {
+    fn is_live_observed(&self) -> bool {
+        self.mode == DriveWorkerRuntimeMode::LiveObserved
+    }
+
     fn query_with_cancel(
         &mut self,
         request: &QueryPlan,
         cancel: &AtomicBool,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
+        // dwrk[impl worker.query.cancelled-without-degrading]
         if cancel.load(Ordering::Relaxed) {
             return Ok(DaemonDriveQueryRows {
                 rows: Vec::new(),
                 degraded: None,
             });
+        }
+        if self.mode == DriveWorkerRuntimeMode::PublishedIndexOnly {
+            return query_published_drive(self.drive, &self.sync_dir, request)
+                .map(|rows| DaemonDriveQueryRows {
+                    rows,
+                    degraded: None,
+                })
+                .map_err(|error| MachineError::degraded(error.to_string()));
         }
         if let Err(error) = self.refresh_with_cancel(Some(cancel)) {
             if cancel.load(Ordering::Relaxed) {
@@ -311,6 +334,7 @@ impl DriveWorkerState {
                     degraded: None,
                 });
             }
+            // dwrk[impl worker.live.falls-back-to-published-cache]
             return match query_published_drive(self.drive, &self.sync_dir, request) {
                 Ok(rows) => {
                     let message = format!(
@@ -345,6 +369,9 @@ impl DriveWorkerState {
     }
 
     fn refresh_with_cancel(&mut self, cancel: Option<&AtomicBool>) -> Result<(), MachineError> {
+        if !self.is_live_observed() {
+            return Ok(());
+        }
         if let Some(message) = self.degraded.clone() {
             return Err(MachineError::degraded(message));
         }
@@ -423,6 +450,7 @@ impl DriveWorkerState {
     clippy::too_many_lines,
     reason = "drive worker command handling is intentionally kept in one loop so state transitions stay visible"
 )]
+// dwrk[impl worker.query.serialized-per-drive]
 fn run_drive_worker(
     state: &mut DriveWorkerState,
     rx: &Receiver<DriveWorkerCommand>,
@@ -479,6 +507,10 @@ fn run_drive_worker(
                 publish_drive_worker_status(state, status);
             }
             Ok(DriveWorkerCommand::Warm) => {
+                if !state.is_live_observed() {
+                    publish_drive_worker_status(state, status);
+                    continue;
+                }
                 if state.state.is_none() && state.degraded.is_none() {
                     state.loading = true;
                     publish_drive_worker_status(state, status);
@@ -524,7 +556,12 @@ fn run_drive_worker(
                 break;
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                // dwrk[impl worker.refresh.timeout-driven]
                 if state.state.is_none() || state.degraded.is_some() {
+                    publish_drive_worker_status(state, status);
+                    continue;
+                }
+                if !state.is_live_observed() {
                     publish_drive_worker_status(state, status);
                     continue;
                 }
@@ -752,7 +789,13 @@ impl DaemonWorker {
             .expect("drive worker registry poisoned");
         workers
             .entry(drive)
-            .or_insert_with(|| DriveWorker::start(drive, self.sync_dir.clone()))
+            .or_insert_with(|| {
+                DriveWorker::start(
+                    drive,
+                    self.sync_dir.clone(),
+                    DriveWorkerRuntimeMode::LiveObserved,
+                )
+            })
             .clone()
     }
 }
@@ -851,6 +894,7 @@ fn warm_next_drive_worker(
     state: &mut DaemonRuntimeState,
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
 ) {
+    // dwrk[impl worker.warmup.gradual-per-drive]
     if state.warm_drive_letters.is_empty() {
         return;
     }
@@ -873,7 +917,13 @@ fn warm_next_drive_worker(
         }
         let worker = workers
             .entry(drive)
-            .or_insert_with(|| DriveWorker::start(drive, state.sync_dir.clone()))
+            .or_insert_with(|| {
+                DriveWorker::start(
+                    drive,
+                    state.sync_dir.clone(),
+                    DriveWorkerRuntimeMode::LiveObserved,
+                )
+            })
             .clone();
         drop(workers);
 
@@ -958,9 +1008,9 @@ fn query_published_drive(
                 rows.push(row);
             }
             Ok(if limit.is_none_or(|limit| rows.len() < limit) {
-                ControlFlow::Continue
+                ControlFlow::Continue(())
             } else {
-                ControlFlow::Break
+                ControlFlow::Break(())
             })
         },
     )?;
@@ -1928,64 +1978,6 @@ fn last_daemon_activity_elapsed(last_activity: &StdMutex<Instant>) -> Duration {
         .map_or(Duration::ZERO, |last_activity| last_activity.elapsed())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DriveWorkerState;
-    use crate::query::QueryPlan;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
-
-    #[test]
-    fn cancelled_drive_query_does_not_mark_drive_snapshot_only() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let cancel = AtomicBool::new(true);
-        let mut state = DriveWorkerState {
-            drive: 'Z',
-            sync_dir: temp_dir.path().to_path_buf(),
-            state: None,
-            snapshot_only: None,
-            degraded: None,
-            loading: false,
-            active_jobs: 0,
-        };
-
-        let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
-
-        assert!(result.rows.is_empty());
-        assert!(result.degraded.is_none());
-        assert!(state.snapshot_only.is_none());
-        assert!(state.degraded.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn drive_query_load_failure_without_cancel_reports_degraded() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let cancel = AtomicBool::new(false);
-        let mut state = DriveWorkerState {
-            drive: 'Z',
-            sync_dir: temp_dir.path().to_path_buf(),
-            state: None,
-            snapshot_only: None,
-            degraded: None,
-            loading: false,
-            active_jobs: 0,
-        };
-
-        let error = state
-            .query_with_cancel(&QueryPlan::new("music"), &cancel)
-            .expect_err("missing published files should degrade when not cancelled");
-
-        assert!(
-            error
-                .message
-                .contains("Drive Z has no published MFT snapshot")
-        );
-        assert!(!cancel.load(Ordering::Relaxed));
-        Ok(())
-    }
-}
-
 #[allow(
     clippy::needless_pass_by_value,
     reason = "catch_unwind returns owned boxed panic payloads"
@@ -2088,4 +2080,197 @@ fn collect_supported_drives_for_machine_sync(drive_letters: &[char]) -> Supporte
         }
     }
     (supported_drives, cursors, skipped_drives)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DaemonRuntimeState;
+    use super::DriveWorker;
+    use super::DriveWorkerRuntimeMode;
+    use super::DriveWorkerState;
+    use super::DriveWorkerStatusSnapshot;
+    use super::warm_next_drive_worker;
+    use crate::machine::config::published_drive_paths;
+    use crate::query::QueryPlan;
+    use crate::search_index::format::SearchIndexHeader;
+    use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use rustc_hash::FxHashMap;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    fn state(
+        temp_dir: &tempfile::TempDir,
+        drive: char,
+        mode: DriveWorkerRuntimeMode,
+    ) -> DriveWorkerState {
+        DriveWorkerState {
+            drive,
+            sync_dir: temp_dir.path().to_path_buf(),
+            mode,
+            state: None,
+            snapshot_only: None,
+            degraded: None,
+            loading: false,
+            active_jobs: 0,
+        }
+    }
+
+    fn wait_for_drive_worker_snapshot(
+        worker: &DriveWorker,
+        mut ready: impl FnMut(&DriveWorkerStatusSnapshot) -> bool,
+    ) -> DriveWorkerStatusSnapshot {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = worker.snapshot();
+            if ready(&snapshot) {
+                return snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "drive worker snapshot did not reach expected state: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn cancelled_drive_query_does_not_mark_drive_snapshot_only() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cancel = AtomicBool::new(true);
+        let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
+
+        let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
+
+        assert!(result.rows.is_empty());
+        assert!(result.degraded.is_none());
+        assert!(state.snapshot_only.is_none());
+        assert!(state.degraded.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn drive_query_load_failure_without_cancel_reports_degraded() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cancel = AtomicBool::new(false);
+        let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
+
+        let error = state
+            .query_with_cancel(&QueryPlan::new("music"), &cancel)
+            .expect_err("missing published files should degrade when not cancelled");
+
+        assert!(
+            error
+                .message
+                .contains("Drive Z has no published MFT snapshot")
+        );
+        assert!(!cancel.load(Ordering::Relaxed));
+        Ok(())
+    }
+
+    #[test]
+    fn published_index_only_mode_queries_base_index_without_live_state() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let paths = published_drive_paths(temp_dir.path(), 'C');
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, 1),
+            &[SearchIndexPathRow {
+                path: String::from(r"C:\music\track.flac"),
+                has_deleted_entries: false,
+            }],
+        )?
+        .write_to_path(&paths.base_index_path)?;
+
+        let cancel = AtomicBool::new(false);
+        let mut state = state(&temp_dir, 'C', DriveWorkerRuntimeMode::PublishedIndexOnly);
+
+        let result = state.query_with_cancel(&QueryPlan::new("track"), &cancel)?;
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].path.as_str(), r"C:\music\track.flac");
+        assert!(result.degraded.is_none());
+        assert!(state.state.is_none());
+        assert!(state.snapshot_only.is_none());
+        assert!(state.degraded.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn published_index_only_worker_ignores_warm_requests() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let worker = DriveWorker::start(
+            'C',
+            temp_dir.path().to_path_buf(),
+            DriveWorkerRuntimeMode::PublishedIndexOnly,
+        );
+
+        worker.warm();
+        let snapshot = wait_for_drive_worker_snapshot(&worker, |snapshot| !snapshot.loading);
+        worker.stop();
+
+        assert!(!snapshot.loaded);
+        assert!(!snapshot.loading);
+        assert!(snapshot.snapshot_only.is_none());
+        assert!(snapshot.degraded.is_none());
+        assert_eq!(snapshot.active_jobs, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn warm_next_drive_worker_creates_live_observed_worker_with_snapshot_fallback()
+    -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let paths = published_drive_paths(temp_dir.path(), 'C');
+        std::fs::create_dir_all(
+            paths
+                .base_index_path
+                .parent()
+                .expect("published index path should have a parent"),
+        )?;
+        std::fs::write(&paths.mft_path, b"not a real mft snapshot")?;
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new('C', 123, 1),
+            &[SearchIndexPathRow {
+                path: String::from(r"C:\music\track.flac"),
+                has_deleted_entries: false,
+            }],
+        )?
+        .write_to_path(&paths.base_index_path)?;
+
+        let mut state = DaemonRuntimeState {
+            owner_sid: String::new(),
+            sync_dir: temp_dir.path().to_path_buf(),
+            drives: FxHashMap::default(),
+            degraded: FxHashMap::default(),
+            loading: FxHashMap::default(),
+            active_jobs: 0,
+            warm_drive_letters: vec!['C'],
+            next_warm_drive_index: 0,
+            warm_not_before: Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .expect("instant subtraction within one second should succeed"),
+        };
+        let drive_workers = StdMutex::new(FxHashMap::default());
+
+        warm_next_drive_worker(&mut state, &drive_workers);
+
+        let worker = drive_workers
+            .lock()
+            .expect("drive worker registry poisoned")
+            .get(&'C')
+            .expect("warmup should create a drive worker")
+            .clone();
+        let snapshot =
+            wait_for_drive_worker_snapshot(&worker, |snapshot| snapshot.snapshot_only.is_some());
+        worker.stop();
+
+        assert!(!snapshot.loaded);
+        assert!(!snapshot.loading);
+        assert!(snapshot.snapshot_only.is_some());
+        assert!(snapshot.degraded.is_none());
+        Ok(())
+    }
 }

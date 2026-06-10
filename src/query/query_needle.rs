@@ -83,6 +83,29 @@ impl QueryNeedle {
     }
 
     #[must_use]
+    pub fn matches_prefix(&self, haystack: &str) -> bool {
+        self.matches_prefix_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_prefix_preprocessed(
+        &self,
+        haystack: &str,
+        normalized_haystack: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::AsciiLower(needle) => normalized_haystack.map_or_else(
+                || starts_with_case_insensitive_ascii(haystack, needle),
+                |normalized| starts_with_ascii_in_normalized_haystack(normalized, needle),
+            ),
+            Self::UnicodeLower(needle) => normalized_haystack.map_or_else(
+                || haystack.to_lowercase().starts_with(needle),
+                |normalized| normalized.starts_with(needle),
+            ),
+        }
+    }
+
+    #[must_use]
     pub fn matches_suffix(&self, haystack: &str) -> bool {
         self.matches_suffix_preprocessed(haystack, None)
     }
@@ -104,6 +127,29 @@ impl QueryNeedle {
             ),
         }
     }
+
+    #[must_use]
+    pub fn matches_exact(&self, haystack: &str) -> bool {
+        self.matches_exact_preprocessed(haystack, None)
+    }
+
+    #[must_use]
+    pub fn matches_exact_preprocessed(
+        &self,
+        haystack: &str,
+        normalized_haystack: Option<&str>,
+    ) -> bool {
+        match self {
+            Self::AsciiLower(needle) => normalized_haystack.map_or_else(
+                || equals_case_insensitive_ascii(haystack, needle),
+                |normalized| equals_ascii_in_normalized_haystack(normalized, needle),
+            ),
+            Self::UnicodeLower(needle) => normalized_haystack.map_or_else(
+                || haystack.to_lowercase() == *needle,
+                |normalized| normalized == needle,
+            ),
+        }
+    }
 }
 
 fn contains_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool {
@@ -121,6 +167,14 @@ fn contains_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool 
         .any(|window| window == needle)
 }
 
+fn starts_with_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool {
+    if needle.len() > haystack.len() {
+        return false;
+    }
+
+    &haystack.as_bytes()[..needle.len()] == needle
+}
+
 fn ends_with_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
@@ -132,6 +186,10 @@ fn ends_with_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool
     }
 
     &haystack[haystack.len() - needle.len()..] == needle
+}
+
+fn equals_ascii_in_normalized_haystack(haystack: &str, needle: &[u8]) -> bool {
+    haystack.as_bytes() == needle
 }
 
 fn contains_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
@@ -152,6 +210,18 @@ fn contains_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
     })
 }
 
+fn starts_with_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
+    let haystack = haystack.as_bytes();
+    if needle.len() > haystack.len() {
+        return false;
+    }
+
+    haystack[..needle.len()]
+        .iter()
+        .zip(needle.iter())
+        .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)
+}
+
 fn ends_with_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
@@ -163,6 +233,18 @@ fn ends_with_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
     }
 
     haystack[haystack.len() - needle.len()..]
+        .iter()
+        .zip(needle.iter())
+        .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)
+}
+
+fn equals_case_insensitive_ascii(haystack: &str, needle: &[u8]) -> bool {
+    let haystack = haystack.as_bytes();
+    if needle.len() != haystack.len() {
+        return false;
+    }
+
+    haystack
         .iter()
         .zip(needle.iter())
         .all(|(actual, expected)| actual.to_ascii_lowercase() == *expected)

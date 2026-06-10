@@ -1,8 +1,10 @@
+use crate::windows_utils::string::EasyPCWSTR;
 use arbitrary::Arbitrary;
 use eyre::ensure;
 use facet::Facet;
 use std::fmt;
 use std::str::FromStr;
+use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 
 /// Represents a user-provided drive letter pattern.
 /// Examples:
@@ -80,6 +82,7 @@ impl AsRef<str> for DriveLetterPattern {
 /// <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlogicaldrivestringsw>
 /// <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>
 fn get_available_drives() -> eyre::Result<Vec<char>> {
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
     // SAFETY: GetLogicalDrives is a safe Windows API call that returns a bitmask of available drives.
@@ -90,11 +93,55 @@ fn get_available_drives() -> eyre::Result<Vec<char>> {
         if (drives_bitmask & (1 << i)) != 0 {
             // i is constrained 0..26, convert explicitly to u8 to avoid truncation warnings
             let idx = u8::try_from(i).unwrap_or_default();
-            available_drives.push((b'A' + idx) as char);
+            let drive_letter = (b'A' + idx) as char;
+            let drive_root = format!("{drive_letter}:\\");
+            let drive_root = drive_root.easy_pcwstr()?;
+
+            // SAFETY: the root path is a valid, null-terminated UTF-16 string for the duration of the call.
+            let drive_type = unsafe { GetDriveTypeW(drive_root.as_ref()) };
+            if should_enumerate_drive_type(drive_type) {
+                available_drives.push(drive_letter);
+            }
         }
     }
 
     ensure!(!available_drives.is_empty(), "No drives found on system");
 
     Ok(available_drives)
+}
+
+fn should_enumerate_drive_type(drive_type: u32) -> bool {
+    drive_type != DRIVE_REMOTE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DRIVE_REMOTE;
+    use super::DriveLetterPattern;
+    use super::should_enumerate_drive_type;
+
+    #[test]
+    fn parses_explicit_drive_letters_with_separators() -> eyre::Result<()> {
+        let drive_letters = DriveLetterPattern("C,D;E F".to_string()).into_drive_letters()?;
+        assert_eq!(drive_letters, vec!['C', 'D', 'E', 'F']);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_non_alphabetic_drive_letters() {
+        let error = DriveLetterPattern("C1".to_string())
+            .into_drive_letters()
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid drive letter character at position 1: '1'")
+        );
+    }
+
+    #[test]
+    fn excludes_remote_drive_types_from_wildcard_enumeration() {
+        assert!(!should_enumerate_drive_type(DRIVE_REMOTE));
+        assert!(should_enumerate_drive_type(3));
+    }
 }

@@ -11,9 +11,8 @@ impl ResultListPresentation {
     #[must_use]
     pub fn for_terminal() -> Self {
         Self {
-            available_width: crossterm::terminal::size()
-                .ok()
-                .map(|(columns, _)| usize::from(columns))
+            available_width: crate::windows_utils::console::terminal_size()
+                .map(|(columns, _)| columns)
                 .filter(|value| *value > 0)
                 .or_else(|| {
                     std::env::var("COLUMNS")

@@ -2705,7 +2705,6 @@ dependencies = [
  "color-eyre",
  "compact_str",
  "crossbeam-channel",
- "crossterm",
  "directories",
  "dunce",
  "embed-resource",

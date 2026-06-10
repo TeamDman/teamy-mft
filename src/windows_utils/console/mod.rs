@@ -11,6 +11,7 @@ mod ctrl_c_handler;
 mod detach;
 mod handles;
 mod init;
+mod terminal_size;
 
 pub use ansi_support::*;
 pub use attach_to_existing::*;
@@ -20,3 +21,4 @@ pub use ctrl_c_handler::*;
 pub use detach::*;
 pub use handles::*;
 pub use init::*;
+pub use terminal_size::*;

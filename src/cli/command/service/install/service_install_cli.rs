@@ -32,51 +32,59 @@ impl ServiceInstallArgs {
     ///
     /// Returns an error if elevation, service registration, or machine config setup fails.
     pub fn invoke(self) -> eyre::Result<()> {
-        let requested_sync_dir = self.sync_dir.clone();
-        match query_service_state(DEFAULT_SERVICE_NAME)? {
-            WindowsServiceState::Missing => {}
-            _ if self.force => {
-                ensure_elevated()?;
-                let current_exe = std::env::current_exe()?;
-                reject_development_target_exe(&current_exe)?;
-                let owner_sid = current_user_sid_string()?;
-                let sync_dir = requested_sync_dir
-                    .clone()
-                    .map(resolve_sync_dir)
-                    .transpose()?;
-                let config = MachineConfig::new(owner_sid.clone(), sync_dir);
-                uninstall_windows_service(&config.service_name)?;
-            }
-            _ => {
-                eyre::bail!(
-                    "Service {} is already installed. Re-run with --force or run `teamy-mft service uninstall` first.",
-                    DEFAULT_SERVICE_NAME
-                );
-            }
-        }
-
-        ensure_elevated()?;
-        let current_exe = std::env::current_exe()?;
-        reject_development_target_exe(&current_exe)?;
-        let owner_sid = current_user_sid_string()?;
-        let sync_dir = requested_sync_dir.map(resolve_sync_dir).transpose()?;
-        let config = MachineConfig::new(owner_sid.clone(), sync_dir);
-        let machine_root = machine_root_dir();
-        std::fs::create_dir_all(&machine_root)?;
-        std::fs::create_dir_all(&config.sync_dir)?;
-        restrict_path_to_owner(&machine_root, &owner_sid)?;
-        restrict_path_to_owner(&config.sync_dir, &owner_sid)?;
-        save_machine_config(&config)?;
-        allow_machine_config_reads(&machine_root, &machine_config_path())?;
-        install_windows_service(&current_exe, &config)?;
-        info!("Installed machine daemon at {}", config.sync_dir.display());
-        println!(
-            "Installed machine daemon cache at {}",
-            config.sync_dir.display()
-        );
-        println!("Run `teamy-mft sync` to publish initial machine-managed snapshots.");
-        Ok(())
+        let config = install_machine_config(self.sync_dir)?;
+        install_machine_daemon_service(&config, self.force)
     }
+}
+
+/// # Errors
+///
+/// Returns an error if elevation, directory creation, ACL changes, or machine config setup fails.
+pub fn install_machine_config(sync_dir: Option<String>) -> eyre::Result<MachineConfig> {
+    ensure_elevated()?;
+    let owner_sid = current_user_sid_string()?;
+    let sync_dir = sync_dir.map(resolve_sync_dir).transpose()?;
+    let config = MachineConfig::new(owner_sid.clone(), sync_dir);
+    let machine_root = machine_root_dir();
+    std::fs::create_dir_all(&machine_root)?;
+    std::fs::create_dir_all(&config.sync_dir)?;
+    restrict_path_to_owner(&machine_root, &owner_sid)?;
+    restrict_path_to_owner(&config.sync_dir, &owner_sid)?;
+    save_machine_config(&config)?;
+    allow_machine_config_reads(&machine_root, &machine_config_path())?;
+    Ok(config)
+}
+
+/// # Errors
+///
+/// Returns an error if elevation, service registration, or development-target validation fails.
+pub fn install_machine_daemon_service(config: &MachineConfig, force: bool) -> eyre::Result<()> {
+    match query_service_state(DEFAULT_SERVICE_NAME)? {
+        WindowsServiceState::Missing => {}
+        _ if force => {
+            ensure_elevated()?;
+            let current_exe = std::env::current_exe()?;
+            reject_development_target_exe(&current_exe)?;
+            uninstall_windows_service(&config.service_name)?;
+        }
+        _ => {
+            eyre::bail!(
+                "Service {} is already installed. Re-run with --force or run `teamy-mft service uninstall` first.",
+                DEFAULT_SERVICE_NAME
+            );
+        }
+    }
+
+    let current_exe = std::env::current_exe()?;
+    reject_development_target_exe(&current_exe)?;
+    install_windows_service(&current_exe, config)?;
+    info!("Installed machine daemon at {}", config.sync_dir.display());
+    println!(
+        "Installed machine daemon cache at {}",
+        config.sync_dir.display()
+    );
+    println!("Run `teamy-mft sync` to publish initial machine-managed snapshots.");
+    Ok(())
 }
 
 fn resolve_sync_dir(path: String) -> eyre::Result<std::path::PathBuf> {
