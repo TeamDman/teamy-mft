@@ -383,6 +383,7 @@ mod tests {
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use crate::windows_utils::storage::DriveLetterPattern;
     use std::ops::ControlFlow;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -408,6 +409,13 @@ mod tests {
         Ok(())
     }
 
+    fn fixture_drive_plan(pattern: &str) -> QueryPlan {
+        QueryPlan {
+            drive_letter_pattern: DriveLetterPattern(String::from("C")),
+            ..QueryPlan::new(pattern)
+        }
+    }
+
     #[test]
     fn published_session_reuses_cached_drive_entries() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
@@ -426,8 +434,8 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
 
-        let first = session.collect_rows(QueryPlan::new("Cargo.toml"))?;
-        let second = session.collect_rows(QueryPlan::new("Repos"))?;
+        let first = session.collect_rows(fixture_drive_plan("Cargo.toml"))?;
+        let second = session.collect_rows(fixture_drive_plan("Repos"))?;
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
@@ -462,7 +470,8 @@ mod tests {
         };
         let cancel = std::sync::atomic::AtomicBool::new(true);
 
-        let rows = session.collect_rows_with_cancel(QueryPlan::new("Cargo.toml"), Some(&cancel))?;
+        let rows =
+            session.collect_rows_with_cancel(fixture_drive_plan("Cargo.toml"), Some(&cancel))?;
 
         assert!(rows.is_empty());
         Ok(())
@@ -493,7 +502,7 @@ mod tests {
         };
         let mut visited = Vec::new();
         session.visit_rows_with_cancel(
-            QueryPlan::new("Repos"),
+            fixture_drive_plan("Repos"),
             None,
             |row| -> eyre::Result<ControlFlow<()>> {
                 visited.push(row.path.to_string());
@@ -504,7 +513,7 @@ mod tests {
         let count = {
             let mut count = 0_usize;
             session.visit_rows_with_cancel(
-                QueryPlan::new("Repos"),
+                fixture_drive_plan("Repos"),
                 None,
                 |_row| -> eyre::Result<ControlFlow<()>> {
                     count += 1;
@@ -542,7 +551,7 @@ mod tests {
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
-        let mut plan = QueryPlan::new("Repos");
+        let mut plan = fixture_drive_plan("Repos");
         plan.limit = 1_usize.into();
         let mut visited = 0_usize;
 
@@ -576,7 +585,7 @@ mod tests {
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
-        let plan = QueryPlan::new("Cargo.toml");
+        let plan = fixture_drive_plan("Cargo.toml");
         let SpawnedQuerySessionStream { stream, query_join } =
             session.spawn_stream(plan.clone(), Arc::new(AtomicBool::new(false)))?;
         let runtime = tokio::runtime::Builder::new_current_thread()

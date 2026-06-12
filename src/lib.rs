@@ -18,6 +18,7 @@ pub mod windows_utils;
 
 use crate::cli::Cli;
 use crate::windows_utils::console::console_attach;
+use chrono::{DateTime, Local, Utc};
 use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::info_span;
@@ -29,14 +30,24 @@ pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
 pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
 pub const APP_BUILD_UNIX_MS: &str = env!("BUILD_UNIX_MS");
 pub const DAEMON_RPC_COMPAT_VERSION: u32 = 8;
-pub const VERSION: &str = concat!(
-    env!("CARGO_PKG_VERSION"),
-    " (rev ",
-    env!("GIT_REVISION"),
-    ", built ",
-    env!("BUILD_UNIX_MS"),
-    ")"
-);
+
+fn version() -> String {
+    let built_at = APP_BUILD_UNIX_MS
+        .parse::<i64>()
+        .ok()
+        .and_then(DateTime::<Utc>::from_timestamp_millis)
+        .map_or_else(
+            || String::from("unknown build time"),
+            |timestamp| {
+                timestamp
+                    .with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S %Z")
+                    .to_string()
+            },
+        );
+
+    format!("{APP_SEMVER} (rev {APP_GIT_REVISION}, built {built_at})")
+}
 
 #[cfg(feature = "tracy")]
 fn tracy_capture_padding(phase: &'static str) {
@@ -71,12 +82,13 @@ pub fn main() -> eyre::Result<()> {
 
     // cli[impl parser.args-consistent]
     // cli[impl parser.roundtrip]
+    let version = version();
     let cli: Cli = figue::Driver::new(
         figue::builder::<Cli>()
             .expect("schema should be valid")
             .cli(move |cli| cli.args_os(std::env::args_os().skip(1)).strict())
             .help(move |help| {
-                help.version(VERSION)
+                help.version(version)
                     .include_implementation_source_file(true)
                     .include_implementation_git_url("TeamDman/teamy-mft", env!("GIT_REVISION"))
             })
