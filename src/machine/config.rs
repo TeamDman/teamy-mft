@@ -20,6 +20,19 @@ pub const SEARCH_INDEX_TEMP_FILE_EXTENSION: &str = "mft_search_index.tmp";
 pub const OVERLAY_SEARCH_INDEX_FILE_EXTENSION: &str = ".mft_overlay_search_index";
 pub const OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION: &str = "mft_overlay_search_index.tmp";
 pub const CHECKPOINT_FILE_EXTENSION: &str = ".mft_checkpoint.json";
+pub const DEFAULT_IGNORED_RULES_PATH_PATTERNS: &[&str] = &[
+    "**/$RECYCLE.BIN/**",
+    "**/AppData/Roaming/Code/User/History/**",
+    "**/AppData/Roaming/Cursor/User/History/**",
+    "**/AppData/Roaming/Windsurf/User/History/**",
+    "**/.config/Code/User/History/**",
+    "**/.config/Cursor/User/History/**",
+    "**/.config/Windsurf/User/History/**",
+    "**/.vscode/**/History/**",
+    "**/CARGO_HOME/registry/src/**",
+    "**/.cargo/registry/src/**",
+    "**/cargo/registry/src/**",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct MachineConfig {
@@ -29,6 +42,8 @@ pub struct MachineConfig {
     pub pipe_name: String,
     pub service_name: String,
     pub idle_timeout_secs: u64,
+    #[facet(default)]
+    pub ignored_rules_path_patterns: Vec<String>,
 }
 
 impl MachineConfig {
@@ -41,8 +56,25 @@ impl MachineConfig {
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
+            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
         }
     }
+
+    #[must_use]
+    pub fn with_normalized_defaults(mut self) -> Self {
+        if self.ignored_rules_path_patterns.is_empty() {
+            self.ignored_rules_path_patterns = default_ignored_rules_path_patterns();
+        }
+        self
+    }
+}
+
+#[must_use]
+pub fn default_ignored_rules_path_patterns() -> Vec<String> {
+    DEFAULT_IGNORED_RULES_PATH_PATTERNS
+        .iter()
+        .map(|pattern| (*pattern).to_owned())
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,7 +290,7 @@ pub fn load_machine_config() -> eyre::Result<Option<MachineConfig>> {
 
     let config = facet_json::from_str::<MachineConfig>(&fs::read_to_string(&path)?)
         .map_err(|error| eyre::eyre!("Failed parsing {}: {error}", path.display()))?;
-    Ok(Some(config))
+    Ok(Some(config.with_normalized_defaults()))
 }
 
 /// # Errors
@@ -334,6 +366,7 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
+            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
         }),
         Err(error) if is_access_denied_error(&error) => Ok(MachineConfig {
             version: 1,
@@ -342,6 +375,7 @@ pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
             pipe_name: String::from(DEFAULT_PIPE_NAME),
             service_name: String::from(DEFAULT_SERVICE_NAME),
             idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
+            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
         }),
         Err(error) => Err(error),
     }
@@ -399,4 +433,51 @@ pub fn is_access_denied_error(error: &eyre::Report) -> bool {
         .chain()
         .filter_map(|source| source.downcast_ref::<io::Error>())
         .any(|source| source.kind() == io::ErrorKind::PermissionDenied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DEFAULT_IGNORED_RULES_PATH_PATTERNS;
+    use super::MachineConfig;
+
+    #[test]
+    fn new_machine_config_includes_default_ignored_rules_paths() {
+        let config = MachineConfig::new(String::from("owner"), None);
+
+        assert_eq!(
+            config.ignored_rules_path_patterns,
+            super::default_ignored_rules_path_patterns()
+        );
+    }
+
+    #[test]
+    fn legacy_machine_config_without_ignored_rules_paths_still_parses() {
+        let config = facet_json::from_str::<MachineConfig>(
+            r#"{
+                "version": 1,
+                "owner_sid": "owner",
+                "sync_dir": "C:\\ProgramData\\teamy_mft\\cache",
+                "pipe_name": "\\\\.\\pipe\\teamy-mft-daemon",
+                "service_name": "teamy-mft-daemon",
+                "idle_timeout_secs": 300
+            }"#,
+        )
+        .expect("legacy machine config should parse")
+        .with_normalized_defaults();
+
+        assert_eq!(
+            config.ignored_rules_path_patterns,
+            super::default_ignored_rules_path_patterns()
+        );
+        assert!(
+            config
+                .ignored_rules_path_patterns
+                .iter()
+                .any(|pattern| pattern.contains("CARGO_HOME"))
+        );
+        assert_eq!(
+            config.ignored_rules_path_patterns.len(),
+            DEFAULT_IGNORED_RULES_PATH_PATTERNS.len()
+        );
+    }
 }

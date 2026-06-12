@@ -1,3 +1,4 @@
+use crate::machine::config::load_machine_client_config;
 use crate::machine::config::published_drive_paths;
 use crate::query::QueryNeedle;
 use crate::query::QueryPlan;
@@ -79,6 +80,38 @@ enum CompiledPathRule {
     },
 }
 
+#[derive(Debug, Clone)]
+struct RulesPathIgnoreSet {
+    matchers: Vec<(String, GlobMatcher)>,
+}
+
+impl RulesPathIgnoreSet {
+    fn from_patterns(patterns: &[String]) -> eyre::Result<Self> {
+        let matchers = patterns
+            .iter()
+            .map(|pattern| {
+                let normalized_pattern = normalize_path_pattern(pattern);
+                let matcher = GlobBuilder::new(&normalized_pattern)
+                    .case_insensitive(true)
+                    .backslash_escape(false)
+                    .build()
+                    .wrap_err_with(|| format!("invalid ignored rules path pattern `{pattern}`"))?
+                    .compile_matcher();
+                Ok((normalized_pattern, matcher))
+            })
+            .collect::<eyre::Result<Vec<_>>>()?;
+        Ok(Self { matchers })
+    }
+
+    fn is_ignored(&self, path: &Path) -> Option<&str> {
+        let normalized_path = normalize_path_like(path);
+        self.matchers
+            .iter()
+            .find(|(_, matcher)| matcher.is_match(&normalized_path))
+            .map(|(pattern, _)| pattern.as_str())
+    }
+}
+
 impl QueryFilterRules {
     /// Build an empty rule set that excludes nothing.
     #[must_use]
@@ -102,13 +135,16 @@ impl QueryFilterRules {
         sync_dir: &Path,
     ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
         let _span = info_span!("discover_query_rule_files").entered();
+        let ignored_rules = RulesPathIgnoreSet::from_patterns(
+            &load_machine_client_config()?.ignored_rules_path_patterns,
+        )?;
         let rules_query = QueryPlan::single_rule(QueryRule::EndsWithCaseInsensitive(
             QueryNeedle::new(RULES_FILE_EXTENSION),
         ));
         let results: Vec<eyre::Result<Vec<DiscoveredRuleFile>>> = drive_letters
             .par_iter()
             .map(|drive_letter| {
-                discover_rule_files_for_drive(*drive_letter, sync_dir, &rules_query)
+                discover_rule_files_for_drive(*drive_letter, sync_dir, &rules_query, &ignored_rules)
             })
             .collect();
 
@@ -406,6 +442,7 @@ fn discover_rule_files_for_drive(
     drive_letter: char,
     sync_dir: &Path,
     rules_query: &QueryPlan,
+    ignored_rules: &RulesPathIgnoreSet,
 ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
     let paths = published_drive_paths(sync_dir, drive_letter);
     if !paths.base_index_path.is_file() {
@@ -414,6 +451,15 @@ fn discover_rule_files_for_drive(
 
     let mut files = Vec::new();
     visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
+        if let Some(pattern) = ignored_rules.is_ignored(row.path.as_ref()) {
+            debug!(
+                drive = %drive_letter,
+                path = %row.path.display(),
+                pattern,
+                "Skipping ignored rules file during query discovery"
+            );
+            return Ok(ControlFlow::Continue(()));
+        }
         let Some(file) = load_rules_file(drive_letter, row.path.as_ref())? else {
             return Ok(ControlFlow::Continue(()));
         };
@@ -669,6 +715,10 @@ fn normalize_path_like(path: &Path) -> String {
     normalized.to_ascii_lowercase()
 }
 
+fn normalize_path_pattern(pattern: &str) -> String {
+    pattern.replace('\\', "/").to_ascii_lowercase()
+}
+
 fn resolve_rule_pattern_path(
     pattern: &str,
     rules_path: &Path,
@@ -807,6 +857,7 @@ mod tests {
     use super::QueryFilterRules;
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
+    use crate::machine::config::default_ignored_rules_path_patterns;
     use crate::query::QueryNeedle;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
@@ -1230,6 +1281,42 @@ mod tests {
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].path, rules_path);
         Ok(())
+    }
+
+    #[test]
+    fn default_ignored_rules_paths_skip_editor_history_and_cargo_registry_copies() {
+        let ignored =
+            super::RulesPathIgnoreSet::from_patterns(&default_ignored_rules_path_patterns())
+                .expect("default ignored rules patterns should compile");
+
+        assert!(
+            ignored
+                .is_ignored(Path::new(
+                    r"C:\Users\Teamy\AppData\Roaming\Code\User\History\5c6d9dd2\bKYf.teamy_mft_rules"
+                ))
+                .is_some()
+        );
+        assert!(
+            ignored
+                .is_ignored(Path::new(
+                    r"G:\Programming\Caches\CARGO_HOME\registry\src\index.crates.io-1949cf8c6b5b557f\teamy-mft-0.7.0\.config\teamy-mft-rules.teamy_mft_rules"
+                ))
+                .is_some()
+        );
+        assert!(
+            ignored
+                .is_ignored(Path::new(
+                    r"G:\$RECYCLE.BIN\S-1-5-21-3769910471-3925210675-2455346526-1000\$IQZKHL4.teamy_mft_rules"
+                ))
+                .is_some()
+        );
+        assert!(
+            ignored
+                .is_ignored(Path::new(
+                    r"G:\Programming\Repos\real-project\.config\teamy-mft-rules.teamy_mft_rules"
+                ))
+                .is_none()
+        );
     }
 
     #[test]
