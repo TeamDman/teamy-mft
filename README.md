@@ -78,7 +78,7 @@ See [`examples/query_git_repos.rs`](examples/query_git_repos.rs) for a runnable 
 
 ```
 ❯ teamy-mft --help     
-teamy-mft.exe 0.5.0 (rev 12b4a4f)
+teamy-mft.exe 0.7.0 (rev <git>, built <local datetime>)
 
 Teamy MFT command-line interface.
 Environment variables:
