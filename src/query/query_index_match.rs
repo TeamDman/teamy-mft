@@ -7,6 +7,12 @@ pub fn matching_row_indices_for_rule(
     parsed_index: &ParsedSearchIndex<'_>,
     rule: &QueryRule,
 ) -> eyre::Result<Vec<u32>> {
+    if rule.is_match_all() {
+        let row_count = u32::try_from(parsed_index.row_count())
+            .wrap_err("Parsed search index row count does not fit into u32")?;
+        return Ok((0..row_count).collect());
+    }
+
     if let Some(normalized_suffix) = rule.normalized_extension_suffix() {
         return Ok(match parsed_index.extension_postings(normalized_suffix)? {
             Some(iter) => iter.collect(),
@@ -269,6 +275,16 @@ mod tests {
             .expect("rule should parse");
 
         assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn match_all_rule_returns_every_row_index() -> eyre::Result<()> {
+        let parsed = parse_fixture_index()?;
+        let rule = "<>".parse::<QueryRule>().expect("rule should parse");
+
+        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1, 2]);
 
         Ok(())
     }

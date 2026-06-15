@@ -56,6 +56,10 @@ impl QueryGroup {
         F: Fn() -> I,
     {
         self.rules.iter().all(|rule| {
+            if rule.is_match_all() {
+                return true;
+            }
+
             make_segments().any(|(segment, normalized_segment)| {
                 rule.matches_preprocessed(segment, Some(normalized_segment))
             })
@@ -65,6 +69,10 @@ impl QueryGroup {
     #[must_use]
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         self.rules.iter().all(|rule| {
+            if rule.is_match_all() {
+                return true;
+            }
+
             if let Some(normalized_haystack) = normalized_haystack {
                 if rule.matches_only_terminal_segment() {
                     terminal_path_segment(haystack)
