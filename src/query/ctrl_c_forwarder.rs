@@ -1,11 +1,18 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-#[derive(Debug)]
 pub struct CtrlCForwarder<T> {
     stop: Arc<AtomicBool>,
     join: std::thread::JoinHandle<T>,
+    cancel_tx: Option<Arc<Mutex<Option<vox::Tx<u8>>>>>,
+}
+
+impl<T> std::fmt::Debug for CtrlCForwarder<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CtrlCForwarder").finish_non_exhaustive()
+    }
 }
 
 impl<T> CtrlCForwarder<T>
@@ -26,7 +33,11 @@ where
             }
             on_interrupt()
         });
-        Self { stop, join }
+        Self {
+            stop,
+            join,
+            cancel_tx: None,
+        }
     }
 
     fn join_stopped(self) -> std::thread::Result<T> {
@@ -37,22 +48,44 @@ where
 
 impl CtrlCForwarder<eyre::Result<()>> {
     pub fn spawn_sender(cancel_tx: vox::Tx<u8>) -> Self {
-        Self::spawn(Ok(()), move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(async move {
-                let _ = cancel_tx.send(1).await;
-                let _ = cancel_tx.close(Vec::new()).await;
-            });
-            Ok(())
-        })
+        let cancel_tx = Arc::new(Mutex::new(Some(cancel_tx)));
+        let mut forwarder = Self::spawn(Ok(()), {
+            let cancel_tx = Arc::clone(&cancel_tx);
+            move || Self::send_cancel(cancel_tx)
+        });
+        forwarder.cancel_tx = Some(cancel_tx);
+        forwarder
+    }
+
+    pub fn request_cancel(&self) -> eyre::Result<()> {
+        let Some(cancel_tx) = &self.cancel_tx else {
+            return Ok(());
+        };
+        Self::send_cancel(Arc::clone(cancel_tx))
     }
 
     pub fn finish(self) -> eyre::Result<()> {
         self.join_stopped().map_err(|join_error| {
             eyre::eyre!("Daemon cancel forwarder thread panicked: {join_error:?}")
         })?
+    }
+
+    fn send_cancel(cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>) -> eyre::Result<()> {
+        let Some(cancel_tx) = cancel_tx
+            .lock()
+            .map_err(|_| eyre::eyre!("Daemon cancel sender mutex poisoned"))?
+            .take()
+        else {
+            return Ok(());
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let _ = cancel_tx.send(1).await;
+            let _ = cancel_tx.close(Vec::new()).await;
+        });
+        Ok(())
     }
 }
 

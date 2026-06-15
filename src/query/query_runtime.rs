@@ -83,7 +83,7 @@ impl QueryRuntime {
     fn visit_daemon_rows_from_channel(
         mut rows_rx: vox::Rx<QueryResultRow>,
         visit: &mut QueryRowVisitor<'_>,
-    ) -> eyre::Result<()> {
+    ) -> eyre::Result<ControlFlow<(), ()>> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -94,12 +94,11 @@ impl QueryRuntime {
                 Err(error) => eyre::bail!("Failed receiving streamed query row: {error}"),
             } {
                 if visit(row)? == ControlFlow::Break(()) {
-                    break;
+                    return eyre::Ok(ControlFlow::Break(()));
                 }
             }
-            Ok::<(), eyre::Report>(())
-        })?;
-        Ok(())
+            eyre::Ok(ControlFlow::Continue(()))
+        })
     }
 }
 
@@ -173,13 +172,17 @@ impl DaemonQueryVisitor {
 
     fn visit_rows(self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
         let visit_result = QueryRuntime::visit_daemon_rows_from_channel(self.rows_rx, visit);
+        if matches!(visit_result, Ok(ControlFlow::Break(()))) {
+            self.cleanup.cancel_signal.request_cancel()?;
+        }
         let cleanup_result = self.cleanup.finish();
         match (visit_result, cleanup_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
+            (Ok(_), Ok(())) => Ok(()),
+            (Err(error), Ok(())) => Err(error.wrap_err("visitor failed")),
+            (Ok(_), Err(error)) => Err(error.wrap_err("cleanup failed")),
             (Err(visit_error), Err(cleanup_error)) => Err(visit_error
-                .wrap_err(format!("Daemon query cleanup also failed: {cleanup_error}"))),
+                .wrap_err("visitor failed")
+                .wrap_err(format!("cleanup also failed: {cleanup_error}"))),
         }
     }
 }
@@ -215,8 +218,3 @@ mod tests {
         assert_eq!(QueryRuntime::daemon_rpc(), QueryRuntime::DaemonRpc);
     }
 }
-
-
-
-
-
