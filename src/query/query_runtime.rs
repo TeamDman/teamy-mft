@@ -64,22 +64,22 @@ impl QueryRuntime {
     ///
     /// Returns an error if preparing the configured backend fails or if
     /// collecting rows from the resulting stream fails.
-    pub fn collect_rows(self, request: QueryPlan) -> eyre::Result<Vec<QueryResultRow>> {
-        let limit = request.limit;
-        self.prepare_stream(request)?.collect_rows(limit)
+    pub fn collect_rows(self, query_plan: QueryPlan) -> eyre::Result<Vec<QueryResultRow>> {
+        let limit = query_plan.limit;
+        self.prepare_stream(query_plan)?.collect_rows(limit)
     }
 
     /// # Errors
     ///
     /// Returns an error if the configured backend cannot be prepared.
-    pub fn prepare_stream(self, request: QueryPlan) -> eyre::Result<PreparedQueryStream> {
+    pub fn prepare_stream(self, query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         match self {
-            Self::PublishedIndexOnly => Self::prepare_session_query_stream(request),
-            Self::DaemonRpc => Self::prepare_daemon_query_stream(request),
+            Self::PublishedIndexOnly => Self::prepare_session_query_stream(query_plan),
+            Self::DaemonRpc => Self::prepare_daemon_query_stream(query_plan),
         }
     }
 
-    fn prepare_daemon_query_stream(request: QueryPlan) -> eyre::Result<PreparedQueryStream> {
+    fn prepare_daemon_query_stream(query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
         let config = crate::machine::ipc::load_machine_daemon_client_config()?;
         crate::machine::ipc::ensure_daemon_ready(&config)?;
@@ -87,7 +87,7 @@ impl QueryRuntime {
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
         let (cancel_tx, cancel_rx) = vox::channel::<u8>();
         let response_join = std::thread::spawn(move || {
-            crate::machine::ipc::query_stream(&config, request, rows_tx, logs_tx, cancel_rx)
+            crate::machine::ipc::query_stream(&config, query_plan, rows_tx, logs_tx, cancel_rx)
                 .wrap_err(
                     "Daemon query failed, re-run without `--daemon` to query the published disk cache",
                 )
@@ -103,11 +103,11 @@ impl QueryRuntime {
         })
     }
 
-    fn prepare_session_query_stream(request: QueryPlan) -> eyre::Result<PreparedQueryStream> {
+    fn prepare_session_query_stream(query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_signal = CtrlCForwarder::spawn_flag(Arc::clone(&cancel));
-        let spawned = QuerySession::published_index_only()?.spawn_stream(request, cancel)?;
+        let spawned = QuerySession::published_index_only()?.spawn_stream(query_plan, cancel)?;
         Ok(PreparedQueryStream {
             stream: spawned.stream,
             cleanup: QueryStreamCleanup::Local(LocalQueryCleanup {

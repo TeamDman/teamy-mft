@@ -132,7 +132,7 @@ struct DaemonQueryOutcome {
 
 enum DriveWorkerCommand {
     Query {
-        request: QueryPlan,
+        query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
         cancel: Arc<AtomicBool>,
@@ -170,7 +170,7 @@ struct DriveWorker {
 
 enum DaemonWorkerCommand {
     Sync {
-        request: SyncPlan,
+        sync_plan: SyncPlan,
         correlation_id: CorrelationId,
         response: oneshot::Sender<Result<(), MachineError>>,
     },
@@ -262,7 +262,7 @@ impl DriveWorker {
 
     async fn query(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
         cancel: Arc<AtomicBool>,
@@ -270,7 +270,7 @@ impl DriveWorker {
         let (response, rx) = oneshot::channel();
         self.tx
             .send(DriveWorkerCommand::Query {
-                request,
+                query_plan,
                 correlation_id,
                 rpc_method,
                 cancel,
@@ -466,7 +466,7 @@ fn run_drive_worker(
         }
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(DriveWorkerCommand::Query {
-                request,
+                query_plan,
                 correlation_id,
                 rpc_method,
                 cancel,
@@ -489,7 +489,7 @@ fn run_drive_worker(
                         })
                     } else {
                         std::panic::catch_unwind(AssertUnwindSafe(|| {
-                            state.query_with_cancel(&request, &cancel)
+                            state.query_with_cancel(&query_plan, &cancel)
                         }))
                         .map_err(|payload| {
                             machine_error_from_panic("query request panicked", payload)
@@ -628,24 +628,24 @@ impl DaemonWorker {
 
     async fn query(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
         cancel: Arc<AtomicBool>,
     ) -> Result<DaemonQueryOutcome, MachineError> {
-        self.query_drive_workers(request, correlation_id, rpc_method, cancel)
+        self.query_drive_workers(query_plan, correlation_id, rpc_method, cancel)
             .await
     }
 
     async fn sync(
         &self,
-        request: SyncPlan,
+        sync_plan: SyncPlan,
         correlation_id: CorrelationId,
     ) -> Result<(), MachineError> {
         let (response, rx) = oneshot::channel();
         self.tx
             .send(DaemonWorkerCommand::Sync {
-                request,
+                sync_plan,
                 correlation_id,
                 response,
             })
@@ -713,7 +713,7 @@ impl DaemonWorker {
 impl DaemonWorker {
     async fn query_drive_workers(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
         cancel: Arc<AtomicBool>,
@@ -721,7 +721,7 @@ impl DaemonWorker {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
         let mut degraded_drives = Vec::new();
-        let drive_letters = request
+        let drive_letters = query_plan
             .drive_letter_pattern
             .clone()
             .into_drive_letters()
@@ -732,8 +732,8 @@ impl DaemonWorker {
                 tracing::warn!("Daemon query cancelled by client");
                 break;
             }
-            let mut per_drive_request = request.clone();
-            if let Some(limit) = request.limit.get() {
+            let mut per_drive_request = query_plan.clone();
+            if let Some(limit) = query_plan.limit.get() {
                 let Some(remaining) = limit.checked_sub(rows.len()) else {
                     break;
                 };
@@ -816,15 +816,15 @@ fn run_daemon_worker(
         }
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(DaemonWorkerCommand::Sync {
-                request,
+                sync_plan,
                 correlation_id,
                 response,
             }) => {
                 state.active_jobs += 1;
                 publish_worker_status(state, status);
-                if request.path.is_none() {
+                if sync_plan.path.is_none() {
                     let drive_letters =
-                        match request.drive_letter_pattern.clone().into_drive_letters() {
+                        match sync_plan.drive_letter_pattern.clone().into_drive_letters() {
                             Ok(drive_letters) => drive_letters,
                             Err(error) => {
                                 state.active_jobs = state.active_jobs.saturating_sub(1);
@@ -849,7 +849,7 @@ fn run_daemon_worker(
                 );
                 let result = {
                     let _entered = span.enter();
-                    run_daemon_worker_sync(state, request)
+                    run_daemon_worker_sync(state, sync_plan)
                 };
                 state.active_jobs = state.active_jobs.saturating_sub(1);
                 publish_worker_status(state, status);
@@ -1211,11 +1211,11 @@ impl MachineDaemonService {
 
     async fn run_query_in_span(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
         let worker = self.worker.clone();
-        let request_for_body = request.clone();
+        let query_plan_for_body = query_plan.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
@@ -1223,14 +1223,14 @@ impl MachineDaemonService {
         );
         async move {
             tracing::info!(
-                query_groups = request_for_body.query.groups().len(),
-                drive_pattern = %request_for_body.drive_letter_pattern,
-                limit = ?request_for_body.limit,
+                query_groups = query_plan_for_body.query.groups().len(),
+                drive_pattern = %query_plan_for_body.drive_letter_pattern,
+                limit = ?query_plan_for_body.limit,
                 "Running daemon query"
             );
             match worker
                 .query(
-                    request_for_body,
+                    query_plan_for_body,
                     correlation_id.clone(),
                     "query",
                     Arc::new(AtomicBool::new(false)),
@@ -1253,13 +1253,13 @@ impl MachineDaemonService {
 
     async fn run_query_stream_in_span(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         rows: &vox::Tx<QueryResultRow>,
         cancel: &mut vox::Rx<u8>,
         correlation_id: &CorrelationId,
     ) -> Result<(), MachineError> {
         let worker = self.worker.clone();
-        let request_for_body = request.clone();
+        let query_plan_for_body = query_plan.clone();
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let cancel_flag_for_watcher = Arc::clone(&cancel_flag);
         let span = tracing::info_span!(
@@ -1269,14 +1269,14 @@ impl MachineDaemonService {
         );
         async move {
             tracing::info!(
-                query_groups = request_for_body.query.groups().len(),
-                drive_pattern = %request_for_body.drive_letter_pattern,
-                limit = ?request_for_body.limit,
+                query_groups = query_plan_for_body.query.groups().len(),
+                drive_pattern = %query_plan_for_body.drive_letter_pattern,
+                limit = ?query_plan_for_body.limit,
                 "Running daemon streamed query"
             );
             let mut emitted_rows = 0usize;
             let query = worker.query(
-                request_for_body.clone(),
+                query_plan_for_body.clone(),
                 correlation_id.clone(),
                 "query_stream",
                 Arc::clone(&cancel_flag),
@@ -1304,7 +1304,7 @@ impl MachineDaemonService {
                     tracing::warn!("Daemon query stream cancelled by client");
                     return Ok(());
                 }
-                if request_for_body
+                if query_plan_for_body
                     .limit
                     .is_some_and(|limit| emitted_rows >= limit)
                 {
@@ -1425,13 +1425,13 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn query(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<RpcQueryResponse, MachineError> {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let response = self
-            .run_query_in_span(request, &correlation_id)
+            .run_query_in_span(query_plan, &correlation_id)
             .await
             .map(|rows| RpcQueryResponse {
                 correlation_id: correlation_id.clone(),
@@ -1443,7 +1443,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn query_stream(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
         mut cancel: vox::Rx<u8>,
@@ -1451,7 +1451,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         let correlation_id = next_correlation_id("query");
         let log_forwarder = spawn_correlation_log_forwarder(correlation_id.clone(), logs);
         let response = self
-            .run_query_stream_in_span(request, &rows, &mut cancel, &correlation_id)
+            .run_query_stream_in_span(query_plan, &rows, &mut cancel, &correlation_id)
             .await;
         match response {
             Ok(()) => {

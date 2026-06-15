@@ -60,12 +60,12 @@ impl DaemonCompatibility {
 /// the daemon's structured machine error contract.
 pub fn query(
     config: &MachineConfig,
-    request: QueryPlan,
+    query_plan: QueryPlan,
     logs: vox::Tx<DaemonLogWireEvent>,
 ) -> eyre::Result<Vec<QueryResultRow>> {
     with_client(config, "query", move |client| async move {
         client
-            .query(request, logs)
+            .query(query_plan, logs)
             .await
             .map(|response| response.rows)
     })
@@ -77,13 +77,13 @@ pub fn query(
 /// the daemon's structured machine error contract.
 pub fn query_stream(
     config: &MachineConfig,
-    request: QueryPlan,
+    query_plan: QueryPlan,
     rows: vox::Tx<QueryResultRow>,
     logs: vox::Tx<DaemonLogWireEvent>,
     cancel: vox::Rx<u8>,
 ) -> eyre::Result<CorrelationId> {
     with_client(config, "query_stream", move |client| async move {
-        client.query_stream(request, rows, logs, cancel).await
+        client.query_stream(query_plan, rows, logs, cancel).await
     })
 }
 
