@@ -195,7 +195,7 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
                     let name_utf16_off = value_abs + 0x42;
                     let name_bytes_end = name_utf16_off + name_len * 2;
                     if name_bytes_end <= entry_bytes.len() {
-                        #[allow(
+                        #[expect(
                             clippy::cast_ptr_alignment,
                             reason = "NTFS data is expected to be properly aligned for u16"
                         )]

@@ -122,10 +122,6 @@ impl QueryArgs {
     /// Returns an error if the query is empty or invalid, drive letters cannot be resolved,
     /// the daemon transport fails, the machine cache is unavailable, the query scope cannot
     /// be canonicalized, or if daemon/disk-backed index reads fail.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "This method centralizes the query source selection behavior"
-    )]
     pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;

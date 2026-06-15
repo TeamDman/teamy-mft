@@ -40,7 +40,7 @@ impl RulesAddArgs {
     ///
     /// Returns an error if the machine cache is unavailable, rule discovery fails, or the
     /// selected rules file cannot be written.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "Rule mutation stays procedural here to keep the file-selection flow direct"
     )]

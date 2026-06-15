@@ -12,7 +12,7 @@ use figue::{self as args};
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
 // cli[impl command.query.drive-pattern-selection]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "CLI flags map directly to independent query toggles"
 )]
@@ -255,15 +255,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_exact_rule_error_is_preserved() {
+    fn empty_exact_syntax_now_builds_a_match_all_rule() {
         let query_inputs = vec!["<>".to_owned()];
-        let error =
-            QueryPlan::parse_inputs(&query_inputs).expect_err("empty exact rule should fail");
-        assert!(
-            error
-                .to_string()
-                .contains("exact query rule cannot be empty")
-        );
+        let plan = QueryPlan::parse_inputs(&query_inputs).expect("match-all query should parse");
+
+        assert!(plan.query.matches("alpha/beta.txt"));
+        assert!(plan.query.matches(""));
     }
 
     #[test]
@@ -368,6 +365,14 @@ mod tests {
                 ]
             ),
             vec!["repo/.git"]
+        );
+    }
+
+    #[test]
+    fn match_all_rule_matches_every_candidate_path() {
+        assert_eq!(
+            matching_paths(&["<>"], &["repo/.git", "repo/src/main.rs", "README"]),
+            vec!["repo/.git", "repo/src/main.rs", "README"]
         );
     }
 

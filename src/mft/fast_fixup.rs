@@ -230,7 +230,7 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     let (elapsed, rate) = {
         let _span = debug_span!("compute_fixup_telemetry").entered();
         let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
-        #[allow(
+        #[expect(
             clippy::cast_precision_loss,
             reason = "precision loss is acceptable for size estimation"
         )]

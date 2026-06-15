@@ -37,7 +37,7 @@ impl RulesRemoveArgs {
     ///
     /// Returns an error if the machine cache is unavailable, rule discovery fails, or
     /// matching rule files cannot be rewritten.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "Rule mutation stays procedural here to keep the file-selection flow direct"
     )]

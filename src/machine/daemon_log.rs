@@ -540,7 +540,7 @@ fn is_span_transition_event(event: &DaemonLogEvent) -> bool {
     matches!(event.message.as_str(), "enter_span" | "exit_span")
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "daemon log formatting keeps each emitted field mapping explicit"
 )]

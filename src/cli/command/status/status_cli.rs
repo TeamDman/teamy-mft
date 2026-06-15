@@ -8,7 +8,7 @@ use std::time::SystemTime;
 /// Show freshness information for cached `.mft` and `.mft_search_index` files.
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 #[facet(rename_all = "kebab-case")]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "These booleans are independent CLI flags rather than internal state"
 )]
@@ -254,7 +254,7 @@ fn print_daemon_summary(summary: &DaemonStatusSummary, verbose: bool) {
     }
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "Verbose status output is intentionally emitted as a flat summary block"
 )]
@@ -580,7 +580,7 @@ fn print_cache_summary(
     }
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "Verbose daemon-backed cache status is intentionally emitted as a flat summary block"
 )]

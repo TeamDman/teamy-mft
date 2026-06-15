@@ -108,7 +108,7 @@ impl Iterator for MftRecordAttributeRunListIter<'_> {
             }
             self.pos += offset_size as usize;
             self.last_lcn = self.last_lcn.wrapping_add(delta);
-            #[allow(
+            #[expect(
                 clippy::cast_sign_loss,
                 reason = "LCN can be negative in NTFS but is cast to u64 for API compatibility"
             )]
@@ -167,11 +167,11 @@ impl MftRecordAttributeRunListOwned {
             if length_clusters == 0 {
                 continue;
             }
-            #[allow(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
+            #[expect(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
             let length = length_clusters as usize * cluster_size;
             let kind = match run.local_cluster_network_start_entry_index {
                 Some(lcn) => LogicalFileSegmentKind::Physical {
-                    #[allow(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
+                    #[expect(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
                     physical_offset: lcn as usize * cluster_size,
                 },
                 None => LogicalFileSegmentKind::Sparse,

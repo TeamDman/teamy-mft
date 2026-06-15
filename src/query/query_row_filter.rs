@@ -6,7 +6,7 @@ use crate::query::resolve_query_scope;
 use std::path::Path;
 
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "Query filter flags mirror independent CLI/RPC filtering switches"
 )]

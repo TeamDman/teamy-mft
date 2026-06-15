@@ -26,7 +26,7 @@ use tracing::Instrument;
 const DAEMON_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "Status output needs explicit per-field compatibility booleans"
 )]

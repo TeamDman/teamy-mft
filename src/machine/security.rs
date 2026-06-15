@@ -67,7 +67,7 @@ use windows::core::PCWSTR;
 use windows::core::PWSTR;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "Protection status is reported as explicit flat CLI fields"
 )]
@@ -453,7 +453,7 @@ impl PathSecurity {
             return Ok(Vec::new());
         };
         let mut acl_info = ACL_SIZE_INFORMATION::default();
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "ACL_SIZE_INFORMATION size fits in u32"
         )]
@@ -637,7 +637,7 @@ pub fn named_pipe_security_attributes(owner_sid: &str) -> eyre::Result<OwnedSecu
         )
     }?;
 
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "SECURITY_ATTRIBUTES length fits in u32 on supported Windows targets"
     )]

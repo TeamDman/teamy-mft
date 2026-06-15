@@ -44,7 +44,7 @@ impl From<usize> for FacetSafeNonZeroUsizeOption {
     }
 }
 
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "facet proxy conversion callbacks require a Result-returning signature"
 )]
@@ -57,7 +57,7 @@ unsafe fn facet_safe_non_zero_usize_option_proxy_convert_out(
     unsafe {
         let limit = target_ptr.get::<FacetSafeNonZeroUsizeOption>();
         let proxy = usize::from(limit);
-        #[allow(
+        #[expect(
             clippy::cast_ptr_alignment,
             reason = "facet allocates proxy storage with the alignment required by the proxy type"
         )]
@@ -67,7 +67,7 @@ unsafe fn facet_safe_non_zero_usize_option_proxy_convert_out(
     }
 }
 
-#[allow(
+#[expect(
     clippy::unnecessary_wraps,
     reason = "facet proxy conversion callbacks require a Result-returning signature"
 )]
@@ -79,7 +79,7 @@ unsafe fn facet_safe_non_zero_usize_option_proxy_convert_in(
     // points at facet-managed storage for the destination wrapper.
     unsafe {
         let proxy = proxy_ptr.read::<usize>();
-        #[allow(
+        #[expect(
             clippy::cast_ptr_alignment,
             reason = "facet allocates target storage with the alignment required by the target type"
         )]

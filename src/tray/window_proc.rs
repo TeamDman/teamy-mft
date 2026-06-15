@@ -224,7 +224,7 @@ impl TrayWindowState {
         }
     }
 
-    #[allow(
+    #[expect(
         clippy::undocumented_unsafe_blocks,
         reason = "Win32 menu interactions are localized here and documented inline where helpful"
     )]
@@ -273,10 +273,6 @@ impl TrayWindowState {
         let mut cursor_pos = POINT::default();
         // SAFETY: `cursor_pos` points to writable stack storage for the current cursor position.
         let _ = unsafe { GetCursorPos(&raw mut cursor_pos) };
-        #[allow(
-            clippy::cast_sign_loss,
-            reason = "Windows APIs return signed command ids and coordinates that are consumed as usize here"
-        )]
         let selection = unsafe {
             TrackPopupMenu(
                 menu,
@@ -293,7 +289,7 @@ impl TrayWindowState {
         // SAFETY: `menu` was created in this function and has not yet been destroyed.
         let _ = unsafe { DestroyMenu(menu) };
 
-        #[allow(
+        #[expect(
             clippy::cast_sign_loss,
             reason = "TrackPopupMenu returns a command id promoted from a signed Win32 type"
         )]
@@ -319,19 +315,11 @@ fn load_config_for_tray_logs() -> Option<crate::machine::config::MachineConfig> 
     }
 }
 
-#[allow(
-    clippy::undocumented_unsafe_blocks,
-    reason = "These helpers store and recover tray state through the Win32 user-data slot"
-)]
 fn store_state(hwnd: HWND, state: Box<TrayWindowState>) {
     // SAFETY: We store the boxed state pointer in the window user data slot for later retrieval in this module.
     unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize) };
 }
 
-#[allow(
-    clippy::undocumented_unsafe_blocks,
-    reason = "These helpers store and recover tray state through the Win32 user-data slot"
-)]
 fn with_state(hwnd: HWND, action: impl FnOnce(&mut TrayWindowState)) {
     // SAFETY: We only read the user data slot associated with this tray window.
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
@@ -343,10 +331,6 @@ fn with_state(hwnd: HWND, action: impl FnOnce(&mut TrayWindowState)) {
     action(state);
 }
 
-#[allow(
-    clippy::undocumented_unsafe_blocks,
-    reason = "These helpers store and recover tray state through the Win32 user-data slot"
-)]
 fn drop_state(hwnd: HWND) {
     // SAFETY: We clear and recover the pointer stored by `store_state` exactly once during teardown.
     let ptr = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) };
@@ -356,10 +340,6 @@ fn drop_state(hwnd: HWND) {
     }
 }
 
-#[allow(
-    clippy::undocumented_unsafe_blocks,
-    reason = "The Win32 window procedure must use unsafe FFI calls throughout its message dispatch"
-)]
 pub unsafe extern "system" fn window_proc(
     hwnd: HWND,
     message: u32,
@@ -377,7 +357,7 @@ pub unsafe extern "system" fn window_proc(
             }
         }
         WM_USER_TRAY_CALLBACK => {
-            #[allow(
+            #[expect(
                 clippy::cast_sign_loss,
                 clippy::cast_possible_truncation,
                 reason = "Win32 callback payloads use LPARAM-backed integers that must be matched against message constants"

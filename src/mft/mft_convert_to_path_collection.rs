@@ -77,7 +77,7 @@ pub fn convert_mft_file_to_path_collection(
     let path_resolve_elapsed = Time::new::<second>(path_resolve_start.elapsed().as_secs_f64());
     let total_paths = multi.total_paths();
     let resolved_entries = multi.0.iter().filter(|v| !v.is_empty()).count();
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "counts may exceed 2^52 but we only use them for rate reporting"
     )]
@@ -107,13 +107,13 @@ pub fn convert_mft_file_to_path_collection(
 
     let elapsed = Time::new::<second>(start.elapsed().as_secs_f64());
     // aggregate performance statistics
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "double precision rate math is best-effort for large MFT sizes"
     )]
     let total_size = uom::si::f64::Information::new::<byte>(mft_file.size().get::<byte>() as f64);
     let total_data_rate = total_size.over(elapsed); // overall throughput
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "double precision entry rate math is best-effort for high entry counts"
     )]

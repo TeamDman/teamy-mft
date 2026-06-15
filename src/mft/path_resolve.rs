@@ -38,7 +38,7 @@ fn decode_name(units: &[u16]) -> Cow<'_, str> {
     // ASCII fast path: if all code units are < 0x80 build directly
     if units.iter().all(|&u| u < 0x80) {
         let mut s = String::with_capacity(units.len());
-        #[allow(clippy::cast_possible_truncation, reason = "checked u < 0x80")]
+        #[expect(clippy::cast_possible_truncation, reason = "checked u < 0x80")]
         for &u in units {
             s.push(u as u8 as char);
         }
@@ -127,7 +127,7 @@ fn dfs(i: usize, per_entry: &Vec<Vec<BestName>>, depth: &mut [i32], mark: &mut [
 ///
 /// Currently this function always returns `Ok`, but the fallible signature allows future
 /// extensions that might fail during decoding or validation.
-#[allow(clippy::too_many_lines, reason = "complex path resolution logic")]
+#[expect(clippy::too_many_lines, reason = "complex path resolution logic")]
 #[instrument(level = "debug", skip(file_names))]
 // mftf[impl path-resolution.parent-chain-absolute-paths]
 pub fn resolve_paths_all_parallel(
@@ -150,7 +150,7 @@ pub fn resolve_paths_all_parallel(
         for (entry_id, list) in raw.iter_mut().enumerate() {
             #[cfg(feature = "extended_observability_per_record")]
             let _span = debug_span!("collect_entry_raw_names").entered();
-            #[allow(clippy::cast_possible_truncation, reason = "entry_id fits in u32")]
+            #[expect(clippy::cast_possible_truncation, reason = "entry_id fits in u32")]
             for fref in file_names.filenames_for_entry(entry_id as u32) {
                 let parent = (fref.parent_ref & 0xFFFF_FFFF_FFFF) as usize;
                 if parent >= entry_count {
@@ -200,11 +200,11 @@ pub fn resolve_paths_all_parallel(
             }
         }
 
-        #[allow(clippy::cast_sign_loss, reason = "depth is non-negative")]
+        #[expect(clippy::cast_sign_loss, reason = "depth is non-negative")]
         let max_depth = depth.iter().copied().max().unwrap_or(0) as usize;
         let mut layers: Vec<Vec<MftRecordIndex>> = vec![Vec::new(); max_depth + 1];
         for (i, d) in depth.iter().enumerate() {
-            #[allow(clippy::cast_sign_loss, reason = "depth is non-negative")]
+            #[expect(clippy::cast_sign_loss, reason = "depth is non-negative")]
             layers[*d as usize].push(MftRecordIndex::new(i));
         }
         layers

@@ -110,6 +110,7 @@ tempfile = "3.20"
 
 [lints.rust]
 ambiguous_negative_literals = "warn"
+unfulfilled_lint_expectations = "deny"
 missing_debug_implementations = "warn"
 redundant_imports = "warn"
 redundant_lifetimes = "warn"
@@ -131,6 +132,7 @@ multiple_crate_versions = "allow" # turn this off periodically to see how bad it
 # These lints are from the `restriction` lint group and prevent specific
 # constructs being used in source code in order to drive up consistency,
 # quality, and brevity
+allow_attributes = "deny"
 allow_attributes_without_reason = "warn"
 as_pointer_underscore = "warn"
 assertions_on_result_states = "warn"

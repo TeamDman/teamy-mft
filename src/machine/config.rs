@@ -137,7 +137,7 @@ unsafe fn facet_path_buf_proxy_convert_out(
             ));
         }
 
-        #[allow(
+        #[expect(
             clippy::cast_ptr_alignment,
             reason = "facet allocates proxy storage with the alignment required by the proxy type"
         )]
@@ -163,7 +163,7 @@ unsafe fn facet_path_buf_proxy_convert_in(
             ));
         }
 
-        #[allow(
+        #[expect(
             clippy::cast_ptr_alignment,
             reason = "facet allocates target storage with the alignment required by the target type"
         )]
@@ -415,7 +415,7 @@ pub fn save_checkpoint(path: &Path, checkpoint: &PublishedCheckpoint) -> eyre::R
 
 #[must_use]
 pub fn current_unix_ms() -> u64 {
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "Unix milliseconds fit in u64 for practical system lifetimes"
     )]
