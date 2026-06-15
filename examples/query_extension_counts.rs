@@ -24,6 +24,8 @@ use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
 
+const NO_EXTENSION: &str = "(no extension)";
+
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
@@ -40,7 +42,7 @@ fn main() -> eyre::Result<()> {
         ..Default::default()
     };
 
-    let mut counts = BTreeMap::<String, usize>::new();
+    let mut raw_counts = BTreeMap::<String, usize>::new();
     let mut total_files = 0_usize;
 
     args.visit_rows(|row| {
@@ -54,17 +56,35 @@ fn main() -> eyre::Result<()> {
             .extension()
             .and_then(|value| value.to_str())
             .filter(|value| !value.is_empty())
-            .map_or_else(|| String::from("(no extension)"), |value| {
-                format!(".{}", value.to_ascii_lowercase())
-            });
-        *counts.entry(extension).or_default() += 1;
+            .unwrap_or(NO_EXTENSION);
+        if let Some(count) = raw_counts.get_mut(extension) {
+            *count += 1;
+        } else {
+            raw_counts.insert(extension.to_owned(), 1);
+        }
         Ok(ControlFlow::Continue(()))
     })?;
+
+    let mut counts = BTreeMap::<String, usize>::new();
+    for (extension, count) in raw_counts {
+        let normalized_extension = if extension == NO_EXTENSION {
+            extension
+        } else if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            extension.to_ascii_lowercase()
+        } else {
+            extension
+        };
+        *counts.entry(normalized_extension).or_default() += count;
+    }
 
     println!("scope: {}", scope.display());
     println!("files: {total_files}");
     for (extension, count) in counts {
-        println!("{extension}\t{count}");
+        if extension == NO_EXTENSION {
+            println!("{extension}\t{count}");
+        } else {
+            println!(".{extension}\t{count}");
+        }
     }
 
     Ok(())
