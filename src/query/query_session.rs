@@ -24,7 +24,7 @@ use std::sync::atomic::Ordering;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum QuerySessionBackend {
-    PublishedIndexOnly,
+    InProcess,
     DaemonRpc,
 }
 
@@ -59,9 +59,9 @@ impl QuerySession {
     ///
     /// Returns an error if the local sync directory cannot be loaded from
     /// config.
-    pub fn published_index_only() -> eyre::Result<Self> {
+    pub fn in_current_process() -> eyre::Result<Self> {
         Ok(Self {
-            backend: QuerySessionBackend::PublishedIndexOnly,
+            backend: QuerySessionBackend::InProcess,
             sync_dir: load_sync_dir_from_config()?,
             published_index_cache: HashMap::new(),
         })
@@ -141,7 +141,7 @@ impl QuerySession {
         };
 
         match self.backend {
-            QuerySessionBackend::PublishedIndexOnly => {
+            QuerySessionBackend::InProcess => {
                 self.visit_published_index_rows(&query_plan, cancel, &mut visit_with_limit)?;
             }
             QuerySessionBackend::DaemonRpc => {
@@ -164,7 +164,7 @@ impl QuerySession {
         cancel: Arc<AtomicBool>,
     ) -> eyre::Result<SpawnedQuerySessionStream> {
         match self.backend {
-            QuerySessionBackend::PublishedIndexOnly => {
+            QuerySessionBackend::InProcess => {
                 let (tx, rx) = tokio::sync::mpsc::channel(256);
                 let sink = QueryRowSink::new(tx);
                 let query_join = std::thread::spawn(move || {
@@ -429,7 +429,7 @@ mod tests {
         )?;
 
         let mut session = QuerySession {
-            backend: super::QuerySessionBackend::PublishedIndexOnly,
+            backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
@@ -464,7 +464,7 @@ mod tests {
         )?;
 
         let mut session = QuerySession {
-            backend: super::QuerySessionBackend::PublishedIndexOnly,
+            backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
@@ -496,7 +496,7 @@ mod tests {
         )?;
 
         let mut session = QuerySession {
-            backend: super::QuerySessionBackend::PublishedIndexOnly,
+            backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
@@ -547,7 +547,7 @@ mod tests {
         )?;
 
         let mut session = QuerySession {
-            backend: super::QuerySessionBackend::PublishedIndexOnly,
+            backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
@@ -581,7 +581,7 @@ mod tests {
         )?;
 
         let session = QuerySession {
-            backend: super::QuerySessionBackend::PublishedIndexOnly,
+            backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };

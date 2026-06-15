@@ -4,7 +4,7 @@
 //! repo[impl examples.rs-files]
 //!
 //! This mirrors the repeated-query pattern used by Cloud Terrastodon's
-//! `software list` flow: create one `QuerySession::published_index_only()` and
+//! `software list` flow: create one `QuerySession::in_current_process()` and
 //! reuse it across multiple count queries instead of reopening the published
 //! index cache for each lookup.
 //!
@@ -51,7 +51,7 @@ fn main() -> eyre::Result<()> {
 
     // Reuse one explicit published-index session so repeated queries can keep
     // drive cache state warm in-process.
-    let mut session = QuerySession::published_index_only()?;
+    let mut session = QuerySession::in_current_process()?;
 
     println!("{:<20} count", "name");
     for segment in SOFTWARE_TERMINAL_SEGMENTS {

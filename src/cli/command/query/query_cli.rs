@@ -1,4 +1,5 @@
 use crate::presentation::ResultListPresentation;
+use crate::query::PreparedQueryStream;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRuntime;
@@ -131,7 +132,7 @@ impl QueryArgs {
         );
         self.plan.ensure_selected_profile_allowed()?;
 
-        let rtn = self.query_runtime().collect_rows(self.plan.clone())?;
+        let rtn = self.runtime().collect_rows(self.plan.clone())?;
         if let Some(limit) = **self.plan.limit {
             ensure!(
                 rtn.len() <= limit.into(),
@@ -143,13 +144,19 @@ impl QueryArgs {
         Ok(rtn)
     }
 
-    fn query_runtime(&self) -> QueryRuntime {
+    pub fn runtime(&self) -> QueryRuntime {
         if self.daemon {
             QueryRuntime::daemon_rpc()
         } else {
             QueryRuntime::published_index_only()
         }
     }
+
+    pub fn stream(&self) -> eyre::Result<PreparedQueryStream> {
+        self.runtime().prepare_stream(self.plan.clone())
+    }
+
+    
 }
 
 #[cfg(test)]
@@ -166,11 +173,11 @@ mod tests {
         };
 
         assert_eq!(
-            default_args.query_runtime(),
+            default_args.runtime(),
             QueryRuntime::PublishedIndexOnly
         );
         assert_eq!(
-            no_daemon_args.query_runtime(),
+            no_daemon_args.runtime(),
             QueryRuntime::PublishedIndexOnly
         );
     }
@@ -182,7 +189,7 @@ mod tests {
             ..QueryArgs::new("Cargo.toml")
         };
 
-        assert_eq!(args.query_runtime(), QueryRuntime::DaemonRpc);
+        assert_eq!(args.runtime(), QueryRuntime::DaemonRpc);
     }
 
     #[test]

@@ -20,13 +20,13 @@ use teamy_mft::query::QueryRule;
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
-    let rows = QueryArgs {
+    let query = QueryArgs {
         plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(
             ".git",
         ))),
         ..Default::default()
-    }
-    .collect_rows()?;
+    };
+    let rows = query.collect_rows()?;
     for path in rows {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = path.parent() {
