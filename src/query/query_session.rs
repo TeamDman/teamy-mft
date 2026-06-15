@@ -4,8 +4,6 @@ use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
-use crate::query::QueryRowSink;
-use crate::query::QueryRowStream;
 use crate::query::QueryRuntime;
 use crate::query::search_index_query::mapped_search_index_has_rows;
 use crate::query::search_index_query::merge_rows;
@@ -18,9 +16,10 @@ use eyre::ensure;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+
+use super::query_runtime::QueryRowVisitor;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum QuerySessionBackend {
@@ -39,12 +38,6 @@ pub struct QuerySession {
     backend: QuerySessionBackend,
     sync_dir: PathBuf,
     published_index_cache: HashMap<char, CachedPublishedDriveQuery>,
-}
-
-#[derive(Debug)]
-pub(crate) struct SpawnedQuerySessionStream {
-    pub stream: QueryRowStream,
-    pub query_join: std::thread::JoinHandle<eyre::Result<()>>,
 }
 
 #[derive(Debug)]
@@ -82,29 +75,12 @@ impl QuerySession {
     /// # Errors
     ///
     /// Returns an error if the configured backend cannot answer the query.
-    pub fn collect_rows(&mut self, query_plan: QueryPlan) -> eyre::Result<Vec<QueryResultRow>> {
-        self.collect_rows_with_cancel(query_plan, None)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if the configured backend cannot answer the query.
-    /// Cancellation is best-effort and returns the rows collected so far.
-    pub fn collect_rows_with_cancel(
+    pub fn visit_rows(
         &mut self,
         query_plan: QueryPlan,
-        cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<Vec<QueryResultRow>> {
-        let mut rows = Vec::new();
-        self.visit_rows_with_cancel(
-            query_plan,
-            cancel,
-            |row| -> eyre::Result<ControlFlow<()>> {
-                rows.push(row);
-                Ok(ControlFlow::Continue(()))
-            },
-        )?;
-        Ok(rows)
+        visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<()> {
+        self.visit_rows_with_cancel(query_plan, None, visit)
     }
 
     /// # Errors
@@ -116,6 +92,15 @@ impl QuerySession {
         query_plan: QueryPlan,
         cancel: Option<&AtomicBool>,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<()> {
+        self.visit_rows_with_cancel_dyn(query_plan, cancel, &mut visit)
+    }
+
+    pub(crate) fn visit_rows_with_cancel_dyn(
+        &mut self,
+        query_plan: QueryPlan,
+        cancel: Option<&AtomicBool>,
+        visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
             return Ok(());
@@ -145,52 +130,11 @@ impl QuerySession {
                 self.visit_published_index_rows(&query_plan, cancel, &mut visit_with_limit)?;
             }
             QuerySessionBackend::DaemonRpc => {
-                QueryRuntime::daemon_rpc()
-                    .prepare_stream(query_plan)?
-                    .visit_rows(&mut visit_with_limit)?;
+                QueryRuntime::daemon_rpc().visit_rows_dyn(query_plan, &mut visit_with_limit)?;
             }
         }
 
         Ok(())
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if this session backend does not support direct local
-    /// stream production.
-    pub(crate) fn spawn_stream(
-        self,
-        query_plan: QueryPlan,
-        cancel: Arc<AtomicBool>,
-    ) -> eyre::Result<SpawnedQuerySessionStream> {
-        match self.backend {
-            QuerySessionBackend::InProcess => {
-                let (tx, rx) = tokio::sync::mpsc::channel(256);
-                let sink = QueryRowSink::new(tx);
-                let query_join = std::thread::spawn(move || {
-                    let mut session = self;
-                    session.visit_rows_with_cancel(
-                        query_plan,
-                        Some(cancel.as_ref()),
-                        |row| -> eyre::Result<ControlFlow<()>> {
-                            Ok(if sink.blocking_send(row).is_ok() {
-                                ControlFlow::Continue(())
-                            } else {
-                                ControlFlow::Break(())
-                            })
-                        },
-                    )?;
-                    Ok(())
-                });
-                Ok(SpawnedQuerySessionStream {
-                    stream: QueryRowStream::Local(rx),
-                    query_join,
-                })
-            }
-            QuerySessionBackend::DaemonRpc => eyre::bail!(
-                "streaming row production is only supported for published-index query sessions"
-            ),
-        }
     }
 
     fn visit_published_index_rows(
@@ -377,7 +321,6 @@ impl CachedPublishedDriveQuery {
 #[cfg(test)]
 mod tests {
     use super::QuerySession;
-    use super::SpawnedQuerySessionStream;
     use crate::machine::config::published_drive_paths;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
@@ -385,9 +328,19 @@ mod tests {
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use crate::windows_utils::storage::DriveLetterPattern;
     use std::ops::ControlFlow;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
+
+    fn collect_visited_paths(
+        session: &mut QuerySession,
+        query_plan: QueryPlan,
+    ) -> eyre::Result<Vec<String>> {
+        let mut rows = Vec::new();
+        session.visit_rows(query_plan, |row| {
+            rows.push(row.path.to_string());
+            Ok(ControlFlow::Continue(()))
+        })?;
+        Ok(rows)
+    }
 
     fn write_drive_index(
         temp_dir: &TempDir,
@@ -434,8 +387,8 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
 
-        let first = session.collect_rows(fixture_drive_plan("Cargo.toml"))?;
-        let second = session.collect_rows(fixture_drive_plan("Repos"))?;
+        let first = collect_visited_paths(&mut session, fixture_drive_plan("Cargo.toml"))?;
+        let second = collect_visited_paths(&mut session, fixture_drive_plan("Repos"))?;
 
         assert_eq!(first.len(), 1);
         assert_eq!(second.len(), 1);
@@ -469,11 +422,18 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
         let cancel = std::sync::atomic::AtomicBool::new(true);
+        let mut visited = 0_usize;
 
-        let rows =
-            session.collect_rows_with_cancel(fixture_drive_plan("Cargo.toml"), Some(&cancel))?;
+        session.visit_rows_with_cancel(
+            fixture_drive_plan("Cargo.toml"),
+            Some(&cancel),
+            |_row| -> eyre::Result<ControlFlow<()>> {
+                visited += 1;
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
 
-        assert!(rows.is_empty());
+        assert_eq!(visited, 0);
         Ok(())
     }
 
@@ -569,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn published_session_spawn_stream_emits_matching_rows() -> eyre::Result<()> {
+    fn published_session_visit_rows_emits_matching_rows() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
         write_drive_index(
             &temp_dir,
@@ -580,24 +540,15 @@ mod tests {
             }],
         )?;
 
-        let session = QuerySession {
+        let mut session = QuerySession {
             backend: super::QuerySessionBackend::InProcess,
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
-        let plan = fixture_drive_plan("Cargo.toml");
-        let SpawnedQuerySessionStream { stream, query_join } =
-            session.spawn_stream(plan.clone(), Arc::new(AtomicBool::new(false)))?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let rows = runtime.block_on(stream.collect_filtered_limit(plan.limit))?;
-        query_join
-            .join()
-            .map_err(|join_error| eyre::eyre!("query thread panicked: {join_error:?}"))??;
+        let rows = collect_visited_paths(&mut session, fixture_drive_plan("Cargo.toml"))?;
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), r"C:\Repos\app\Cargo.toml");
+        assert_eq!(rows[0], r"C:\Repos\app\Cargo.toml");
         Ok(())
     }
 }

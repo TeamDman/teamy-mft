@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use teamy_mft::cli::command::query::QueryArgs;
+use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
 
@@ -42,10 +43,10 @@ fn main() -> eyre::Result<()> {
     let mut counts = BTreeMap::<String, usize>::new();
     let mut total_files = 0_usize;
 
-    for row in args.collect_rows()? {
+    args.visit_rows(|row| {
         let path = row.path.as_path();
         if !path.is_file() {
-            continue;
+            return Ok(ControlFlow::Continue(()));
         }
 
         total_files += 1;
@@ -57,7 +58,8 @@ fn main() -> eyre::Result<()> {
                 format!(".{}", value.to_ascii_lowercase())
             });
         *counts.entry(extension).or_default() += 1;
-    }
+        Ok(ControlFlow::Continue(()))
+    })?;
 
     println!("scope: {}", scope.display());
     println!("files: {total_files}");

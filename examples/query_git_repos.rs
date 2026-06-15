@@ -13,6 +13,7 @@
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
 use teamy_mft::cli::command::query::QueryArgs;
+use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryNeedle;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
@@ -26,13 +27,13 @@ fn main() -> eyre::Result<()> {
         ))),
         ..Default::default()
     };
-    let rows = query.collect_rows()?;
-    for path in rows {
+    query.visit_rows(|row| {
         // path is the .git dir; print its parent (the repo root)
-        if let Some(repo_root) = path.parent() {
-            println!("{} ({})", repo_root.display(), path.display());
+        if let Some(repo_root) = row.parent() {
+            println!("{} ({})", repo_root.display(), row.display());
         }
-    }
+        Ok(ControlFlow::Continue(()))
+    })?;
 
     Ok(())
 }
