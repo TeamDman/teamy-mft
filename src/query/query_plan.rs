@@ -1,5 +1,4 @@
 use crate::query::DEFAULT_PROFILE_NAME;
-use crate::query::QueryGroup;
 use crate::query::QueryLimit;
 use crate::query::QueryRule;
 use crate::query::QueryString;
@@ -49,9 +48,7 @@ impl QueryPlan {
     #[must_use]
     pub fn single_rule(rule: QueryRule) -> Self {
         Self {
-            query: QueryString {
-                groups: vec![QueryGroup { rules: vec![rule] }],
-            },
+            query: QueryString::single_rule(rule),
             ..Default::default()
         }
     }

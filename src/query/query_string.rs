@@ -3,14 +3,24 @@ use crate::query::QueryRule;
 use facet::Facet;
 use figue::{self as args};
 
-#[derive(Debug, Clone, PartialEq, Default, Facet, arbitrary::Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Facet, arbitrary::Arbitrary)]
 pub struct QueryString {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
-    #[facet(args::positional, default)]
+    #[facet(args::positional, default = QueryString::default().groups)]
     pub groups: Vec<QueryGroup>,
+}
+impl Default for QueryString {
+    fn default() -> Self {
+        Self::single_rule(QueryRule::MatchAll)
+    }
 }
 
 impl QueryString {
+    pub fn single_rule(rule: QueryRule) -> Self {
+        Self {
+            groups: vec![QueryGroup { rules: vec![rule] }],
+        }
+    }
     /// Build a query string from CLI positional inputs.
     ///
     /// Each positional argument is treated as an `OR` group, and `|` inside any
