@@ -181,11 +181,11 @@ mod tests {
 
         assert_eq!(
             default_args.runtime(),
-            QueryRuntime::PublishedIndexOnly
+            QueryRuntime::Local
         );
         assert_eq!(
             no_daemon_args.runtime(),
-            QueryRuntime::PublishedIndexOnly
+            QueryRuntime::Local
         );
     }
 

@@ -51,7 +51,7 @@ fn main() -> eyre::Result<()> {
 
     // Reuse one explicit published-index session so repeated queries can keep
     // drive cache state warm in-process.
-    let mut session = QuerySession::in_current_process()?;
+    let mut session = QuerySession::local()?;
 
     println!("{:<20} count", "name");
     for segment in SOFTWARE_TERMINAL_SEGMENTS {
