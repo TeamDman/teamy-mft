@@ -1,26 +1,28 @@
+use crate::machine::ipc::CorrelationId;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QuerySession;
+use crate::windows_utils::ctrl_c::GracefulCancellationGuard;
 use eyre::WrapErr;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::thread::JoinHandle;
 use tracing::debug;
 
 use super::ctrl_c_forwarder::CtrlCForwarder;
 
-pub(crate) type QueryRowVisitor<'a> =
-    dyn FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>> + 'a;
+pub type QueryRowVisitor<'a> = dyn FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>> + 'a;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 /// A lightweight backend selector for one-shot queries.
 ///
 /// Use `QueryRuntime` when the caller wants a single query against either the
-/// daemon RPC backend or the in-process published-index backend without holding
+/// daemon RPC backend or the in-process local backend without holding
 /// onto a persistent session. For repeated in-process queries, prefer
 /// `QuerySession`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum QueryRuntime {
-    PublishedIndexOnly,
+    Local,
     DaemonRpc,
 }
 
@@ -30,7 +32,7 @@ enum PreparedQueryVisitor {
 }
 
 struct LocalQueryVisitor {
-    _ctrl_c_guard: crate::windows_utils::ctrl_c::GracefulCancellationGuard,
+    _ctrl_c_guard: GracefulCancellationGuard,
     cancel: Arc<AtomicBool>,
     cancel_signal: CtrlCForwarder<()>,
     query_session: QuerySession,
@@ -44,16 +46,16 @@ struct DaemonQueryVisitor {
 
 #[derive(Debug)]
 struct DaemonQueryCleanup {
-    _ctrl_c_guard: crate::windows_utils::ctrl_c::GracefulCancellationGuard,
-    response_join: std::thread::JoinHandle<eyre::Result<crate::machine::ipc::CorrelationId>>,
-    log_drain: std::thread::JoinHandle<()>,
+    _ctrl_c_guard: GracefulCancellationGuard,
+    response_join: JoinHandle<eyre::Result<CorrelationId>>,
+    log_drain: JoinHandle<()>,
     cancel_signal: CtrlCForwarder<eyre::Result<()>>,
 }
 
 impl QueryRuntime {
     #[must_use]
     pub const fn published_index_only() -> Self {
-        Self::PublishedIndexOnly
+        Self::Local
     }
 
     #[must_use]
@@ -105,7 +107,7 @@ impl QueryRuntime {
 impl PreparedQueryVisitor {
     fn prepare(runtime: QueryRuntime, query_plan: QueryPlan) -> eyre::Result<Self> {
         match runtime {
-            QueryRuntime::PublishedIndexOnly => {
+            QueryRuntime::Local => {
                 Ok(Self::Local(LocalQueryVisitor::prepare(query_plan)?))
             }
             QueryRuntime::DaemonRpc => Ok(Self::Daemon(DaemonQueryVisitor::prepare(query_plan)?)),
@@ -129,7 +131,7 @@ impl LocalQueryVisitor {
             _ctrl_c_guard: ctrl_c_guard,
             cancel,
             cancel_signal,
-            query_session: QuerySession::in_current_process()?,
+            query_session: QuerySession::local()?,
             query_plan,
         })
     }
@@ -213,7 +215,7 @@ mod tests {
     fn runtime_constructors_select_expected_backend() {
         assert_eq!(
             QueryRuntime::published_index_only(),
-            QueryRuntime::PublishedIndexOnly
+            QueryRuntime::Local
         );
         assert_eq!(QueryRuntime::daemon_rpc(), QueryRuntime::DaemonRpc);
     }
