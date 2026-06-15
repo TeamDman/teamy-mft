@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryRule {
+    MatchAll,
     PrefixCaseInsensitive(QueryNeedle),
     ContainsCaseInsensitive(QueryNeedle),
     EndsWithCaseInsensitive(QueryNeedle),
@@ -15,11 +16,17 @@ impl QueryRule {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         match self {
+            Self::MatchAll => false,
             Self::PrefixCaseInsensitive(needle)
             | Self::ContainsCaseInsensitive(needle)
             | Self::EndsWithCaseInsensitive(needle)
             | Self::EqualsCaseInsensitive(needle) => needle.is_empty(),
         }
+    }
+
+    #[must_use]
+    pub fn is_match_all(&self) -> bool {
+        matches!(self, Self::MatchAll)
     }
 
     #[must_use]
@@ -30,6 +37,7 @@ impl QueryRule {
     #[must_use]
     pub fn matches_preprocessed(&self, haystack: &str, normalized_haystack: Option<&str>) -> bool {
         match self {
+            Self::MatchAll => true,
             Self::PrefixCaseInsensitive(needle) => {
                 needle.matches_prefix_preprocessed(haystack, normalized_haystack)
             }
@@ -61,6 +69,7 @@ impl QueryRule {
     #[must_use]
     pub fn normalized_extension_suffix(&self) -> Option<&str> {
         match self {
+            Self::MatchAll => None,
             Self::EndsWithCaseInsensitive(needle) => {
                 let suffix = needle.normalized_str();
                 (suffix.starts_with('.') && suffix.len() > 1).then_some(suffix)
@@ -74,6 +83,7 @@ impl QueryRule {
     #[must_use]
     pub fn normalized_contains_trigrams(&self) -> Option<Vec<[u8; QUERY_TRIGRAM_LEN]>> {
         match self {
+            Self::MatchAll => None,
             Self::ContainsCaseInsensitive(needle)
                 if needle.normalized_bytes().len() >= QUERY_TRIGRAM_LEN =>
             {
@@ -93,6 +103,10 @@ impl FromStr for QueryRule {
     fn from_str(raw_term: &str) -> Result<Self, Self::Err> {
         if raw_term.is_empty() {
             eyre::bail!("query rule cannot be empty");
+        }
+
+        if raw_term == "<>" {
+            return Ok(Self::MatchAll);
         }
 
         if let Some(inner) = raw_term.strip_prefix('<') {
@@ -123,6 +137,7 @@ impl FromStr for QueryRule {
 impl Display for QueryRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::MatchAll => write!(f, "<>"),
             Self::PrefixCaseInsensitive(needle) => write!(f, "<{}", needle.normalized_str()),
             Self::ContainsCaseInsensitive(needle) => write!(f, "{}", needle.normalized_str()),
             Self::EndsWithCaseInsensitive(needle) => write!(f, "{}>", needle.normalized_str()),
@@ -163,12 +178,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_exact_rule_reports_a_helpful_error() {
-        let error = QueryRule::from_str("<>").expect_err("empty exact should be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("exact query rule cannot be empty")
-        );
+    fn empty_exact_syntax_now_parses_as_match_all() {
+        let rule = QueryRule::from_str("<>").expect("match-all rule should parse");
+
+        assert_eq!(rule, QueryRule::MatchAll);
+        assert!(rule.matches("anything"));
+        assert_eq!(rule.to_string(), "<>");
     }
 }
