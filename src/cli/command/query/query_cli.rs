@@ -1,5 +1,4 @@
 use crate::presentation::ResultListPresentation;
-use crate::query::PreparedQueryStream;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRuntime;
@@ -8,6 +7,8 @@ use eyre::ensure;
 use facet::Facet;
 use figue::{self as args};
 use std::io::IsTerminal;
+use std::io::Write;
+use std::ops::ControlFlow;
 use tracing::debug;
 use tracing::instrument;
 
@@ -56,14 +57,34 @@ impl QueryArgs {
     /// or if reading/parsing index files fails.
     #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_filtered = self.plan.show_filtered, only_filtered = self.plan.only_filtered, density = ?self.density))]
     pub fn invoke_and_print(self) -> eyre::Result<()> {
-        let results = self.collect_rows()?;
-
         let stdout_is_terminal = std::io::stdout().is_terminal();
         let colorize = stdout_is_terminal
             && (self.plan.include_deleted
                 || self.plan.only_deleted
                 || self.plan.show_filtered
                 || self.plan.only_filtered);
+        let presentation = ResultListPresentation::for_terminal();
+        let use_columns = match self.density {
+            QueryResultsOutputDensity::Auto => stdout_is_terminal,
+            QueryResultsOutputDensity::Lines => false,
+            QueryResultsOutputDensity::Columns => true,
+        };
+
+        if !use_columns {
+            let mut stdout = std::io::stdout().lock();
+            self.visit_rows(|row| {
+                row.render_path(&mut stdout, colorize)?;
+                writeln!(&mut stdout)?;
+                Ok(ControlFlow::Continue(()))
+            })?;
+            return Ok(());
+        }
+
+        let mut results = Vec::new();
+        self.visit_rows(|row| {
+            results.push(row);
+            Ok(ControlFlow::Continue(()))
+        })?;
         let result_limit = self
             .plan
             .limit
@@ -71,13 +92,7 @@ impl QueryArgs {
             .unwrap_or(results.len())
             .min(results.len());
         let display_results = &results[..result_limit];
-        let presentation = ResultListPresentation::for_terminal();
         let mut stdout = std::io::stdout().lock();
-        let use_columns = match self.density {
-            QueryResultsOutputDensity::Auto => stdout_is_terminal,
-            QueryResultsOutputDensity::Lines => false,
-            QueryResultsOutputDensity::Columns => true,
-        };
         presentation.write_result_list(
             display_results,
             &mut stdout,
@@ -123,28 +138,14 @@ impl QueryArgs {
     /// Returns an error if the query is empty or invalid, drive letters cannot be resolved,
     /// the daemon transport fails, the machine cache is unavailable, the query scope cannot
     /// be canonicalized, or if daemon/disk-backed index reads fail.
-    pub fn collect_rows(&self) -> eyre::Result<Vec<QueryResultRow>> {
-        debug!("Running query with args: {:?}", self);
-        self.check_query()?;
-        ensure!(
-            !(self.daemon && self.no_daemon),
-            "`--daemon` and `--no-daemon` cannot be used together"
-        );
-        self.plan.ensure_selected_profile_allowed()?;
-
-        let rtn = self.runtime().collect_rows(self.plan.clone())?;
-        if let Some(limit) = **self.plan.limit {
-            ensure!(
-                rtn.len() <= limit.into(),
-                "Collected more results ({}) than the specified limit ({})",
-                rtn.len(),
-                limit
-            );
-        }
-        Ok(rtn)
+    pub fn visit_rows(
+        &self,
+        visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
+    ) -> eyre::Result<()> {
+        self.prepare_runtime()?.visit_rows(self.plan.clone(), visit)
     }
 
-    pub fn runtime(&self) -> QueryRuntime {
+    fn runtime(&self) -> QueryRuntime {
         if self.daemon {
             QueryRuntime::daemon_rpc()
         } else {
@@ -152,17 +153,23 @@ impl QueryArgs {
         }
     }
 
-    pub fn stream(&self) -> eyre::Result<PreparedQueryStream> {
-        self.runtime().prepare_stream(self.plan.clone())
+    pub fn prepare_runtime(&self) -> eyre::Result<QueryRuntime> {
+        debug!("Running query with args: {:?}", self);
+        self.check_query()?;
+        ensure!(
+            !(self.daemon && self.no_daemon),
+            "`--daemon` and `--no-daemon` cannot be used together"
+        );
+        self.plan.ensure_selected_profile_allowed()?;
+        Ok(self.runtime())
     }
-
-    
 }
 
 #[cfg(test)]
 mod tests {
     use super::QueryArgs;
     use crate::query::QueryRuntime;
+    use std::ops::ControlFlow;
 
     #[test]
     fn default_and_no_daemon_query_args_use_published_index_runtime() {
@@ -201,7 +208,45 @@ mod tests {
         };
 
         let error = args
-            .collect_rows()
+            .prepare_runtime()
+            .expect_err("conflicting daemon flags should fail early");
+
+        assert!(
+            error
+                .to_string()
+                .contains("`--daemon` and `--no-daemon` cannot be used together")
+        );
+    }
+
+    #[test]
+    fn conflicting_daemon_flags_fail_before_visit_runtime_access() {
+        let args = QueryArgs {
+            daemon: true,
+            no_daemon: true,
+            ..QueryArgs::new("Cargo.toml")
+        };
+
+        let error = args
+            .visit_rows(|_| Ok(ControlFlow::Continue(())))
+            .expect_err("conflicting daemon flags should fail early");
+
+        assert!(
+            error
+                .to_string()
+                .contains("`--daemon` and `--no-daemon` cannot be used together")
+        );
+    }
+
+    #[test]
+    fn conflicting_daemon_flags_fail_before_invoke_runtime_access() {
+        let args = QueryArgs {
+            daemon: true,
+            no_daemon: true,
+            ..QueryArgs::new("Cargo.toml")
+        };
+
+        let error = args
+            .prepare_runtime()
             .expect_err("conflicting daemon flags should fail early");
 
         assert!(
