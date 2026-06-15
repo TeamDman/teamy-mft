@@ -23,7 +23,7 @@ use tracing::info_span;
 pub struct DiskQueryExecutor {
     pub sync_dir: PathBuf,
     pub mft_files: Vec<(char, PathBuf)>,
-    pub request: QueryPlan,
+    pub query_plan: QueryPlan,
     pub filter_behavior: QueryFilterBehavior,
 }
 
@@ -32,8 +32,8 @@ impl DiskQueryExecutor {
     ///
     /// Returns an error if drive letters cannot be resolved, the sync directory
     /// cannot be loaded, or a selected drive has no published MFT snapshot.
-    pub fn new(request: QueryPlan) -> eyre::Result<Self> {
-        let drive_letters = request.drive_letter_pattern.into_drive_letters()?;
+    pub fn new(query_plan: QueryPlan) -> eyre::Result<Self> {
+        let drive_letters = query_plan.drive_letter_pattern.into_drive_letters()?;
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         let mft_files = {
             let _span = info_span!("discover_mft_files").entered();
@@ -61,7 +61,7 @@ impl DiskQueryExecutor {
         Ok(Self {
             sync_dir,
             mft_files,
-            request,
+            query_plan,
             filter_behavior: QueryFilterBehavior::AutoDiscover,
         })
     }
@@ -71,7 +71,7 @@ impl DiskQueryExecutor {
     /// Returns an error if query parsing, scope resolution, or filter-rule discovery fails.
     pub fn stream(self) -> eyre::Result<QueryRowStream> {
         let _span = info_span!("query_execute").entered();
-        let query_plan = Arc::new(self.request.clone());
+        let query_plan = Arc::new(self.query_plan.clone());
         let drive_letters = self
             .mft_files
             .iter()
@@ -84,20 +84,20 @@ impl DiskQueryExecutor {
                     Some(QueryFilterRules::discover_for_drive_letters(
                         &drive_letters,
                         &self.sync_dir,
-                        self.request.profile.as_deref(),
+                        self.query_plan.profile.as_deref(),
                     )?)
                 }
                 QueryFilterBehavior::Disabled => None,
                 QueryFilterBehavior::Custom(rules) => Some(rules),
             }
         };
-        let filter = Arc::new(QueryRowFilter::new(&self.request, filter_rules)?);
+        let filter = Arc::new(QueryRowFilter::new(&self.query_plan, filter_rules)?);
         let (tx, rx) = tokio::sync::mpsc::channel(256);
         let sink = QueryRowSink::new(tx);
         let drive_count = self.mft_files.len();
         let sync_dir = Arc::new(self.sync_dir);
-        let include_deleted = self.request.include_deleted;
-        let only_deleted = self.request.only_deleted;
+        let include_deleted = self.query_plan.include_deleted;
+        let only_deleted = self.query_plan.only_deleted;
 
         std::thread::Builder::new()
             .name("teamy-mft-query-disk-producers".to_owned())
@@ -230,13 +230,13 @@ mod tests {
         let auto_discover = DiskQueryExecutor {
             sync_dir: temp_dir.path().to_path_buf(),
             mft_files: vec![('C', paths.mft_path.clone())],
-            request: request.clone(),
+            query_plan: request.clone(),
             filter_behavior: QueryFilterBehavior::AutoDiscover,
         };
         let disabled = DiskQueryExecutor {
             sync_dir: temp_dir.path().to_path_buf(),
             mft_files: vec![('C', paths.mft_path)],
-            request: request.clone(),
+            query_plan: request.clone(),
             filter_behavior: QueryFilterBehavior::Disabled,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()

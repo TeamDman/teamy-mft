@@ -20,13 +20,13 @@ pub trait MachineDaemonRpc {
 
     async fn query(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<QueryResponse, MachineError>;
 
     async fn query_stream(
         &self,
-        request: QueryPlan,
+        query_plan: QueryPlan,
         rows: vox::Tx<QueryResultRow>,
         logs: vox::Tx<DaemonLogWireEvent>,
         cancel: vox::Rx<u8>,
@@ -34,25 +34,25 @@ pub trait MachineDaemonRpc {
 
     async fn sync(
         &self,
-        request: SyncPlan,
+        sync_plan: SyncPlan,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<(), MachineError>;
 
     async fn status(
         &self,
-        request: StatusRequest,
+        status_request: StatusRequest,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<StatusResponse, MachineError>;
 
     async fn query_usn_journal(
         &self,
-        request: UsnJournalRequest,
+        usn_journal_request: UsnJournalRequest,
         logs: vox::Tx<DaemonLogWireEvent>,
     ) -> Result<UsnJournalStatus, MachineError>;
 
     async fn stream_logs(
         &self,
-        request: LogStreamRequest,
+        log_stream_request: LogStreamRequest,
         logs: vox::Tx<DaemonLogWireEvent>,
         cancel: vox::Rx<u8>,
     ) -> Result<(), MachineError>;
