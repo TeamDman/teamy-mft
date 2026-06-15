@@ -74,7 +74,7 @@ impl QueryRuntime {
     /// Returns an error if the configured backend cannot be prepared.
     pub fn prepare_stream(self, query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         match self {
-            Self::PublishedIndexOnly => Self::prepare_session_query_stream(query_plan),
+            Self::PublishedIndexOnly => Self::prepare_in_current_process_query_stream(query_plan),
             Self::DaemonRpc => Self::prepare_daemon_query_stream(query_plan),
         }
     }
@@ -103,11 +103,11 @@ impl QueryRuntime {
         })
     }
 
-    fn prepare_session_query_stream(query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
+    fn prepare_in_current_process_query_stream(query_plan: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_signal = CtrlCForwarder::spawn_flag(Arc::clone(&cancel));
-        let spawned = QuerySession::published_index_only()?.spawn_stream(query_plan, cancel)?;
+        let spawned = QuerySession::in_current_process()?.spawn_stream(query_plan, cancel)?;
         Ok(PreparedQueryStream {
             stream: spawned.stream,
             cleanup: QueryStreamCleanup::Local(LocalQueryCleanup {
