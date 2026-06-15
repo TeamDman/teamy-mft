@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
     query.visit_rows(|row| {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = row.parent() {
-            println!("{} ({})", repo_root.display(), row.display());
+            println!("{}", repo_root.display());
         }
         Ok(ControlFlow::Continue(()))
     })?;
