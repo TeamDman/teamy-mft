@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tracing::debug;
 
-use super::ctrl_c_forwarder::CtrlCFlagForwarder;
-use super::ctrl_c_forwarder::CtrlCSenderForwarder;
+use super::ctrl_c_forwarder::CtrlCForwarder;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 /// A lightweight backend selector for one-shot queries.
@@ -39,7 +38,7 @@ enum QueryStreamCleanup {
 struct LocalQueryCleanup {
     _ctrl_c_guard: crate::windows_utils::ctrl_c::GracefulCancellationGuard,
     query_join: std::thread::JoinHandle<eyre::Result<()>>,
-    cancel_signal: CtrlCFlagForwarder,
+    cancel_signal: CtrlCForwarder<()>,
 }
 
 #[derive(Debug)]
@@ -47,7 +46,7 @@ struct DaemonQueryCleanup {
     _ctrl_c_guard: crate::windows_utils::ctrl_c::GracefulCancellationGuard,
     response_join: std::thread::JoinHandle<eyre::Result<crate::machine::ipc::CorrelationId>>,
     log_drain: std::thread::JoinHandle<()>,
-    cancel_signal: CtrlCSenderForwarder,
+    cancel_signal: CtrlCForwarder<eyre::Result<()>>,
 }
 
 impl QueryRuntime {
@@ -99,7 +98,7 @@ impl QueryRuntime {
                 _ctrl_c_guard: ctrl_c_guard,
                 response_join,
                 log_drain: crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx),
-                cancel_signal: CtrlCSenderForwarder::spawn(cancel_tx),
+                cancel_signal: CtrlCForwarder::spawn_sender(cancel_tx),
             }),
         })
     }
@@ -107,7 +106,7 @@ impl QueryRuntime {
     fn prepare_session_query_stream(request: QueryPlan) -> eyre::Result<PreparedQueryStream> {
         let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
         let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_signal = CtrlCFlagForwarder::spawn(Arc::clone(&cancel));
+        let cancel_signal = CtrlCForwarder::spawn_flag(Arc::clone(&cancel));
         let spawned = QuerySession::published_index_only()?.spawn_stream(request, cancel)?;
         Ok(PreparedQueryStream {
             stream: spawned.stream,

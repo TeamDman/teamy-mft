@@ -3,19 +3,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 #[derive(Debug)]
-pub(crate) struct CtrlCSenderForwarder {
+pub struct CtrlCForwarder<T> {
     stop: Arc<AtomicBool>,
-    join: std::thread::JoinHandle<eyre::Result<()>>,
+    join: std::thread::JoinHandle<T>,
 }
 
-#[derive(Debug)]
-pub(crate) struct CtrlCFlagForwarder {
-    stop: Arc<AtomicBool>,
-    join: std::thread::JoinHandle<()>,
-}
-
-impl CtrlCSenderForwarder {
-    pub(crate) fn spawn(cancel_tx: vox::Tx<u8>) -> Self {
+impl<T> CtrlCForwarder<T>
+where
+    T: Send + 'static,
+{
+    fn spawn(stopped: T, on_interrupt: impl FnOnce() -> T + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
         let join = std::thread::spawn(move || {
@@ -25,8 +22,22 @@ impl CtrlCSenderForwarder {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             if stop_for_thread.load(Ordering::Relaxed) {
-                return Ok(());
+                return stopped;
             }
+            on_interrupt()
+        });
+        Self { stop, join }
+    }
+
+    fn join_stopped(self) -> std::thread::Result<T> {
+        self.stop.store(true, Ordering::Relaxed);
+        self.join.join()
+    }
+}
+
+impl CtrlCForwarder<eyre::Result<()>> {
+    pub fn spawn_sender(cancel_tx: vox::Tx<u8>) -> Self {
+        Self::spawn(Ok(()), move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
@@ -35,46 +46,31 @@ impl CtrlCSenderForwarder {
                 let _ = cancel_tx.close(Vec::new()).await;
             });
             Ok(())
-        });
-        Self { stop, join }
+        })
     }
 
-    pub(crate) fn finish(self) -> eyre::Result<()> {
-        self.stop.store(true, Ordering::Relaxed);
-        self.join.join().map_err(|join_error| {
+    pub fn finish(self) -> eyre::Result<()> {
+        self.join_stopped().map_err(|join_error| {
             eyre::eyre!("Daemon cancel forwarder thread panicked: {join_error:?}")
         })?
     }
 }
 
-impl CtrlCFlagForwarder {
-    pub(crate) fn spawn(cancel: Arc<AtomicBool>) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = Arc::clone(&stop);
-        let join = std::thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed)
-                && !crate::windows_utils::ctrl_c::interrupted()
-            {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if stop_for_thread.load(Ordering::Relaxed) {
-                return;
-            }
+impl CtrlCForwarder<()> {
+    pub fn spawn_flag(cancel: Arc<AtomicBool>) -> Self {
+        Self::spawn((), move || {
             cancel.store(true, Ordering::Relaxed);
-        });
-        Self { stop, join }
+        })
     }
 
-    pub(crate) fn finish(self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.join.join();
+    pub fn finish(self) {
+        let _ = self.join_stopped();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CtrlCFlagForwarder;
-    use super::CtrlCSenderForwarder;
+    use super::CtrlCForwarder;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -82,7 +78,7 @@ mod tests {
     #[test]
     fn ctrl_c_sender_forwarder_finishes_when_stopped_without_interrupt() {
         let (cancel_tx, _cancel_rx) = vox::channel::<u8>();
-        let forwarder = CtrlCSenderForwarder::spawn(cancel_tx);
+        let forwarder = CtrlCForwarder::spawn_sender(cancel_tx);
         forwarder
             .finish()
             .expect("forwarder should stop cleanly without ctrl+c");
@@ -91,7 +87,7 @@ mod tests {
     #[test]
     fn ctrl_c_flag_forwarder_finishes_when_stopped_without_interrupt() {
         let cancel = Arc::new(AtomicBool::new(false));
-        let forwarder = CtrlCFlagForwarder::spawn(Arc::clone(&cancel));
+        let forwarder = CtrlCForwarder::spawn_flag(Arc::clone(&cancel));
         forwarder.finish();
         assert!(!cancel.load(Ordering::Relaxed));
     }
