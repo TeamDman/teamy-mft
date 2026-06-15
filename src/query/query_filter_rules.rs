@@ -215,7 +215,7 @@ impl QueryFilterRules {
     ///
     /// Returns an error if the selected profile name is invalid or the effective file set
     /// contains invalid or contradictory rule syntax.
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "Rule precedence, deduplication, and conflict checks are clearer as one pass"
     )]

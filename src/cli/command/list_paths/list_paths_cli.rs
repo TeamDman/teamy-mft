@@ -43,7 +43,7 @@ impl ListPathsArgs {
     /// Returns an error if the machine cache cannot be retrieved, drive letters cannot be resolved,
     /// or if reading/parsing MFT files fails.
     // cli[impl command.list-paths.cached-mft-input]
-    #[allow(
+    #[expect(
         clippy::too_many_lines,
         reason = "function processes MFT data in a single pass for performance"
     )]

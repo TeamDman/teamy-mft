@@ -768,7 +768,7 @@ fn validate_active_cursor(
     Ok(())
 }
 
-#[allow(
+#[expect(
     clippy::redundant_closure_for_method_calls,
     reason = "The explicit closure keeps the Result mapping readable at this boundary"
 )]

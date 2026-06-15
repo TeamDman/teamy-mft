@@ -29,10 +29,10 @@ fn add_git_revision() {
         println!("cargo:rerun-if-changed={head_path}");
     }
 
-    if let Some(head_ref) = git_output(&["symbolic-ref", "--quiet", "HEAD"]) {
-        if let Some(head_ref_path) = git_output(&["rev-parse", "--git-path", &head_ref]) {
-            println!("cargo:rerun-if-changed={head_ref_path}");
-        }
+    if let Some(head_ref) = git_output(&["symbolic-ref", "--quiet", "HEAD"])
+        && let Some(head_ref_path) = git_output(&["rev-parse", "--git-path", &head_ref])
+    {
+        println!("cargo:rerun-if-changed={head_ref_path}");
     }
 
     // Try to get a short git revision; on failure, set to "unknown".
@@ -43,7 +43,7 @@ fn add_git_revision() {
 }
 
 fn git_output(args: &[&str]) -> Option<String> {
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         reason = "build.rs intentionally shells out to git for embed-time revision metadata"
     )]

@@ -446,7 +446,7 @@ impl DriveWorkerState {
     }
 }
 
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "drive worker command handling is intentionally kept in one loop so state transitions stay visible"
 )]
@@ -1714,7 +1714,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 }
 
 fn system_time_to_unix_ms(value: std::time::SystemTime) -> u64 {
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "Unix milliseconds fit in u64 for practical system lifetimes"
     )]
@@ -1978,7 +1978,7 @@ fn last_daemon_activity_elapsed(last_activity: &StdMutex<Instant>) -> Duration {
         .map_or(Duration::ZERO, |last_activity| last_activity.elapsed())
 }
 
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "catch_unwind returns owned boxed panic payloads"
 )]
