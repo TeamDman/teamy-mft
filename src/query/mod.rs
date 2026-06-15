@@ -1,3 +1,4 @@
+mod ctrl_c_forwarder;
 mod disk_query_executor;
 mod drive_query_result;
 mod query_filter_behavior;

@@ -6,8 +6,10 @@ use eyre::WrapErr;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use tracing::debug;
+
+use super::ctrl_c_forwarder::CtrlCFlagForwarder;
+use super::ctrl_c_forwarder::CtrlCSenderForwarder;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 /// A lightweight backend selector for one-shot queries.
@@ -46,18 +48,6 @@ struct DaemonQueryCleanup {
     response_join: std::thread::JoinHandle<eyre::Result<crate::machine::ipc::CorrelationId>>,
     log_drain: std::thread::JoinHandle<()>,
     cancel_signal: CtrlCSenderForwarder,
-}
-
-#[derive(Debug)]
-struct CtrlCSenderForwarder {
-    stop: Arc<AtomicBool>,
-    join: std::thread::JoinHandle<eyre::Result<()>>,
-}
-
-#[derive(Debug)]
-struct CtrlCFlagForwarder {
-    stop: Arc<AtomicBool>,
-    join: std::thread::JoinHandle<()>,
 }
 
 impl QueryRuntime {
@@ -174,7 +164,8 @@ impl PreparedQueryStream {
         cleanup.finish()?;
         Ok(())
     }
-}impl QueryStreamCleanup {
+}
+impl QueryStreamCleanup {
     fn finish(self) -> eyre::Result<()> {
         match self {
             Self::Local(cleanup) => cleanup.finish(),
@@ -211,88 +202,9 @@ impl DaemonQueryCleanup {
     }
 }
 
-impl CtrlCSenderForwarder {
-    fn spawn(cancel_tx: vox::Tx<u8>) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = Arc::clone(&stop);
-        let join = std::thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed)
-                && !crate::windows_utils::ctrl_c::interrupted()
-            {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if stop_for_thread.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(async move {
-                let _ = cancel_tx.send(1).await;
-                let _ = cancel_tx.close(Vec::new()).await;
-            });
-            Ok(())
-        });
-        Self { stop, join }
-    }
-
-    fn finish(self) -> eyre::Result<()> {
-        self.stop.store(true, Ordering::Relaxed);
-        self.join.join().map_err(|join_error| {
-            eyre::eyre!("Daemon cancel forwarder thread panicked: {join_error:?}")
-        })?
-    }
-}
-
-impl CtrlCFlagForwarder {
-    fn spawn(cancel: Arc<AtomicBool>) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_for_thread = Arc::clone(&stop);
-        let join = std::thread::spawn(move || {
-            while !stop_for_thread.load(Ordering::Relaxed)
-                && !crate::windows_utils::ctrl_c::interrupted()
-            {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if stop_for_thread.load(Ordering::Relaxed) {
-                return;
-            }
-            cancel.store(true, Ordering::Relaxed);
-        });
-        Self { stop, join }
-    }
-
-    fn finish(self) {
-        self.stop.store(true, Ordering::Relaxed);
-        let _ = self.join.join();
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::CtrlCFlagForwarder;
-    use super::CtrlCSenderForwarder;
     use super::QueryRuntime;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
-
-    #[test]
-    fn ctrl_c_sender_forwarder_finishes_when_stopped_without_interrupt() {
-        let (cancel_tx, _cancel_rx) = vox::channel::<u8>();
-        let forwarder = CtrlCSenderForwarder::spawn(cancel_tx);
-        forwarder
-            .finish()
-            .expect("forwarder should stop cleanly without ctrl+c");
-    }
-
-    #[test]
-    fn ctrl_c_flag_forwarder_finishes_when_stopped_without_interrupt() {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let forwarder = CtrlCFlagForwarder::spawn(Arc::clone(&cancel));
-        forwarder.finish();
-        assert!(!cancel.load(Ordering::Relaxed));
-    }
 
     #[test]
     fn runtime_constructors_select_expected_backend() {
