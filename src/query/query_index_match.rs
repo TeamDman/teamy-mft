@@ -3,20 +3,59 @@ use crate::search_index::search_index_bytes::ParsedSearchIndex;
 use eyre::Context;
 use tracing::info_span;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MatchingRowIndices {
+    MatchAll { row_count: u32 },
+    RowIndices(Vec<u32>),
+}
+
+impl MatchingRowIndices {
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            Self::MatchAll { row_count } => *row_count == 0,
+            Self::RowIndices(row_indices) => row_indices.is_empty(),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn intersect(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::MatchAll { row_count: left }, Self::MatchAll { row_count: right }) => {
+                debug_assert_eq!(left, right);
+                Self::MatchAll {
+                    row_count: left.min(right),
+                }
+            }
+            (Self::MatchAll { .. }, Self::RowIndices(row_indices))
+            | (Self::RowIndices(row_indices), Self::MatchAll { .. }) => {
+                Self::RowIndices(row_indices)
+            }
+            (Self::RowIndices(left), Self::RowIndices(right)) => {
+                if left.len() <= right.len() {
+                    Self::RowIndices(intersect_sorted_ids_in_place(left, &right))
+                } else {
+                    Self::RowIndices(intersect_sorted_ids_in_place(right, &left))
+                }
+            }
+        }
+    }
+}
+
 pub fn matching_row_indices_for_rule(
     parsed_index: &ParsedSearchIndex<'_>,
     rule: &QueryRule,
-) -> eyre::Result<Vec<u32>> {
+) -> eyre::Result<MatchingRowIndices> {
     if rule.is_match_all() {
         let row_count = u32::try_from(parsed_index.row_count())
             .wrap_err("Parsed search index row count does not fit into u32")?;
-        return Ok((0..row_count).collect());
+        return Ok(MatchingRowIndices::MatchAll { row_count });
     }
 
     if let Some(normalized_suffix) = rule.normalized_extension_suffix() {
         return Ok(match parsed_index.extension_postings(normalized_suffix)? {
-            Some(iter) => iter.collect(),
-            None => Vec::new(),
+            Some(iter) => MatchingRowIndices::RowIndices(iter.collect()),
+            None => MatchingRowIndices::RowIndices(Vec::new()),
         });
     }
 
@@ -42,13 +81,13 @@ pub fn matching_row_indices_for_rule(
         row_indices.dedup();
     });
 
-    Ok(row_indices)
+    Ok(MatchingRowIndices::RowIndices(row_indices))
 }
 
 fn terminal_matching_row_indices_for_rule(
     parsed_index: &ParsedSearchIndex<'_>,
     rule: &QueryRule,
-) -> eyre::Result<Vec<u32>> {
+) -> eyre::Result<MatchingRowIndices> {
     info_span!("match_query_rule_against_terminal_segments").in_scope(|| {
         let mut row_indices = Vec::new();
 
@@ -68,7 +107,7 @@ fn terminal_matching_row_indices_for_rule(
             row_indices.push(row_index);
         }
 
-        Ok(row_indices)
+        Ok(MatchingRowIndices::RowIndices(row_indices))
     })
 }
 
@@ -160,9 +199,32 @@ fn intersect_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
     intersection
 }
 
+fn intersect_sorted_ids_in_place(mut left: Vec<u32>, right: &[u32]) -> Vec<u32> {
+    let mut left_index = 0;
+    let mut right_index = 0;
+    let mut write_index = 0;
+
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            std::cmp::Ordering::Less => left_index += 1,
+            std::cmp::Ordering::Greater => right_index += 1,
+            std::cmp::Ordering::Equal => {
+                left[write_index] = left[left_index];
+                write_index += 1;
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+
+    left.truncate(write_index);
+    left
+}
+
 #[cfg(test)]
 mod tests {
     use super::matching_row_indices_for_rule;
+    use super::MatchingRowIndices;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
@@ -202,7 +264,10 @@ mod tests {
         let parsed = parse_fixture_index()?;
         let rule = "ower".parse::<QueryRule>().expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::RowIndices(vec![0])
+        );
 
         Ok(())
     }
@@ -212,7 +277,10 @@ mod tests {
         let parsed = parse_fixture_index()?;
         let rule = "<flo".parse::<QueryRule>().expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::RowIndices(vec![0, 1])
+        );
 
         Ok(())
     }
@@ -222,7 +290,10 @@ mod tests {
         let parsed = parse_fixture_index()?;
         let rule = "fl".parse::<QueryRule>().expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::RowIndices(vec![0, 1])
+        );
 
         Ok(())
     }
@@ -245,7 +316,10 @@ mod tests {
         ])?;
         let rule = ".git>".parse::<QueryRule>().expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::RowIndices(vec![0])
+        );
 
         Ok(())
     }
@@ -254,19 +328,19 @@ mod tests {
     fn exact_rules_match_only_terminal_segments_in_indexed_queries() -> eyre::Result<()> {
         let parsed = parse_index(&[
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\package.json"),
+                path: String::from("C:\\repo\\package.json").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\my-package.json"),
+                path: String::from("C:\\repo\\my-package.json").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\package.json.backup"),
+                path: String::from("C:\\repo\\package.json.backup").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\package.json\\README.md"),
+                path: String::from("C:\\repo\\package.json\\README.md").into(),
                 has_deleted_entries: false,
             },
         ])?;
@@ -274,17 +348,23 @@ mod tests {
             .parse::<QueryRule>()
             .expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::RowIndices(vec![0])
+        );
 
         Ok(())
     }
 
     #[test]
-    fn match_all_rule_returns_every_row_index() -> eyre::Result<()> {
+    fn match_all_rule_returns_match_all_candidates() -> eyre::Result<()> {
         let parsed = parse_fixture_index()?;
         let rule = "<>".parse::<QueryRule>().expect("rule should parse");
 
-        assert_eq!(matching_row_indices_for_rule(&parsed, &rule)?, vec![0, 1, 2]);
+        assert_eq!(
+            matching_row_indices_for_rule(&parsed, &rule)?,
+            MatchingRowIndices::MatchAll { row_count: 3 }
+        );
 
         Ok(())
     }

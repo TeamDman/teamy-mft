@@ -1,13 +1,13 @@
 use crate::machine::config::SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::query::Pathlike;
+use crate::search_index::format::SearchIndexHeader;
+use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_MAGIC;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
-use crate::search_index::format::SearchIndexHeader;
-use crate::search_index::format::SearchIndexPathRow;
+use eyre::bail;
 use eyre::Context;
 use eyre::ContextCompat;
-use eyre::bail;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -623,6 +623,27 @@ impl<'a> ParsedSearchIndex<'a> {
         self.terminal_count
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if `row_index` is out of bounds.
+    pub fn row_matches_normalized_path_components(
+        &self,
+        row_index: u32,
+        normalized_components: &[String],
+        include_descendants: bool,
+    ) -> eyre::Result<bool> {
+        if normalized_components.is_empty() {
+            return Ok(true);
+        }
+
+        let terminal_node_index = self.row_terminal_node_index(row_index as usize)?;
+        Ok(self.node_matches_normalized_path_components(
+            terminal_node_index,
+            normalized_components,
+            include_descendants,
+        ))
+    }
+
     #[must_use]
     pub fn row_views(&self) -> SearchIndexRowIter<'a> {
         SearchIndexRowIter {
@@ -761,6 +782,60 @@ impl<'a> ParsedSearchIndex<'a> {
         let node_offset = self.path_node_offset + node_index as usize * SEARCH_INDEX_NODE_LEN;
         let parent = read_u32_at(self.bytes, node_offset + 4);
         (parent != NO_PARENT_NODE).then_some(parent)
+    }
+
+    fn row_terminal_node_index(&self, row_index: usize) -> eyre::Result<u32> {
+        if row_index >= self.terminal_count {
+            bail!(
+                "Corrupt search index: requested terminal row {} but index contains {} rows",
+                row_index,
+                self.terminal_count
+            );
+        }
+
+        let terminal_offset = self.terminal_offset + row_index * SEARCH_INDEX_TERMINAL_LEN;
+        Ok(read_u32_at(self.bytes, terminal_offset))
+    }
+
+    fn node_depth(&self, mut node_index: u32) -> usize {
+        let mut depth = 1;
+        while let Some(parent) = self.node_parent(node_index) {
+            depth += 1;
+            node_index = parent;
+        }
+        depth
+    }
+
+    fn node_matches_normalized_path_components(
+        &self,
+        terminal_node_index: u32,
+        normalized_components: &[String],
+        include_descendants: bool,
+    ) -> bool {
+        let row_depth = self.node_depth(terminal_node_index);
+        let scope_depth = normalized_components.len();
+        if row_depth < scope_depth || (!include_descendants && row_depth != scope_depth) {
+            return false;
+        }
+
+        let mut node_index = terminal_node_index;
+        for _ in 0..row_depth - scope_depth {
+            let Some(parent) = self.node_parent(node_index) else {
+                return false;
+            };
+            node_index = parent;
+        }
+
+        for expected_component in normalized_components.iter().rev() {
+            if self.node_segment(node_index).normalized != expected_component.as_str() {
+                return false;
+            }
+            if let Some(parent) = self.node_parent(node_index) {
+                node_index = parent;
+            }
+        }
+
+        true
     }
 }
 
@@ -1599,9 +1674,9 @@ mod tests {
     use super::ParsedSearchIndex;
     use super::SearchIndexBytes;
     use super::SearchIndexBytesMut;
-    use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
+    use crate::search_index::format::SEARCH_INDEX_VERSION;
     use eyre::ContextCompat;
 
     const VIRTUAL_SNAPSHOT_TEST_PATH: &str = "Q:\\__TEAMY_MFT_VIRTUAL_SNAPSHOT_FIXTURE__\\a.txt";
@@ -1689,12 +1764,10 @@ mod tests {
         assert_eq!(parsed_rows.len(), 1);
         assert_eq!(parsed_rows[0].as_str(), VIRTUAL_SNAPSHOT_TEST_PATH);
 
-        assert!(
-            search_index_bytes
-                .trie()?
-                .get("__teamy_mft_virtual_snapshot_fixture__")
-                .is_some()
-        );
+        assert!(search_index_bytes
+            .trie()?
+            .get("__teamy_mft_virtual_snapshot_fixture__")
+            .is_some());
         assert!(search_index_bytes.trie()?.get("a.txt").is_some());
 
         let parsed = search_index_bytes.parse_trusted_for_query()?;

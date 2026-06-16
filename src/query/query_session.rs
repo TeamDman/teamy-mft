@@ -1,18 +1,21 @@
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
 use crate::query::QueryFilterRules;
+use crate::query::Pathlike;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
 use crate::query::QueryRuntime;
 use crate::query::search_index_query::mapped_search_index_has_rows;
-use crate::query::search_index_query::merge_rows;
+use crate::query::search_index_query::visit_matching_parsed_row_indices;
 use crate::query::visit_parsed_search_index_rows;
 use crate::search_index::load::MappedSearchIndex;
+use crate::search_index::search_index_bytes::ParsedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use eyre::Context;
 use eyre::ContextCompat;
 use eyre::ensure;
+use tracing::info_span;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -102,6 +105,7 @@ impl QuerySession {
         cancel: Option<&AtomicBool>,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
+        let _guard = info_span!("visit_rows_with_cancel_dyn").entered();
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
             return Ok(());
         }
@@ -143,6 +147,7 @@ impl QuerySession {
         cancel: Option<&AtomicBool>,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
+        let _guard = info_span!("visit_published_index_rows").entered();
         let drive_letters = query_plan
             .drive_letter_pattern
             .clone()
@@ -155,6 +160,7 @@ impl QuerySession {
         let filter = QueryRowFilter::new(query_plan, Some(filter_rules))?;
 
         for &drive in &drive_letters {
+            let _guard = info_span!("visit_drive_rows", drive = %drive).entered();
             if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                 break;
             }
@@ -231,30 +237,77 @@ impl CachedPublishedDriveQuery {
         cancel: Option<&AtomicBool>,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<ControlFlow<()>> {
+        let _guard = info_span!("visit_rows_with_cancel", drive = %self.drive).entered();
         if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
             return Ok(ControlFlow::Break(()));
         }
 
         if let Some(overlay_index) = self.overlay_index.as_ref() {
-            let mut result = Self::collect_index_rows(&self.base_index, query_plan, cancel)
+            let base_parsed_index = SearchIndexBytes::new(self.base_index.bytes())
+                .parse_trusted_for_query()
                 .wrap_err_with(|| {
-                    format!("failed querying cached base index for drive {}", self.drive)
+                    format!("failed preparing cached base index for drive {}", self.drive)
                 })?;
+            let overlay_parsed_index = SearchIndexBytes::new(overlay_index.bytes())
+                .parse_trusted_for_query()
+                .wrap_err_with(|| {
+                    format!("failed preparing cached overlay index for drive {}", self.drive)
+                })?;
+            let mut base_rows = Self::collect_matching_row_refs(
+                &base_parsed_index,
+                query_plan,
+                cancel,
+            )
+            .wrap_err_with(|| {
+                format!("failed querying cached base index for drive {}", self.drive)
+            })?;
             if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                 return Ok(ControlFlow::Break(()));
             }
-            let overlay_rows = Self::collect_index_rows(overlay_index, query_plan, cancel)
+            let mut overlay_rows = Self::collect_matching_row_refs(
+                &overlay_parsed_index,
+                query_plan,
+                cancel,
+            )
                 .wrap_err_with(|| {
                     format!(
                         "failed querying cached overlay index for drive {}",
                         self.drive
                     )
                 })?;
-            result = merge_rows(result, overlay_rows);
-            for row in result {
+
+            base_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+            overlay_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+
+            let mut base_offset = 0_usize;
+            let mut overlay_offset = 0_usize;
+            while base_offset < base_rows.len() || overlay_offset < overlay_rows.len() {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Ok(ControlFlow::Break(()));
                 }
+                let row = match (base_rows.get(base_offset), overlay_rows.get(overlay_offset)) {
+                    (Some(base_row), Some(overlay_row)) => {
+                        if overlay_row.path <= base_row.path {
+                            if overlay_row.path == base_row.path {
+                                base_offset += 1;
+                            }
+                            overlay_offset += 1;
+                            Self::materialize_row(&overlay_parsed_index, overlay_row.row_index)?
+                        } else {
+                            base_offset += 1;
+                            Self::materialize_row(&base_parsed_index, base_row.row_index)?
+                        }
+                    }
+                    (Some(base_row), None) => {
+                        base_offset += 1;
+                        Self::materialize_row(&base_parsed_index, base_row.row_index)?
+                    }
+                    (None, Some(overlay_row)) => {
+                        overlay_offset += 1;
+                        Self::materialize_row(&overlay_parsed_index, overlay_row.row_index)?
+                    }
+                    (None, None) => break,
+                };
                 let Some(row) = filter.classify_and_match(row) else {
                     continue;
                 };
@@ -295,27 +348,48 @@ impl CachedPublishedDriveQuery {
         Ok(control_flow)
     }
 
-    fn collect_index_rows(
-        mapped: &MappedSearchIndex,
+    fn collect_matching_row_refs<'a>(
+        parsed_index: &'a ParsedSearchIndex<'a>,
         query_plan: &QueryPlan,
         cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<Vec<QueryResultRow>> {
+    ) -> eyre::Result<Vec<MatchingRowRef>> {
         let mut rows = Vec::new();
-        let (_loaded_rows, _control_flow) = visit_parsed_search_index_rows(
-            &SearchIndexBytes::new(mapped.bytes()).parse_trusted_for_query()?,
+        let (_loaded_rows, _control_flow) = visit_matching_parsed_row_indices(
+            parsed_index,
             query_plan,
             query_plan.include_deleted,
             query_plan.only_deleted,
-            |row| {
+            |row_index| {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Ok(ControlFlow::Break(()));
                 }
-                rows.push(row);
+                let row = parsed_index.row_view(row_index as usize)?;
+                rows.push(MatchingRowRef {
+                    row_index,
+                    path: row.path(),
+                });
                 Ok(ControlFlow::Continue(()))
             },
         )?;
         Ok(rows)
     }
+
+    fn materialize_row(
+        parsed_index: &ParsedSearchIndex<'_>,
+        row_index: u32,
+    ) -> eyre::Result<QueryResultRow> {
+        let row = parsed_index.row_view(row_index as usize)?;
+        Ok(QueryResultRow {
+            path: row.path(),
+            has_deleted_entries: row.has_deleted_entries,
+            is_filtered: false,
+        })
+    }
+}
+
+struct MatchingRowRef {
+    row_index: u32,
+    path: Pathlike,
 }
 
 #[cfg(test)]
@@ -359,6 +433,26 @@ mod tests {
             rows,
         )?
         .write_to_path(&paths.base_index_path)?;
+        Ok(())
+    }
+
+    fn write_overlay_drive_index(
+        temp_dir: &TempDir,
+        drive: char,
+        rows: &[SearchIndexPathRow],
+    ) -> eyre::Result<()> {
+        let paths = published_drive_paths(temp_dir.path(), drive);
+        std::fs::create_dir_all(
+            paths
+                .overlay_index_path
+                .parent()
+                .expect("published overlay index path should have a parent"),
+        )?;
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(drive, 123, rows.len() as u64),
+            rows,
+        )?
+        .write_to_path(&paths.overlay_index_path)?;
         Ok(())
     }
 
@@ -549,6 +643,46 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0], r"C:\Repos\app\Cargo.toml");
+        Ok(())
+    }
+
+    #[test]
+    fn published_session_overlay_rows_override_cached_base_rows() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        write_drive_index(
+            &temp_dir,
+            'C',
+            &[SearchIndexPathRow {
+                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        write_overlay_drive_index(
+            &temp_dir,
+            'C',
+            &[SearchIndexPathRow {
+                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                has_deleted_entries: true,
+            }],
+        )?;
+
+        let mut session = QuerySession {
+            backend: super::QuerySessionBackend::Local,
+            sync_dir: temp_dir.path().to_path_buf(),
+            published_index_cache: std::collections::HashMap::new(),
+        };
+        let mut plan = fixture_drive_plan("Cargo.toml");
+        plan.include_deleted = true;
+        let mut rows = Vec::new();
+
+        session.visit_rows(plan, |row| {
+            rows.push(row);
+            Ok(ControlFlow::Continue(()))
+        })?;
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path.to_string(), r"C:\Repos\app\Cargo.toml");
+        assert!(rows[0].has_deleted_entries);
         Ok(())
     }
 }

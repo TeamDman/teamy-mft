@@ -13,6 +13,11 @@ impl QueryScope {
     pub fn matches_path(&self, path: &Path) -> bool {
         path_matches_scope(path, self)
     }
+
+    #[must_use]
+    pub(crate) fn normalized_components(&self) -> Vec<String> {
+        lowercase_path_components(&self.root)
+    }
 }
 
 pub(crate) fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
@@ -29,7 +34,7 @@ pub(crate) fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<Qu
     }))
 }
 
-fn lowercase_path_components(path: &Path) -> Vec<String> {
+pub(crate) fn lowercase_path_components(path: &Path) -> Vec<String> {
     let path = path.as_os_str().to_string_lossy().replace('/', "\\");
     let path = path
         .strip_prefix(r"\\?\UNC\")
@@ -77,6 +82,7 @@ fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
 mod tests {
     use super::resolve_query_scope;
     use super::should_include_scope;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Mutex;
     use std::sync::OnceLock;
@@ -92,6 +98,16 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::env::set_current_dir(&self.0);
         }
+    }
+
+    #[cfg(windows)]
+    fn verbatim_path(path: &Path) -> String {
+        format!(r"\\?\{}", path.display())
+    }
+
+    #[cfg(windows)]
+    fn has_verbatim_prefix(path: &Path) -> bool {
+        path.to_string_lossy().starts_with(r"\\?\")
     }
 
     #[test]
@@ -116,6 +132,8 @@ mod tests {
 
         let scope = resolve_query_scope(Some(&scope_dir.to_string_lossy()))?
             .expect("directory scope should resolve");
+        let nested_file = dunce::canonicalize(&nested_file)?;
+        let sibling_file = dunce::canonicalize(&sibling_file)?;
 
         assert!(should_include_scope(
             &nested_file.to_string_lossy(),
@@ -140,6 +158,8 @@ mod tests {
 
         let scope = resolve_query_scope(Some(&scope_file.to_string_lossy()))?
             .expect("file scope should resolve");
+        let scope_file = dunce::canonicalize(&scope_file)?;
+        let other_file = dunce::canonicalize(&other_file)?;
 
         assert!(should_include_scope(
             &scope_file.to_string_lossy(),
@@ -168,6 +188,38 @@ mod tests {
 
         assert_eq!(scope.root, dunce::canonicalize(temp_dir.path())?);
         assert!(scope.include_descendants);
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_query_scope_removes_verbatim_prefix_for_directories() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let scope_dir = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&scope_dir)?;
+
+        let scope = resolve_query_scope(Some(&verbatim_path(&scope_dir)))?
+            .expect("directory scope should resolve");
+
+        assert_eq!(scope.root, dunce::canonicalize(&scope_dir)?);
+        assert!(!has_verbatim_prefix(&scope.root));
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_query_scope_removes_verbatim_prefix_for_files() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let scope_file = temp_dir.path().join("track.flac");
+        std::fs::write(&scope_file, [])?;
+
+        let scope = resolve_query_scope(Some(&verbatim_path(&scope_file)))?
+            .expect("file scope should resolve");
+
+        assert_eq!(scope.root, dunce::canonicalize(&scope_file)?);
+        assert!(!has_verbatim_prefix(&scope.root));
 
         Ok(())
     }

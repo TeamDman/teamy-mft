@@ -1,6 +1,5 @@
 mod ctrl_c_forwarder;
 mod disk_query_executor;
-mod drive_query_result;
 mod query_filter_behavior;
 mod query_filter_rules;
 mod query_group;
@@ -19,7 +18,6 @@ mod search_index_query;
 
 pub use crate::domain::Pathlike;
 pub use disk_query_executor::DiskQueryExecutor;
-pub(crate) use drive_query_result::DriveQueryResult;
 pub use query_filter_behavior::QueryFilterBehavior;
 pub use query_filter_rules::DEFAULT_PROFILE_NAME;
 pub use query_filter_rules::DiscoveredRuleFile;
@@ -30,6 +28,7 @@ pub use query_filter_rules::RuleLine;
 pub use query_filter_rules::normalize_profile_name;
 pub use query_filter_rules::profile_name_from_rules_path;
 pub use query_group::QueryGroup;
+pub(crate) use query_index_match::MatchingRowIndices;
 pub(crate) use query_index_match::matching_row_indices_for_rule;
 pub use query_limit::QueryLimit;
 pub use query_needle::QueryNeedle;

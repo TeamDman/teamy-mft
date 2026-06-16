@@ -1,8 +1,8 @@
-use crate::query::DEFAULT_PROFILE_NAME;
+use crate::query::normalize_profile_name;
 use crate::query::QueryLimit;
 use crate::query::QueryRule;
 use crate::query::QueryString;
-use crate::query::normalize_profile_name;
+use crate::query::DEFAULT_PROFILE_NAME;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -113,9 +113,10 @@ impl QueryPlan {
 #[cfg(test)]
 mod tests {
     use super::QueryPlan;
-    use crate::query::DEFAULT_PROFILE_NAME;
+    use crate::query::MatchingRowIndices;
     use crate::query::QueryNeedle;
     use crate::query::QueryRule;
+    use crate::query::DEFAULT_PROFILE_NAME;
 
     fn matching_paths(query_inputs: &[&str], paths: &[&str]) -> Vec<String> {
         let query_inputs = query_inputs
@@ -230,19 +231,23 @@ mod tests {
 
         let candidates = plan
             .query
-            .matching_row_indices(&|rule| {
+            .matching_row_index_candidates(&|rule| {
                 Ok(match format!("{rule:?}").as_str() {
                     "ContainsCaseInsensitive(AsciiLower([97, 108, 112, 104, 97]))" => {
-                        vec![0, 1, 3]
+                        MatchingRowIndices::RowIndices(vec![0, 1, 3])
                     }
-                    "ContainsCaseInsensitive(AsciiLower([98, 101, 116, 97]))" => vec![1, 2, 3],
-                    "ContainsCaseInsensitive(AsciiLower([103, 97, 109, 109, 97]))" => vec![5],
+                    "ContainsCaseInsensitive(AsciiLower([98, 101, 116, 97]))" => {
+                        MatchingRowIndices::RowIndices(vec![1, 2, 3])
+                    }
+                    "ContainsCaseInsensitive(AsciiLower([103, 97, 109, 109, 97]))" => {
+                        MatchingRowIndices::RowIndices(vec![5])
+                    }
                     other => panic!("unexpected rule: {other}"),
                 })
             })
             .expect("candidate lookup should succeed");
 
-        assert_eq!(candidates, vec![1, 3, 5]);
+        assert_eq!(candidates, MatchingRowIndices::RowIndices(vec![1, 3, 5]));
     }
 
     #[test]
@@ -274,15 +279,12 @@ mod tests {
         let query_inputs = vec!["FLOWER .jar>".to_owned()];
         let plan = QueryPlan::parse_inputs(&query_inputs).expect("query should parse");
 
-        assert!(
-            plan.query
-                .matches_preprocessed("Flower.JAR", Some("flower.jar"))
-        );
-        assert!(
-            !plan
-                .query
-                .matches_preprocessed("Flower.ZIP", Some("flower.zip"))
-        );
+        assert!(plan
+            .query
+            .matches_preprocessed("Flower.JAR", Some("flower.jar")));
+        assert!(!plan
+            .query
+            .matches_preprocessed("Flower.ZIP", Some("flower.zip")));
     }
 
     #[test]
@@ -377,33 +379,27 @@ mod tests {
     fn windows_invalid_query_characters_are_rejected_eagerly() {
         let query_inputs = vec!["flower?.jar".to_owned()];
         let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("Windows-invalid path character '?'")
-        );
+        assert!(error
+            .to_string()
+            .contains("Windows-invalid path character '?'"));
     }
 
     #[test]
     fn double_quote_is_rejected_eagerly() {
         let query_inputs = vec!["flower\".jar".to_owned()];
         let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("Windows-invalid path character '\"'")
-        );
+        assert!(error
+            .to_string()
+            .contains("Windows-invalid path character '\"'"));
     }
 
     #[test]
     fn colon_is_rejected_outside_a_drive_designator() {
         let query_inputs = vec!["flower:jar".to_owned()];
         let error = QueryPlan::parse_inputs(&query_inputs).expect_err("query should be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("unsupported ':' outside a drive designator")
-        );
+        assert!(error
+            .to_string()
+            .contains("unsupported ':' outside a drive designator"));
     }
 
     #[test]

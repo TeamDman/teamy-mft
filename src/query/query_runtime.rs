@@ -4,6 +4,7 @@ use crate::query::QueryResultRow;
 use crate::query::QuerySession;
 use crate::windows_utils::ctrl_c::GracefulCancellationGuard;
 use eyre::WrapErr;
+use tracing::info_span;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -79,6 +80,7 @@ impl QueryRuntime {
         query_plan: QueryPlan,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
+        let _guard = info_span!("visit_rows_dyn").entered();
         PreparedQueryVisitor::prepare(self, query_plan)?.visit_rows(visit)
     }
 
@@ -137,6 +139,7 @@ impl LocalQueryVisitor {
     }
 
     fn visit_rows(mut self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
+        let _guard = info_span!("visit_local_rows").entered();
         let result = self.query_session.visit_rows_with_cancel_dyn(
             self.query_plan,
             Some(self.cancel.as_ref()),
@@ -173,6 +176,7 @@ impl DaemonQueryVisitor {
     }
 
     fn visit_rows(self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
+        let _guard = info_span!("visit_daemon_rows").entered();
         let visit_result = QueryRuntime::visit_daemon_rows_from_channel(self.rows_rx, visit);
         if matches!(visit_result, Ok(ControlFlow::Break(()))) {
             self.cleanup.cancel_signal.request_cancel()?;
