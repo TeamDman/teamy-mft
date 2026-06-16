@@ -45,6 +45,7 @@ fn main() -> eyre::Result<()> {
     let mut raw_counts = BTreeMap::<String, usize>::new();
     let mut total_files = 0_usize;
 
+    let start = std::time::Instant::now();
     args.visit_rows(|row| {
         let path = row.path.as_path();
         if !path.is_file() {
@@ -87,5 +88,7 @@ fn main() -> eyre::Result<()> {
         }
     }
 
+    let elapsed = start.elapsed();
+    println!("elapsed: {elapsed:.2?}");
     Ok(())
 }
