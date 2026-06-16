@@ -193,15 +193,15 @@ mod tests {
     fn query_string_intersects_contains_and_suffix_candidates() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\src\\flower.jar"),
+                path: String::from("C:\\src\\flower.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\flowchart.txt"),
+                path: String::from("C:\\pkg\\flowchart.txt").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\trees.zip"),
+                path: String::from("C:\\pkg\\trees.zip").into(),
                 has_deleted_entries: false,
             },
         ];

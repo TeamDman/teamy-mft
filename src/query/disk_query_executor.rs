@@ -182,11 +182,11 @@ mod tests {
             'C',
             &[
                 SearchIndexPathRow {
-                    path: cargo_path.display().to_string(),
+                    path: cargo_path.display().to_string().into(),
                     has_deleted_entries: false,
                 },
                 SearchIndexPathRow {
-                    path: rules_path.display().to_string(),
+                    path: rules_path.display().to_string().into(),
                     has_deleted_entries: false,
                 },
             ],

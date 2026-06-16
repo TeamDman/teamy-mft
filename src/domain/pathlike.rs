@@ -42,6 +42,12 @@ impl From<String> for Pathlike {
     }
 }
 
+impl From<&str> for Pathlike {
+    fn from(value: &str) -> Self {
+        Self::new(String::from(value))
+    }
+}
+
 impl From<Pathlike> for String {
     fn from(value: Pathlike) -> Self {
         value.0
@@ -77,6 +83,12 @@ impl AsRef<Path> for Pathlike {
 impl AsRef<str> for Pathlike {
     fn as_ref(&self) -> &str {
         self.as_str()
+    }
+}
+
+impl PartialEq<&str> for Pathlike {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
     }
 }
 
