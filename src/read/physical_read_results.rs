@@ -9,7 +9,7 @@ use std::io::SeekFrom;
 use std::io::Write;
 use teamy_uom_extensions::HumanInformationExt;
 use tracing::debug;
-#[cfg(feature = "tracy")]
+#[cfg(feature = "extended_observability")]
 use tracing::debug_span;
 use tracing::info_span;
 use tracing::trace;
@@ -217,7 +217,7 @@ fn write_step<W: Seek + Write>(
     writer: &mut W,
     step: &PhysicalReadResultsIterValue<'_>,
 ) -> eyre::Result<()> {
-    #[cfg(feature = "tracy")]
+    #[cfg(feature = "extended_observability")]
     let _span = debug_span!("write_logical_mft_step").entered();
 
     writer.seek(SeekFrom::Start(step.logical_offset.get::<byte>() as u64))?;

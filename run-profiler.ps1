@@ -2,6 +2,8 @@
 param(
 	[switch]$Release,
 	[switch]$NoOpenProfiler,
+	[switch]$RowLevelInsight,
+	[string]$Example,
 	[switch]$Elevated,
 	[switch]$ElevateTracy,
 	[Parameter(Position = 0, ValueFromRemainingArguments = $true)]
@@ -184,11 +186,15 @@ function Start-LoggedProcess {
 	param(
 		[Parameter(Mandatory = $true)]
 		[string]$FilePath,
-		[Parameter(Mandatory = $true)]
 		[string[]]$ArgumentList,
 		[Parameter(Mandatory = $true)]
 		[string]$LogPath
 	)
+
+	if ($null -eq $ArgumentList) {
+		$ArgumentList = @()
+	}
+	$ArgumentList = @($ArgumentList | Where-Object { $null -ne $_ -and $_ -ne '' })
 
 	$quotedArguments = (($ArgumentList | ForEach-Object { Quote-ProcessArgument $_ }) -join ' ')
 	return [TeamyMftProfilerLoggedProcess]::Start($FilePath, $quotedArguments, $LogPath)
@@ -233,6 +239,13 @@ if ($Elevated -and -not (Test-IsAdministrator)) {
 	}
 	if ($NoOpenProfiler) {
 		$arguments += '-NoOpenProfiler'
+	}
+	if ($RowLevelInsight) {
+		$arguments += '-RowLevelInsight'
+	}
+	if ($Example) {
+		$arguments += '-Example'
+		$arguments += $Example
 	}
 	if ($ElevateTracy) {
 		$arguments += '-ElevateTracy'
@@ -288,7 +301,12 @@ else {
     Write-Host "teamy-mft not yet on PATH; skipping daemon stop helper."
 }
 
-$profilerFeatures = 'tracy'
+$profilerFeatures = @('extended_observability')
+if ($RowLevelInsight) {
+	$profilerFeatures += 'extended_observability_per_record'
+}
+$profilerFeatureArgument = $profilerFeatures -join ' '
+$profilerFeatureLabel = $profilerFeatures -join ', '
 
 function Format-Elapsed {
 	param(
@@ -548,21 +566,41 @@ if (-not $csvExportCommand) {
 	Write-Warning "tracy-csvexport.exe not found in PATH; CSV export will be skipped"
 }
 
-if (-not $QueryArgs -or $QueryArgs.Count -eq 0) {
+
+if ($QueryArgs.Count -gt 0 -and $QueryArgs[0] -eq '--') {
+	$QueryArgs = @($QueryArgs | Select-Object -Skip 1)
+}
+
+if (-not $Example -and (-not $QueryArgs -or $QueryArgs.Count -eq 0)) {
 	$QueryArgs = @("status")
 }
 
 $profileOutputDirectory = if ($Release) { 'release' } else { 'debug' }
 $profileLabel = if ($Release) { 'release' } else { 'debug' }
-$buildArgs = @('build', '--bin', 'teamy-mft', '--features', $profilerFeatures)
+$targetPath = $null
+$targetLabel = $null
+$failureTargetLabel = $null
+$buildTargetArgs = @()
+if ($Example) {
+	$buildTargetArgs = @('--example', $Example)
+	$targetPath = Join-Path $PSScriptRoot "target\$profileOutputDirectory\examples\$Example.exe"
+	$targetLabel = "example $Example"
+	$failureTargetLabel = "$Example.exe"
+} else {
+	$buildTargetArgs = @('--bin', 'teamy-mft')
+	$targetPath = Join-Path $PSScriptRoot "target\$profileOutputDirectory\teamy-mft.exe"
+	$targetLabel = 'teamy-mft'
+	$failureTargetLabel = 'teamy-mft.exe'
+}
+
+$buildArgs = @('build') + $buildTargetArgs + @('--features', $profilerFeatureArgument)
 if ($Release) {
 	$buildArgs += '--release'
 }
-$teamyMftPath = Join-Path $PSScriptRoot "target\$profileOutputDirectory\teamy-mft.exe"
 $appArgs = @($QueryArgs)
 
 $buildStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-Write-Host "Building $profileLabel with features ${profilerFeatures}: cargo $($buildArgs -join ' ')"
+Write-Host "Building $profileLabel with features ${profilerFeatureLabel}: cargo $($buildArgs -join ' ')"
 & cargo @buildArgs
 $buildStopwatch.Stop()
 $buildElapsed = $buildStopwatch.Elapsed
@@ -571,8 +609,8 @@ if ($LASTEXITCODE -ne 0) {
 	throw "cargo build failed with exit code $LASTEXITCODE"
 }
 
-if (-not (Test-Path $teamyMftPath)) {
-	throw "built teamy-mft executable not found at $teamyMftPath"
+if (-not (Test-Path $targetPath)) {
+	throw "built $targetLabel executable not found at $targetPath"
 }
 
 $captureDir = Join-Path $PSScriptRoot "tracy"
@@ -591,11 +629,11 @@ $capture = $null
 $loggedTeamyProcess = $null
 
 try {
-	Write-Host "Starting built $profileLabel teamy-mft: $teamyMftPath $($appArgs -join ' ')"
+	Write-Host "Starting built $profileLabel ${targetLabel}: $targetPath $($appArgs -join ' ')"
 	$commandStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	$loggedTeamyProcess = Start-LoggedProcess -FilePath $teamyMftPath -ArgumentList $appArgs -LogPath $logPath
+	$loggedTeamyProcess = Start-LoggedProcess -FilePath $targetPath -ArgumentList $appArgs -LogPath $logPath
 	$teamyProcess = $loggedTeamyProcess.Process
-	Write-Host "Waiting $(Format-Elapsed $captureAttachDelay) for teamy-mft Tracy endpoint before launching capture"
+	Write-Host "Waiting $(Format-Elapsed $captureAttachDelay) for $targetLabel Tracy endpoint before launching capture"
 	Start-Sleep -Milliseconds ([int]$captureAttachDelay.TotalMilliseconds)
 
 	$captureLaunchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -614,7 +652,7 @@ try {
 	$loggedTeamyProcess = $null
 	Write-Host "Traced command time: $(Format-Elapsed $commandElapsed)"
 	if ($commandExitCode -ne 0) {
-		$commandFailureMessage = "teamy-mft.exe failed with exit code $commandExitCode"
+		$commandFailureMessage = "$failureTargetLabel failed with exit code $commandExitCode"
 		Write-Warning $commandFailureMessage
 	}
 }
@@ -699,5 +737,7 @@ if ($commandFailureMessage) {
 	Pause
 	throw $commandFailureMessage
 } else {
-	Pause
+	if ($Elevated) {
+		Pause
+	}
 }

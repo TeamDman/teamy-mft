@@ -20,6 +20,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use teamy_mft::cli::command::query::QueryArgs;
+use teamy_mft::cli::global_args::GlobalArgs;
+use teamy_mft::logging_init::init_logging;
 use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
@@ -28,6 +30,7 @@ const NO_EXTENSION: &str = "(no extension)";
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
+    init_logging(&GlobalArgs::default())?;
 
     let scope = std::env::args()
         .nth(1)
