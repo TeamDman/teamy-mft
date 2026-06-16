@@ -1,11 +1,10 @@
 use crate::machine::config::published_drive_paths;
-use crate::query::matching_row_indices_for_rule;
-use crate::query::query_scope::QueryScope;
-use crate::query::resolve_query_scope;
 use crate::query::MatchingRowIndices;
 use crate::query::Pathlike;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
+use crate::query::matching_row_indices_for_rule;
+use crate::query::query_scope::QueryScope;
 use crate::search_index::load::MappedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use eyre::Context;
@@ -108,10 +107,10 @@ fn matching_row_indices_for_scope(
 fn visit_matching_row_indices(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     mut visit: impl FnMut(u32) -> eyre::Result<ControlFlow<(), ()>>,
 ) -> eyre::Result<ControlFlow<(), ()>> {
-    let scope_matches = resolve_query_scope(query_plan.r#in.as_deref())?
-        .as_ref()
+    let scope_matches = scope
         .map(|scope| matching_row_indices_for_scope(parsed_index, scope))
         .transpose()?;
 
@@ -160,6 +159,7 @@ fn visit_matching_row_indices(
 pub(crate) fn visit_parsed_search_index_rows(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -168,7 +168,7 @@ pub(crate) fn visit_parsed_search_index_rows(
     let _span = info_span!("materialize_matched_index_rows").entered();
     let control_flow = {
         let _span = info_span!("visit_matched_index_rows").entered();
-        visit_matching_row_indices(parsed_index, query_plan, |row_index| {
+        visit_matching_row_indices(parsed_index, query_plan, scope, |row_index| {
             let (path, has_deleted_entries) = {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("read_matched_index_row").entered();
@@ -207,6 +207,7 @@ pub(crate) fn visit_parsed_search_index_rows(
 pub(crate) fn visit_matching_parsed_row_indices(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(u32) -> eyre::Result<ControlFlow<(), ()>>,
@@ -214,7 +215,7 @@ pub(crate) fn visit_matching_parsed_row_indices(
     let loaded_rows = parsed_index.row_count();
     let control_flow = {
         let _span = info_span!("visit_matching_row_indices_only").entered();
-        visit_matching_row_indices(parsed_index, query_plan, |row_index| {
+        visit_matching_row_indices(parsed_index, query_plan, scope, |row_index| {
             let has_deleted_entries = {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("read_matched_row_index_filter_state").entered();
@@ -253,6 +254,7 @@ fn visit_matching_search_index_rows(
     _drive_letter: char,
     _index_kind: &'static str,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     include_deleted: bool,
     only_deleted: bool,
     visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -287,6 +289,7 @@ fn visit_matching_search_index_rows(
     visit_parsed_search_index_rows(
         &parsed_index,
         query_plan,
+        scope,
         include_deleted,
         only_deleted,
         visit,
@@ -312,6 +315,7 @@ fn search_index_has_rows(index_path: &Path) -> eyre::Result<bool> {
 fn collect_matching_row_refs(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<(usize, Vec<MatchingRowRef>)> {
@@ -320,6 +324,7 @@ fn collect_matching_row_refs(
     let (loaded_rows, control_flow) = visit_matching_parsed_row_indices(
         parsed_index,
         query_plan,
+        scope,
         include_deleted,
         only_deleted,
         |row_index| {
@@ -361,6 +366,7 @@ pub(crate) fn visit_drive_search_index_rows(
     drive_letter: char,
     sync_dir: &Path,
     query_plan: &QueryPlan,
+    scope: Option<&QueryScope>,
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -399,10 +405,20 @@ pub(crate) fn visit_drive_search_index_rows(
                 )
             })?;
 
-        let (base_loaded_rows, mut base_rows) =
-            collect_matching_row_refs(&base_parsed, query_plan, include_deleted, only_deleted)?;
-        let (overlay_loaded_rows, mut overlay_rows) =
-            collect_matching_row_refs(&overlay_parsed, query_plan, include_deleted, only_deleted)?;
+        let (base_loaded_rows, mut base_rows) = collect_matching_row_refs(
+            &base_parsed,
+            query_plan,
+            scope,
+            include_deleted,
+            only_deleted,
+        )?;
+        let (overlay_loaded_rows, mut overlay_rows) = collect_matching_row_refs(
+            &overlay_parsed,
+            query_plan,
+            scope,
+            include_deleted,
+            only_deleted,
+        )?;
 
         base_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
         overlay_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
@@ -445,6 +461,7 @@ pub(crate) fn visit_drive_search_index_rows(
         drive_letter,
         "base",
         query_plan,
+        scope,
         include_deleted,
         only_deleted,
         &mut visit,
@@ -469,6 +486,7 @@ struct MatchingRowRef {
 mod tests {
     use super::visit_matching_parsed_row_indices;
     use crate::query::QueryPlan;
+    use crate::query::resolve_query_scope;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::ParsedSearchIndex;
@@ -544,13 +562,20 @@ mod tests {
 
         let mut plan = QueryPlan::parse_inputs(&[String::from("<>")])?;
         plan.r#in = Some(scope_dir.to_string_lossy().to_string());
+        let scope = resolve_query_scope(plan.r#in.as_deref())?;
 
         let mut matching_rows = Vec::new();
-        let (_, control_flow) =
-            visit_matching_parsed_row_indices(&parsed, &plan, false, false, |row_index| {
+        let (_, control_flow) = visit_matching_parsed_row_indices(
+            &parsed,
+            &plan,
+            scope.as_ref(),
+            false,
+            false,
+            |row_index| {
                 matching_rows.push(row_index);
                 Ok(ControlFlow::Continue(()))
-            })?;
+            },
+        )?;
 
         assert_eq!(control_flow, ControlFlow::Continue(()));
         assert_eq!(matching_rows, vec![0, 2]);

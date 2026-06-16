@@ -1,11 +1,12 @@
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
-use crate::query::QueryFilterRules;
 use crate::query::Pathlike;
+use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
 use crate::query::QueryRuntime;
+use crate::query::QueryScope;
 use crate::query::search_index_query::mapped_search_index_has_rows;
 use crate::query::search_index_query::visit_matching_parsed_row_indices;
 use crate::query::visit_parsed_search_index_rows;
@@ -15,12 +16,12 @@ use crate::search_index::search_index_bytes::SearchIndexBytes;
 use eyre::Context;
 use eyre::ContextCompat;
 use eyre::ensure;
-use tracing::info_span;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use tracing::info_span;
 
 use super::query_runtime::QueryRowVisitor;
 
@@ -123,9 +124,7 @@ impl QuerySession {
                     }
                     Ok(ControlFlow::Continue(()))
                 }
-                ControlFlow::Break(()) => {
-                    Ok(ControlFlow::Break(()))
-                }
+                ControlFlow::Break(()) => Ok(ControlFlow::Break(())),
             }
         };
 
@@ -246,16 +245,23 @@ impl CachedPublishedDriveQuery {
             let base_parsed_index = SearchIndexBytes::new(self.base_index.bytes())
                 .parse_trusted_for_query()
                 .wrap_err_with(|| {
-                    format!("failed preparing cached base index for drive {}", self.drive)
+                    format!(
+                        "failed preparing cached base index for drive {}",
+                        self.drive
+                    )
                 })?;
             let overlay_parsed_index = SearchIndexBytes::new(overlay_index.bytes())
                 .parse_trusted_for_query()
                 .wrap_err_with(|| {
-                    format!("failed preparing cached overlay index for drive {}", self.drive)
+                    format!(
+                        "failed preparing cached overlay index for drive {}",
+                        self.drive
+                    )
                 })?;
             let mut base_rows = Self::collect_matching_row_refs(
                 &base_parsed_index,
                 query_plan,
+                filter.scope(),
                 cancel,
             )
             .wrap_err_with(|| {
@@ -267,14 +273,15 @@ impl CachedPublishedDriveQuery {
             let mut overlay_rows = Self::collect_matching_row_refs(
                 &overlay_parsed_index,
                 query_plan,
+                filter.scope(),
                 cancel,
             )
-                .wrap_err_with(|| {
-                    format!(
-                        "failed querying cached overlay index for drive {}",
-                        self.drive
-                    )
-                })?;
+            .wrap_err_with(|| {
+                format!(
+                    "failed querying cached overlay index for drive {}",
+                    self.drive
+                )
+            })?;
 
             base_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
             overlay_rows.sort_unstable_by(|left, right| left.path.cmp(&right.path));
@@ -333,6 +340,7 @@ impl CachedPublishedDriveQuery {
         let (_loaded_rows, control_flow) = visit_parsed_search_index_rows(
             &parsed_index,
             query_plan,
+            filter.scope(),
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row| {
@@ -351,12 +359,14 @@ impl CachedPublishedDriveQuery {
     fn collect_matching_row_refs<'a>(
         parsed_index: &'a ParsedSearchIndex<'a>,
         query_plan: &QueryPlan,
+        scope: Option<&QueryScope>,
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<Vec<MatchingRowRef>> {
         let mut rows = Vec::new();
         let (_loaded_rows, _control_flow) = visit_matching_parsed_row_indices(
             parsed_index,
             query_plan,
+            scope,
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row_index| {
@@ -609,14 +619,10 @@ mod tests {
         plan.limit = 1_usize.into();
         let mut visited = 0_usize;
 
-        session.visit_rows_with_cancel(
-            plan,
-            None,
-            |_row| -> eyre::Result<ControlFlow<()>> {
-                visited += 1;
-                Ok(ControlFlow::Continue(()))
-            },
-        )?;
+        session.visit_rows_with_cancel(plan, None, |_row| -> eyre::Result<ControlFlow<()>> {
+            visited += 1;
+            Ok(ControlFlow::Continue(()))
+        })?;
 
         assert_eq!(visited, 1);
         Ok(())
