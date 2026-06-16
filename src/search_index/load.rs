@@ -106,11 +106,11 @@ mod tests {
         let index_path = temp_dir.path().join("C.mft_search_index");
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\alpha.txt"),
+                path: String::from("C:\\alpha.txt").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\beta.LOG"),
+                path: String::from("C:\\beta.LOG").into(),
                 has_deleted_entries: true,
             },
         ];
@@ -122,7 +122,7 @@ mod tests {
         let views = mapped.row_views()?.collect::<eyre::Result<Vec<_>>>()?;
 
         assert_eq!(views.len(), 2);
-        assert_eq!(views[0].path(), "C:\\alpha.txt");
+        assert_eq!(views[0].path().as_str(), "C:\\alpha.txt");
         assert_eq!(
             views[0]
                 .segment_views()
@@ -131,7 +131,7 @@ mod tests {
             vec!["alpha.txt", "c:"]
         );
         assert!(!views[0].has_deleted_entries);
-        assert_eq!(views[1].path(), "C:\\beta.LOG");
+        assert_eq!(views[1].path().as_str(), "C:\\beta.LOG");
         assert_eq!(
             views[1]
                 .segment_views()

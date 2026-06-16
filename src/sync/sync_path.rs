@@ -56,9 +56,9 @@ pub fn sync_path_into_published_overlay(sync_dir: &Path, path: &str) -> eyre::Re
         .map(|row| (row.path.clone(), row))
         .collect::<BTreeMap<_, _>>();
     rows_by_path.insert(
-        rendered_path.clone(),
+        rendered_path.clone().into(),
         SearchIndexPathRow {
-            path: rendered_path,
+            path: rendered_path.into(),
             has_deleted_entries: !target_path.exists(),
         },
     );
@@ -125,7 +125,7 @@ mod tests {
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new('C', 0, 1),
             &[SearchIndexPathRow {
-                path: String::from(r"C:\existing.txt"),
+                path: String::from(r"C:\existing.txt").into(),
                 has_deleted_entries: false,
             }],
         )?
@@ -146,12 +146,12 @@ mod tests {
         assert!(
             overlay_rows
                 .iter()
-                .any(|row| row.path == r"C:\existing.txt")
+                .any(|row| row.path.as_str() == r"C:\existing.txt")
         );
         assert!(
             overlay_rows
                 .iter()
-                .any(|row| row.path == r"C:\repo\filters.rules")
+                .any(|row| row.path.as_str() == r"C:\repo\filters.rules")
         );
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?.expect("checkpoint should exist");
         assert_eq!(checkpoint.overlay_row_count, 2);

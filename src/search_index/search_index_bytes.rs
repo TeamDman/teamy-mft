@@ -1,4 +1,5 @@
 use crate::machine::config::SEARCH_INDEX_TEMP_FILE_EXTENSION;
+use crate::query::Pathlike;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_MAGIC;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
@@ -103,7 +104,7 @@ pub struct SearchIndexPathRowView<'a> {
 
 impl SearchIndexPathRowView<'_> {
     #[must_use]
-    pub fn path(&self) -> String {
+    pub fn path(&self) -> Pathlike {
         let mut segments = self.segment_views().collect::<Vec<_>>();
         segments.reverse();
 
@@ -119,7 +120,7 @@ impl SearchIndexPathRowView<'_> {
             }
             path.push_str(&segment.display_lossy());
         }
-        path
+        Pathlike::from(path)
     }
 
     #[must_use]
@@ -998,7 +999,7 @@ fn collect_search_index_tables(
         let mut parent_node_index = NO_PARENT_NODE;
         let mut terminal_segment_id = None;
         let mut row_segment_ids = Vec::new();
-        for segment in path_segments(&row.path) {
+        for segment in path_segments(row.path.as_str()) {
             let segment_id = if let Some(existing_id) = segment_ids_by_display.get(segment) {
                 *existing_id
             } else {
@@ -1609,11 +1610,11 @@ mod tests {
     fn segment_dictionary_and_parent_chain_roundtrip() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\src\\target\\foo.txt"),
+                path: String::from("C:\\src\\target\\foo.txt").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\target\\bar.txt"),
+                path: String::from("C:\\pkg\\target\\bar.txt").into(),
                 has_deleted_entries: true,
             },
         ];
@@ -1633,7 +1634,7 @@ mod tests {
 
         let views = parsed.row_views().collect::<eyre::Result<Vec<_>>>()?;
         assert_eq!(views.len(), 2);
-        assert_eq!(views[0].path(), "C:\\src\\target\\foo.txt");
+        assert_eq!(views[0].path().as_str(), "C:\\src\\target\\foo.txt");
         assert_eq!(
             views[0]
                 .segment_views()
@@ -1641,7 +1642,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["foo.txt", "target", "src", "c:"]
         );
-        assert_eq!(views[1].path(), "C:\\pkg\\target\\bar.txt");
+        assert_eq!(views[1].path().as_str(), "C:\\pkg\\target\\bar.txt");
         assert!(views[1].has_deleted_entries);
         assert_eq!(
             parsed
@@ -1668,7 +1669,7 @@ mod tests {
     #[test]
     fn snapshot_small_index_bytes_v7_roundtrips() -> eyre::Result<()> {
         let rows = vec![SearchIndexPathRow {
-            path: String::from(VIRTUAL_SNAPSHOT_TEST_PATH),
+            path: String::from(VIRTUAL_SNAPSHOT_TEST_PATH).into(),
             has_deleted_entries: false,
         }];
 
@@ -1685,7 +1686,8 @@ mod tests {
             .row_views()?
             .map(|row| row.map(|view| view.path()))
             .collect::<eyre::Result<Vec<_>>>()?;
-        assert_eq!(parsed_rows, vec![String::from(VIRTUAL_SNAPSHOT_TEST_PATH)]);
+        assert_eq!(parsed_rows.len(), 1);
+        assert_eq!(parsed_rows[0].as_str(), VIRTUAL_SNAPSHOT_TEST_PATH);
 
         assert!(
             search_index_bytes
@@ -1710,11 +1712,11 @@ mod tests {
     fn trusted_query_parse_matches_validated_parse_for_well_formed_index() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\src\\flower.jar"),
+                path: String::from("C:\\src\\flower.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\trees.zip"),
+                path: String::from("C:\\pkg\\trees.zip").into(),
                 has_deleted_entries: true,
             },
         ];
@@ -1757,15 +1759,15 @@ mod tests {
     fn extension_postings_group_segments_by_normalized_suffix() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\src\\flower.jar"),
+                path: String::from("C:\\src\\flower.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\trees.jar"),
+                path: String::from("C:\\pkg\\trees.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\notes.txt"),
+                path: String::from("C:\\pkg\\notes.txt").into(),
                 has_deleted_entries: false,
             },
         ];
@@ -1803,15 +1805,15 @@ mod tests {
     fn extension_postings_match_only_terminal_segments() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\project.git"),
+                path: String::from("C:\\repo\\project.git").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev"),
+                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main"),
+                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main").into(),
                 has_deleted_entries: false,
             },
         ];
@@ -1837,15 +1839,15 @@ mod tests {
     fn trigram_postings_group_segments_by_normalized_trigram() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\src\\flower.jar"),
+                path: String::from("C:\\src\\flower.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\flowchart.txt"),
+                path: String::from("C:\\pkg\\flowchart.txt").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\trees.zip"),
+                path: String::from("C:\\pkg\\trees.zip").into(),
                 has_deleted_entries: false,
             },
         ];

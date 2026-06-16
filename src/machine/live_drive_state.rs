@@ -16,6 +16,7 @@ use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
+use crate::query::Pathlike;
 use crate::query::visit_parsed_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
@@ -61,7 +62,7 @@ struct LiveDriveGraph {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProjectedPath {
-    path: String,
+    path: Pathlike,
     is_live: bool,
 }
 
@@ -632,7 +633,7 @@ impl LiveDriveGraph {
     ) -> eyre::Result<Vec<ProjectedPath>> {
         let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
         let mut visiting = FxHashSet::<u64>::default();
-        let mut path_states = BTreeMap::<String, bool>::new();
+        let mut path_states = BTreeMap::<Pathlike, bool>::new();
         for frn in self.nodes.keys().copied() {
             if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                 eyre::bail!(
@@ -674,7 +675,7 @@ impl LiveDriveGraph {
             return Vec::new();
         }
 
-        let root_path = format!("{}:\\", self.drive_letter);
+        let root_path = Pathlike::from(format!("{}:\\", self.drive_letter));
         let projected = if frn == self.root_frn {
             vec![ProjectedPath {
                 path: root_path,
@@ -685,11 +686,11 @@ impl LiveDriveGraph {
                 visiting.remove(&frn);
                 return Vec::new();
             };
-            let mut by_path = FxHashMap::<String, bool>::default();
+            let mut by_path = FxHashMap::<Pathlike, bool>::default();
             for link in &node.links {
                 let parent_paths = self.projected_paths_for(link.parent_frn, memo, visiting);
                 for parent in parent_paths {
-                    let path = join_windows_path(&parent.path, &link.name);
+                    let path = join_windows_path(parent.path.as_str(), &link.name);
                     let is_live = parent.is_live && !link.is_deleted;
                     by_path
                         .entry(path)
@@ -837,11 +838,11 @@ fn diff_overlay_rows(
     overlay
 }
 
-fn join_windows_path(parent: &str, child: &str) -> String {
+fn join_windows_path(parent: &str, child: &str) -> Pathlike {
     if parent.ends_with('\\') {
-        format!("{parent}{child}")
+        format!("{parent}{child}").into()
     } else {
-        format!("{parent}\\{child}")
+        format!("{parent}\\{child}").into()
     }
 }
 
@@ -947,7 +948,7 @@ mod tests {
         let rows = rule_file_paths
             .iter()
             .map(|path| SearchIndexPathRow {
-                path: path.display().to_string(),
+                path: path.display().to_string().into(),
                 has_deleted_entries: false,
             })
             .collect::<Vec<_>>();
@@ -1111,11 +1112,11 @@ mod tests {
     #[test]
     fn overlay_diff_marks_removed_base_paths_deleted() {
         let base_rows = vec![SearchIndexPathRow {
-            path: String::from(r"C:\alpha.txt"),
+            path: String::from(r"C:\alpha.txt").into(),
             has_deleted_entries: false,
         }];
         let current_rows = vec![SearchIndexPathRow {
-            path: String::from(r"C:\beta.txt"),
+            path: String::from(r"C:\beta.txt").into(),
             has_deleted_entries: false,
         }];
         let overlay = diff_overlay_rows(&base_rows, &current_rows);

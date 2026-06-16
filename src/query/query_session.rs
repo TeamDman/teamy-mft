@@ -376,7 +376,7 @@ mod tests {
             &temp_dir,
             'C',
             &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml"),
+                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                 has_deleted_entries: false,
             }],
         )?;
@@ -411,7 +411,7 @@ mod tests {
             &temp_dir,
             'C',
             &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml"),
+                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                 has_deleted_entries: false,
             }],
         )?;
@@ -445,11 +445,11 @@ mod tests {
             'C',
             &[
                 SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\Cargo.toml"),
+                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                     has_deleted_entries: false,
                 },
                 SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\package.json"),
+                    path: String::from(r"C:\Repos\app\package.json").into(),
                     has_deleted_entries: false,
                 },
             ],
@@ -496,11 +496,11 @@ mod tests {
             'C',
             &[
                 SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\Cargo.toml"),
+                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                     has_deleted_entries: false,
                 },
                 SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\package.json"),
+                    path: String::from(r"C:\Repos\app\package.json").into(),
                     has_deleted_entries: false,
                 },
             ],
@@ -535,7 +535,7 @@ mod tests {
             &temp_dir,
             'C',
             &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml"),
+                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                 has_deleted_entries: false,
             }],
         )?;

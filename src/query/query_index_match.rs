@@ -183,15 +183,15 @@ mod tests {
     fn parse_fixture_index() -> eyre::Result<ParsedSearchIndex<'static>> {
         parse_index(&[
             SearchIndexPathRow {
-                path: String::from("C:\\src\\flower.jar"),
+                path: String::from("C:\\src\\flower.jar").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\flowchart.txt"),
+                path: String::from("C:\\pkg\\flowchart.txt").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\pkg\\trees.zip"),
+                path: String::from("C:\\pkg\\trees.zip").into(),
                 has_deleted_entries: false,
             },
         ])
@@ -231,15 +231,15 @@ mod tests {
     fn suffix_rules_match_only_terminal_segments_in_indexed_queries() -> eyre::Result<()> {
         let parsed = parse_index(&[
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\project.git"),
+                path: String::from("C:\\repo\\project.git").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev"),
+                path: String::from("C:\\repo\\.git\\objects\\pack\\pack-a.rev").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main"),
+                path: String::from("C:\\repo\\.git\\refs\\remotes\\origin\\main").into(),
                 has_deleted_entries: false,
             },
         ])?;

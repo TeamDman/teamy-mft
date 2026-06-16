@@ -1215,11 +1215,11 @@ mod tests {
     fn rules_file_suffix_query_matches_teamy_rule_paths() -> eyre::Result<()> {
         let rows = vec![
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\2026-05-23.teamy_mft_rules"),
+                path: String::from("C:\\repo\\2026-05-23.teamy_mft_rules").into(),
                 has_deleted_entries: false,
             },
             SearchIndexPathRow {
-                path: String::from("C:\\repo\\.gitignore"),
+                path: String::from("C:\\repo\\.gitignore").into(),
                 has_deleted_entries: false,
             },
         ];
@@ -1254,7 +1254,7 @@ mod tests {
         std::fs::write(&rules_path, "EXCLUDE C:\\private\n")?;
 
         let base_rows = vec![SearchIndexPathRow {
-            path: String::from("C:\\repo\\notes.txt"),
+            path: String::from("C:\\repo\\notes.txt").into(),
             has_deleted_entries: false,
         }];
         let base_bytes = SearchIndexBytesMut::from_rows(
@@ -1265,7 +1265,7 @@ mod tests {
         std::fs::write(&published_paths.base_index_path, base_bytes)?;
 
         let overlay_rows = vec![SearchIndexPathRow {
-            path: rules_path.display().to_string(),
+            path: rules_path.display().to_string().into(),
             has_deleted_entries: false,
         }];
         let overlay_bytes = SearchIndexBytesMut::from_rows(

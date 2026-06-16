@@ -2178,7 +2178,7 @@ mod tests {
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new('C', 123, 1),
             &[SearchIndexPathRow {
-                path: String::from(r"C:\music\track.flac"),
+                path: String::from(r"C:\music\track.flac").into(),
                 has_deleted_entries: false,
             }],
         )?
@@ -2234,7 +2234,7 @@ mod tests {
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new('C', 123, 1),
             &[SearchIndexPathRow {
-                path: String::from(r"C:\music\track.flac"),
+                path: String::from(r"C:\music\track.flac").into(),
                 has_deleted_entries: false,
             }],
         )?

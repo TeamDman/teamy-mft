@@ -161,7 +161,7 @@ impl SyncIndex {
             .into_iter()
             .flatten()
             .map(|path| SearchIndexPathRow {
-                path: path.path.to_string_lossy().into_owned(),
+                path: path.path.to_string_lossy().into_owned().into(),
                 has_deleted_entries: path.has_deleted_entries(),
             })
             .collect())

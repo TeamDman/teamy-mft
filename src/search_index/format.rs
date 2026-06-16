@@ -1,3 +1,4 @@
+use crate::query::Pathlike;
 use std::io::Write;
 
 // idxf[impl search-index.header.magic]
@@ -9,7 +10,7 @@ pub const SEARCH_INDEX_HEADER_LEN: usize = 8 + 2 + 2 + 1 + 8 + 8;
 // idxf[impl search-index.row.deleted-flag]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SearchIndexPathRow {
-    pub path: String,
+    pub path: Pathlike,
     pub has_deleted_entries: bool,
 }
 
