@@ -450,22 +450,30 @@ fn discover_rule_files_for_drive(
     }
 
     let mut files = Vec::new();
-    visit_drive_search_index_rows(drive_letter, sync_dir, rules_query, false, false, |row| {
-        if let Some(pattern) = ignored_rules.is_ignored(row.path.as_ref()) {
-            debug!(
-                drive = %drive_letter,
-                path = %row.path.display(),
-                pattern,
-                "Skipping ignored rules file during query discovery"
-            );
-            return Ok(ControlFlow::Continue(()));
-        }
-        let Some(file) = load_rules_file(drive_letter, row.path.as_ref())? else {
-            return Ok(ControlFlow::Continue(()));
-        };
-        files.push(file);
-        Ok(ControlFlow::Continue(()))
-    })?;
+    visit_drive_search_index_rows(
+        drive_letter,
+        sync_dir,
+        rules_query,
+        None,
+        false,
+        false,
+        |row| {
+            if let Some(pattern) = ignored_rules.is_ignored(row.path.as_ref()) {
+                debug!(
+                    drive = %drive_letter,
+                    path = %row.path.display(),
+                    pattern,
+                    "Skipping ignored rules file during query discovery"
+                );
+                return Ok(ControlFlow::Continue(()));
+            }
+            let Some(file) = load_rules_file(drive_letter, row.path.as_ref())? else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            files.push(file);
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
 
     Ok(files)
 }
@@ -1237,11 +1245,9 @@ mod tests {
             RULES_FILE_EXTENSION,
         )));
 
-        let indices = plan
-            .query
-            .matching_row_index_candidates(&|rule| {
-                crate::query::matching_row_indices_for_rule(&parsed, rule)
-            })?;
+        let indices = plan.query.matching_row_index_candidates(&|rule| {
+            crate::query::matching_row_indices_for_rule(&parsed, rule)
+        })?;
 
         assert_eq!(indices, MatchingRowIndices::RowIndices(vec![0]));
         Ok(())

@@ -60,6 +60,11 @@ impl QueryRowFilter {
     }
 
     #[must_use]
+    pub(crate) fn scope(&self) -> Option<&QueryScope> {
+        self.scope.as_ref()
+    }
+
+    #[must_use]
     pub fn classify_and_match(&self, mut row: QueryResultRow) -> Option<QueryResultRow> {
         if !self.include_deleted_state(row.has_deleted_entries) {
             return None;

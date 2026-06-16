@@ -12,11 +12,11 @@ use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_reference::MftRecordReference;
 use crate::mft::mft_sequence_number::MftSequenceNumber;
+use crate::query::Pathlike;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
-use crate::query::Pathlike;
 use crate::query::visit_parsed_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::search_index::format::SearchIndexHeader;
@@ -460,8 +460,13 @@ impl LiveDriveState {
 
         let limit = request.limit.get();
         let mut rows = Vec::with_capacity(limit.unwrap_or_default());
-        let (_loaded_rows, _control_flow) =
-            visit_parsed_search_index_rows(&parsed_index, request, true, false, |row| {
+        let (_loaded_rows, _control_flow) = visit_parsed_search_index_rows(
+            &parsed_index,
+            request,
+            filter.scope(),
+            true,
+            false,
+            |row| {
                 if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
                     return Ok(ControlFlow::Break(()));
                 }
@@ -474,8 +479,9 @@ impl LiveDriveState {
                 }
 
                 Ok(ControlFlow::Continue(()))
-            })
-            .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
+            },
+        )
+        .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
 
         Ok(rows)
     }

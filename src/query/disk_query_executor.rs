@@ -2,8 +2,8 @@ use crate::machine::config::published_drive_paths;
 use crate::query::QueryFilterBehavior;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
-use crate::query::QueryRowFilter;
 use crate::query::QueryResultRow;
+use crate::query::QueryRowFilter;
 use crate::query::visit_drive_search_index_rows;
 use eyre::bail;
 use std::ops::ControlFlow;
@@ -104,6 +104,7 @@ impl DiskQueryExecutor {
                 drive_letter,
                 &self.sync_dir,
                 &self.query_plan,
+                filter.scope(),
                 include_deleted,
                 only_deleted,
                 |row| {
