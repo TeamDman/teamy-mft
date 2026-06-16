@@ -1,5 +1,6 @@
-use crate::query::QueryRule;
 use crate::query::query_string::validate_query_input;
+use crate::query::MatchingRowIndices;
+use crate::query::QueryRule;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use std::fmt::Display;
@@ -98,23 +99,21 @@ impl QueryGroup {
     /// # Errors
     ///
     /// Returns any error produced while looking up candidate rows for a rule.
-    pub fn matching_row_indices<F>(&self, row_indices_for_rule: &F) -> eyre::Result<Vec<u32>>
+    pub(crate) fn matching_row_index_candidates<F>(
+        &self,
+        row_indices_for_rule: &F,
+    ) -> eyre::Result<MatchingRowIndices>
     where
-        F: Fn(&QueryRule) -> eyre::Result<Vec<u32>>,
+        F: Fn(&QueryRule) -> eyre::Result<MatchingRowIndices>,
     {
         let Some((first_rule, remaining_rules)) = self.rules.split_first() else {
-            return Ok(Vec::new());
+            return Ok(MatchingRowIndices::RowIndices(Vec::new()));
         };
 
         let mut matches = row_indices_for_rule(first_rule)?;
-        matches.sort_unstable();
-        matches.dedup();
 
         for rule in remaining_rules {
-            let mut rule_matches = row_indices_for_rule(rule)?;
-            rule_matches.sort_unstable();
-            rule_matches.dedup();
-            matches = intersect_sorted(&matches, &rule_matches);
+            matches = matches.intersect(row_indices_for_rule(rule)?);
             if matches.is_empty() {
                 break;
             }
@@ -182,24 +181,4 @@ fn path_segments(path: &str) -> impl Iterator<Item = &str> {
 
 fn terminal_path_segment(path: &str) -> Option<&str> {
     path_segments(path).last()
-}
-
-fn intersect_sorted(left: &[u32], right: &[u32]) -> Vec<u32> {
-    let mut left_index = 0;
-    let mut right_index = 0;
-    let mut intersection = Vec::with_capacity(left.len().min(right.len()));
-
-    while left_index < left.len() && right_index < right.len() {
-        match left[left_index].cmp(&right[right_index]) {
-            std::cmp::Ordering::Less => left_index += 1,
-            std::cmp::Ordering::Greater => right_index += 1,
-            std::cmp::Ordering::Equal => {
-                intersection.push(left[left_index]);
-                left_index += 1;
-                right_index += 1;
-            }
-        }
-    }
-
-    intersection
 }

@@ -858,6 +858,7 @@ mod tests {
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
     use crate::machine::config::default_ignored_rules_path_patterns;
+    use crate::query::MatchingRowIndices;
     use crate::query::QueryNeedle;
     use crate::query::QueryPlan;
     use crate::query::QueryRule;
@@ -1236,11 +1237,13 @@ mod tests {
             RULES_FILE_EXTENSION,
         )));
 
-        let indices = plan.query.matching_row_indices(&|rule| {
-            crate::query::matching_row_indices_for_rule(&parsed, rule)
-        })?;
+        let indices = plan
+            .query
+            .matching_row_index_candidates(&|rule| {
+                crate::query::matching_row_indices_for_rule(&parsed, rule)
+            })?;
 
-        assert_eq!(indices, vec![0]);
+        assert_eq!(indices, MatchingRowIndices::RowIndices(vec![0]));
         Ok(())
     }
 

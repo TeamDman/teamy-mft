@@ -1,3 +1,4 @@
+use crate::query::MatchingRowIndices;
 use crate::query::QueryGroup;
 use crate::query::QueryRule;
 use facet::Facet;
@@ -95,19 +96,28 @@ impl QueryString {
     ///
     /// Returns any error produced while looking up candidate rows for the
     /// rules in this query string.
-    pub fn matching_row_indices<F>(&self, row_indices_for_rule: &F) -> eyre::Result<Vec<u32>>
+    pub(crate) fn matching_row_index_candidates<F>(
+        &self,
+        row_indices_for_rule: &F,
+    ) -> eyre::Result<MatchingRowIndices>
     where
-        F: Fn(&QueryRule) -> eyre::Result<Vec<u32>>,
+        F: Fn(&QueryRule) -> eyre::Result<MatchingRowIndices>,
     {
         let mut matches = Vec::new();
 
         for group in &self.groups {
-            matches.extend(group.matching_row_indices(row_indices_for_rule)?);
+            let group_matches = group.matching_row_index_candidates(row_indices_for_rule)?;
+            match group_matches {
+                MatchingRowIndices::MatchAll { row_count } => {
+                    return Ok(MatchingRowIndices::MatchAll { row_count });
+                }
+                MatchingRowIndices::RowIndices(row_indices) => matches.extend(row_indices),
+            }
         }
 
         matches.sort_unstable();
         matches.dedup();
-        Ok(matches)
+        Ok(MatchingRowIndices::RowIndices(matches))
     }
 }
 
@@ -184,6 +194,7 @@ fn is_query_boundary(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::QueryString;
+    use crate::query::MatchingRowIndices;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
@@ -215,10 +226,10 @@ mod tests {
         let query = QueryString::parse_inputs(&[String::from("flow .jar>")])?;
 
         assert_eq!(
-            query.matching_row_indices(&|rule| crate::query::matching_row_indices_for_rule(
-                &parsed, rule
-            ))?,
-            vec![0]
+            query.matching_row_index_candidates(&|rule| {
+                crate::query::matching_row_indices_for_rule(&parsed, rule)
+            })?,
+            MatchingRowIndices::RowIndices(vec![0])
         );
 
         Ok(())
