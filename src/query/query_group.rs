@@ -1,6 +1,6 @@
-use crate::query::query_string::validate_query_input;
 use crate::query::MatchingRowIndices;
 use crate::query::QueryRule;
+use crate::query::query_string::validate_query_input;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use std::fmt::Display;
