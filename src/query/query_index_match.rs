@@ -223,8 +223,8 @@ fn intersect_sorted_ids_in_place(mut left: Vec<u32>, right: &[u32]) -> Vec<u32> 
 
 #[cfg(test)]
 mod tests {
-    use super::matching_row_indices_for_rule;
     use super::MatchingRowIndices;
+    use super::matching_row_indices_for_rule;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;

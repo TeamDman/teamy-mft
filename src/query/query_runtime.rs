@@ -4,12 +4,12 @@ use crate::query::QueryResultRow;
 use crate::query::QuerySession;
 use crate::windows_utils::ctrl_c::GracefulCancellationGuard;
 use eyre::WrapErr;
-use tracing::info_span;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::JoinHandle;
 use tracing::debug;
+use tracing::info_span;
 
 use super::ctrl_c_forwarder::CtrlCForwarder;
 
@@ -25,11 +25,6 @@ pub type QueryRowVisitor<'a> = dyn FnMut(QueryResultRow) -> eyre::Result<Control
 pub enum QueryRuntime {
     Local,
     DaemonRpc,
-}
-
-enum PreparedQueryVisitor {
-    Local(LocalQueryVisitor),
-    Daemon(DaemonQueryVisitor),
 }
 
 struct LocalQueryVisitor {
@@ -81,7 +76,10 @@ impl QueryRuntime {
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
-        PreparedQueryVisitor::prepare(self, query_plan)?.visit_rows(visit)
+        match self {
+            Self::Local => LocalQueryVisitor::prepare(query_plan)?.visit_rows(visit),
+            Self::DaemonRpc => DaemonQueryVisitor::prepare(query_plan)?.visit_rows(visit),
+        }
     }
 
     fn visit_daemon_rows_from_channel(
@@ -103,24 +101,6 @@ impl QueryRuntime {
             }
             eyre::Ok(ControlFlow::Continue(()))
         })
-    }
-}
-
-impl PreparedQueryVisitor {
-    fn prepare(runtime: QueryRuntime, query_plan: QueryPlan) -> eyre::Result<Self> {
-        match runtime {
-            QueryRuntime::Local => {
-                Ok(Self::Local(LocalQueryVisitor::prepare(query_plan)?))
-            }
-            QueryRuntime::DaemonRpc => Ok(Self::Daemon(DaemonQueryVisitor::prepare(query_plan)?)),
-        }
-    }
-
-    fn visit_rows(self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
-        match self {
-            Self::Local(local) => local.visit_rows(visit),
-            Self::Daemon(daemon) => daemon.visit_rows(visit),
-        }
     }
 }
 
@@ -217,10 +197,7 @@ mod tests {
 
     #[test]
     fn runtime_constructors_select_expected_backend() {
-        assert_eq!(
-            QueryRuntime::published_index_only(),
-            QueryRuntime::Local
-        );
+        assert_eq!(QueryRuntime::published_index_only(), QueryRuntime::Local);
         assert_eq!(QueryRuntime::daemon_rpc(), QueryRuntime::DaemonRpc);
     }
 }

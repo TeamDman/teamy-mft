@@ -1,6 +1,4 @@
 mod ctrl_c_forwarder;
-mod disk_query_executor;
-mod query_filter_behavior;
 mod query_filter_rules;
 mod query_group;
 mod query_index_match;
@@ -17,8 +15,6 @@ mod query_string;
 mod search_index_query;
 
 pub use crate::domain::Pathlike;
-pub use disk_query_executor::DiskQueryExecutor;
-pub use query_filter_behavior::QueryFilterBehavior;
 pub use query_filter_rules::DEFAULT_PROFILE_NAME;
 pub use query_filter_rules::DiscoveredRuleFile;
 pub use query_filter_rules::QueryFilterRules;
