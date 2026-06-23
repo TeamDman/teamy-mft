@@ -104,14 +104,31 @@ fn matching_row_indices_for_scope(
     })
 }
 
+fn matching_row_indices_for_scopes(
+    parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
+    scopes: &[QueryScope],
+) -> eyre::Result<MatchingRowIndices> {
+    let mut matches: Option<MatchingRowIndices> = None;
+
+    for scope in scopes {
+        let scope_matches = matching_row_indices_for_scope(parsed_index, scope)?;
+        matches = Some(match matches.take() {
+            Some(existing) => existing.union(scope_matches),
+            None => scope_matches,
+        });
+    }
+
+    Ok(matches.unwrap_or(MatchingRowIndices::RowIndices(Vec::new())))
+}
+
 fn visit_matching_row_indices(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     mut visit: impl FnMut(u32) -> eyre::Result<ControlFlow<(), ()>>,
 ) -> eyre::Result<ControlFlow<(), ()>> {
-    let scope_matches = scope
-        .map(|scope| matching_row_indices_for_scope(parsed_index, scope))
+    let scope_matches = (!scopes.is_empty())
+        .then(|| matching_row_indices_for_scopes(parsed_index, scopes))
         .transpose()?;
 
     let matched_rows = {
@@ -159,7 +176,7 @@ fn visit_matching_row_indices(
 pub(crate) fn visit_parsed_search_index_rows(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -168,7 +185,7 @@ pub(crate) fn visit_parsed_search_index_rows(
     let _span = info_span!("materialize_matched_index_rows").entered();
     let control_flow = {
         let _span = info_span!("visit_matched_index_rows").entered();
-        visit_matching_row_indices(parsed_index, query_plan, scope, |row_index| {
+        visit_matching_row_indices(parsed_index, query_plan, scopes, |row_index| {
             let (path, has_deleted_entries) = {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("read_matched_index_row").entered();
@@ -207,7 +224,7 @@ pub(crate) fn visit_parsed_search_index_rows(
 pub(crate) fn visit_matching_parsed_row_indices(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(u32) -> eyre::Result<ControlFlow<(), ()>>,
@@ -215,7 +232,7 @@ pub(crate) fn visit_matching_parsed_row_indices(
     let loaded_rows = parsed_index.row_count();
     let control_flow = {
         let _span = info_span!("visit_matching_row_indices_only").entered();
-        visit_matching_row_indices(parsed_index, query_plan, scope, |row_index| {
+        visit_matching_row_indices(parsed_index, query_plan, scopes, |row_index| {
             let has_deleted_entries = {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("read_matched_row_index_filter_state").entered();
@@ -254,7 +271,7 @@ fn visit_matching_search_index_rows(
     _drive_letter: char,
     _index_kind: &'static str,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     include_deleted: bool,
     only_deleted: bool,
     visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -289,7 +306,7 @@ fn visit_matching_search_index_rows(
     visit_parsed_search_index_rows(
         &parsed_index,
         query_plan,
-        scope,
+        scopes,
         include_deleted,
         only_deleted,
         visit,
@@ -315,7 +332,7 @@ fn search_index_has_rows(index_path: &Path) -> eyre::Result<bool> {
 fn collect_matching_row_refs(
     parsed_index: &crate::search_index::search_index_bytes::ParsedSearchIndex<'_>,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     include_deleted: bool,
     only_deleted: bool,
 ) -> eyre::Result<(usize, Vec<MatchingRowRef>)> {
@@ -324,7 +341,7 @@ fn collect_matching_row_refs(
     let (loaded_rows, control_flow) = visit_matching_parsed_row_indices(
         parsed_index,
         query_plan,
-        scope,
+        scopes,
         include_deleted,
         only_deleted,
         |row_index| {
@@ -366,7 +383,7 @@ pub(crate) fn visit_drive_search_index_rows(
     drive_letter: char,
     sync_dir: &Path,
     query_plan: &QueryPlan,
-    scope: Option<&QueryScope>,
+    scopes: &[QueryScope],
     include_deleted: bool,
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
@@ -408,14 +425,14 @@ pub(crate) fn visit_drive_search_index_rows(
         let (base_loaded_rows, mut base_rows) = collect_matching_row_refs(
             &base_parsed,
             query_plan,
-            scope,
+            scopes,
             include_deleted,
             only_deleted,
         )?;
         let (overlay_loaded_rows, mut overlay_rows) = collect_matching_row_refs(
             &overlay_parsed,
             query_plan,
-            scope,
+            scopes,
             include_deleted,
             only_deleted,
         )?;
@@ -461,7 +478,7 @@ pub(crate) fn visit_drive_search_index_rows(
         drive_letter,
         "base",
         query_plan,
-        scope,
+        scopes,
         include_deleted,
         only_deleted,
         &mut visit,
@@ -486,7 +503,7 @@ struct MatchingRowRef {
 mod tests {
     use super::visit_matching_parsed_row_indices;
     use crate::query::QueryPlan;
-    use crate::query::resolve_query_scope;
+    use crate::query::resolve_query_scopes;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::ParsedSearchIndex;
@@ -561,14 +578,80 @@ mod tests {
         ])?;
 
         let mut plan = QueryPlan::parse_inputs(&[String::from("<>")])?;
-        plan.r#in = Some(scope_dir.to_string_lossy().to_string());
-        let scope = resolve_query_scope(plan.r#in.as_deref())?;
+        plan.r#in = vec![scope_dir.to_string_lossy().to_string()];
+        let scopes = resolve_query_scopes(&plan.r#in)?;
 
         let mut matching_rows = Vec::new();
         let (_, control_flow) = visit_matching_parsed_row_indices(
             &parsed,
             &plan,
-            scope.as_ref(),
+            scopes.as_slice(),
+            false,
+            false,
+            |row_index| {
+                matching_rows.push(row_index);
+                Ok(ControlFlow::Continue(()))
+            },
+        )?;
+
+        assert_eq!(control_flow, ControlFlow::Continue(()));
+        assert_eq!(matching_rows, vec![0, 2]);
+
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn multiple_scopes_union_prefilter_matches() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let alpha_dir = temp_dir.path().join("alpha");
+        let beta_dir = temp_dir.path().join("beta");
+        let alpha_file = alpha_dir.join("match-one.txt");
+        let beta_file = beta_dir.join("match-two.txt");
+        let out_of_scope_file = temp_dir.path().join("gamma").join("miss.txt");
+
+        std::fs::create_dir_all(alpha_file.parent().expect("alpha file should have parent"))?;
+        std::fs::create_dir_all(beta_file.parent().expect("beta file should have parent"))?;
+        std::fs::create_dir_all(
+            out_of_scope_file
+                .parent()
+                .expect("out-of-scope file should have parent"),
+        )?;
+        std::fs::write(&alpha_file, [])?;
+        std::fs::write(&beta_file, [])?;
+        std::fs::write(&out_of_scope_file, [])?;
+
+        let alpha_file = dunce::canonicalize(alpha_file)?;
+        let beta_file = dunce::canonicalize(beta_file)?;
+        let out_of_scope_file = dunce::canonicalize(out_of_scope_file)?;
+
+        let parsed = parse_index(&[
+            SearchIndexPathRow {
+                path: alpha_file.to_string_lossy().to_string().into(),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: out_of_scope_file.to_string_lossy().to_string().into(),
+                has_deleted_entries: false,
+            },
+            SearchIndexPathRow {
+                path: beta_file.to_string_lossy().to_string().into(),
+                has_deleted_entries: false,
+            },
+        ])?;
+
+        let mut plan = QueryPlan::parse_inputs(&[String::from("<>")])?;
+        plan.r#in = vec![
+            alpha_dir.to_string_lossy().to_string(),
+            beta_dir.to_string_lossy().to_string(),
+        ];
+        let scopes = resolve_query_scopes(&plan.r#in)?;
+
+        let mut matching_rows = Vec::new();
+        let (_, control_flow) = visit_matching_parsed_row_indices(
+            &parsed,
+            &plan,
+            scopes.as_slice(),
             false,
             false,
             |row_index| {

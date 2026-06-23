@@ -174,7 +174,7 @@ fn load_rows_from_index_in_scope(
     let _ = crate::query::visit_parsed_search_index_rows(
         &parsed,
         &query_plan,
-        Some(scope),
+        std::slice::from_ref(scope),
         true,
         false,
         |row| {

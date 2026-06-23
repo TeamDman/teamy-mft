@@ -40,6 +40,23 @@ impl MatchingRowIndices {
             }
         }
     }
+
+    #[must_use]
+    pub(crate) fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::MatchAll { row_count: left }, Self::MatchAll { row_count: right }) => {
+                debug_assert_eq!(left, right);
+                Self::MatchAll {
+                    row_count: left.max(right),
+                }
+            }
+            (Self::MatchAll { row_count }, Self::RowIndices(_))
+            | (Self::RowIndices(_), Self::MatchAll { row_count }) => Self::MatchAll { row_count },
+            (Self::RowIndices(left), Self::RowIndices(right)) => {
+                Self::RowIndices(union_sorted_ids(&left, &right))
+            }
+        }
+    }
 }
 
 pub fn matching_row_indices_for_rule(
@@ -219,6 +236,34 @@ fn intersect_sorted_ids_in_place(mut left: Vec<u32>, right: &[u32]) -> Vec<u32> 
 
     left.truncate(write_index);
     left
+}
+
+fn union_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
+    let mut left_index = 0;
+    let mut right_index = 0;
+    let mut union = Vec::with_capacity(left.len() + right.len());
+
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            std::cmp::Ordering::Less => {
+                union.push(left[left_index]);
+                left_index += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                union.push(right[right_index]);
+                right_index += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                union.push(left[left_index]);
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+
+    union.extend_from_slice(&left[left_index..]);
+    union.extend_from_slice(&right[right_index..]);
+    union
 }
 
 #[cfg(test)]

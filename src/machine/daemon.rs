@@ -1001,7 +1001,7 @@ fn query_published_drive(
         drive,
         sync_dir,
         &query_plan,
-        filter.scope(),
+        filter.scopes(),
         request.include_deleted,
         request.only_deleted,
         |row| {
