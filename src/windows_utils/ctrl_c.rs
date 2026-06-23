@@ -35,6 +35,10 @@ pub fn interrupted() -> bool {
     INTERRUPTED.load(Ordering::Relaxed)
 }
 
+pub fn request_interrupt_from_process_handler() {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
 #[must_use]
 pub fn use_graceful_cancellation() -> GracefulCancellationGuard {
     INTERRUPTED.store(false, Ordering::Relaxed);

@@ -1,3 +1,4 @@
+pub mod cancellation;
 pub mod cli;
 
 pub mod daemon;
@@ -83,6 +84,7 @@ pub fn main() -> eyre::Result<()> {
     // cli[impl parser.args-consistent]
     // cli[impl parser.roundtrip]
     let version = version();
+    let cancellation_token = crate::cancellation::install_ctrlc_handler()?;
     let cli: Cli = figue::Driver::new(
         figue::builder::<Cli>()
             .expect("schema should be valid")
@@ -98,8 +100,7 @@ pub fn main() -> eyre::Result<()> {
     .unwrap();
 
     // Initialize logging
-    logging_init::init_logging(&cli.global_args)?;
-    crate::windows_utils::ctrl_c::install_ctrl_c_handler()?;
+    logging_init::init_logging(&cli.global_args, cancellation_token.clone())?;
 
     if let Some(pid) = cli.global_args.console_pid {
         console_attach(pid)?;
@@ -108,6 +109,7 @@ pub fn main() -> eyre::Result<()> {
     tracy_capture_padding("before_cli_invoke");
     cli.invoke()?;
     tracy_capture_padding("after_cli_invoke");
+    cancellation_token.bail_if_cancelled()?;
 
     debug!("Goodbye!");
     #[cfg(feature = "tracy")]
