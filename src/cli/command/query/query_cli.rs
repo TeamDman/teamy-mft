@@ -179,14 +179,8 @@ mod tests {
             ..QueryArgs::new("Cargo.toml")
         };
 
-        assert_eq!(
-            default_args.runtime(),
-            QueryRuntime::Local
-        );
-        assert_eq!(
-            no_daemon_args.runtime(),
-            QueryRuntime::Local
-        );
+        assert_eq!(default_args.runtime(), QueryRuntime::Local);
+        assert_eq!(no_daemon_args.runtime(), QueryRuntime::Local);
     }
 
     #[test]

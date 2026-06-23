@@ -1,13 +1,13 @@
 use crate::machine::config::SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::query::Pathlike;
-use crate::search_index::format::SearchIndexHeader;
-use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_MAGIC;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
-use eyre::bail;
+use crate::search_index::format::SearchIndexHeader;
+use crate::search_index::format::SearchIndexPathRow;
 use eyre::Context;
 use eyre::ContextCompat;
+use eyre::bail;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -1674,9 +1674,9 @@ mod tests {
     use super::ParsedSearchIndex;
     use super::SearchIndexBytes;
     use super::SearchIndexBytesMut;
+    use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
-    use crate::search_index::format::SEARCH_INDEX_VERSION;
     use eyre::ContextCompat;
 
     const VIRTUAL_SNAPSHOT_TEST_PATH: &str = "Q:\\__TEAMY_MFT_VIRTUAL_SNAPSHOT_FIXTURE__\\a.txt";
@@ -1764,10 +1764,12 @@ mod tests {
         assert_eq!(parsed_rows.len(), 1);
         assert_eq!(parsed_rows[0].as_str(), VIRTUAL_SNAPSHOT_TEST_PATH);
 
-        assert!(search_index_bytes
-            .trie()?
-            .get("__teamy_mft_virtual_snapshot_fixture__")
-            .is_some());
+        assert!(
+            search_index_bytes
+                .trie()?
+                .get("__teamy_mft_virtual_snapshot_fixture__")
+                .is_some()
+        );
         assert!(search_index_bytes.trie()?.get("a.txt").is_some());
 
         let parsed = search_index_bytes.parse_trusted_for_query()?;

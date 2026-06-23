@@ -14,6 +14,10 @@ pub struct SyncPlan {
     #[facet(args::named, default)]
     pub if_exists: IfExistsOutputBehaviour,
 
+    /// When syncing a path, recurse through a directory subtree and refresh overlay rows for all descendants.
+    #[facet(args::named, default)]
+    pub recursive: bool,
+
     /// Optional path to reflect into the published overlay index without rebuilding a full drive index
     #[facet(args::positional, default)]
     pub path: Option<String>,

@@ -1073,11 +1073,24 @@ impl DaemonRuntimeState {
         self.flush_dirty_drives();
         crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
+        if request.recursive && request.path.is_none() {
+            return Err(MachineError::degraded(String::from(
+                "`--recursive` requires a target path",
+            )));
+        }
         if let Some(path) = request.path.as_deref() {
-            info!(path, "daemon path sync request starting");
-            let drive = crate::sync::sync_path_into_published_overlay(&self.sync_dir, path)
-                .map_err(|error| MachineError::degraded(error.to_string()))?;
-            debug!(drive = %drive, path, "Machine-managed path sync completed");
+            if request.recursive {
+                info!(path, "daemon recursive path sync request starting");
+                let drive =
+                    crate::sync::sync_path_recursively_into_published_overlay(&self.sync_dir, path)
+                        .map_err(|error| MachineError::degraded(error.to_string()))?;
+                debug!(drive = %drive, path, "Machine-managed recursive path sync completed");
+            } else {
+                info!(path, "daemon path sync request starting");
+                let drive = crate::sync::sync_path_into_published_overlay(&self.sync_dir, path)
+                    .map_err(|error| MachineError::degraded(error.to_string()))?;
+                debug!(drive = %drive, path, "Machine-managed path sync completed");
+            }
         } else {
             let drive_letters = request
                 .drive_letter_pattern
@@ -1483,7 +1496,11 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         let response = async move {
             if let Some(path) = request.path.as_deref() {
-                tracing::info!(path, "Starting daemon path sync");
+                if request.recursive {
+                    tracing::info!(path, "Starting daemon recursive path sync");
+                } else {
+                    tracing::info!(path, "Starting daemon path sync");
+                }
             } else {
                 let drive_count = request
                     .drive_letter_pattern
@@ -1500,7 +1517,11 @@ impl MachineDaemonRpc for MachineDaemonService {
             match worker.sync(request.clone(), correlation_id.clone()).await {
                 Ok(()) => {
                     if let Some(path) = request.path.as_deref() {
-                        tracing::info!(path, "Daemon path sync completed");
+                        if request.recursive {
+                            tracing::info!(path, "Daemon recursive path sync completed");
+                        } else {
+                            tracing::info!(path, "Daemon path sync completed");
+                        }
                     } else {
                         let drive_count = request
                             .drive_letter_pattern

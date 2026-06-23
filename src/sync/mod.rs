@@ -16,4 +16,5 @@ pub use sync_index::SyncIndex;
 pub use sync_mft::SyncMft;
 pub use sync_mft::read_physical_mft_stream_with_info;
 pub use sync_path::sync_path_into_published_overlay;
+pub use sync_path::sync_path_recursively_into_published_overlay;
 pub use sync_plan::SyncPlan;
