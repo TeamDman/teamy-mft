@@ -4,7 +4,7 @@ use crate::query::QueryRule;
 use facet::Facet;
 use figue::{self as args};
 
-#[derive(Debug, Clone, PartialEq, Facet, arbitrary::Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Facet)]
 pub struct QueryString {
     /// Fast query groups. Each positional argument is `OR`ed; whitespace-delimited terms within one argument are `AND`ed.
     #[facet(args::positional, default = QueryString::default().groups)]
@@ -130,6 +130,20 @@ impl From<QueryString> for Vec<String> {
 impl From<&QueryString> for Vec<String> {
     fn from(value: &QueryString) -> Self {
         value.to_inputs()
+    }
+}
+
+impl<'a> arbitrary::Arbitrary<'a> for QueryString {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let groups = Vec::<QueryGroup>::arbitrary(u)?;
+        if groups.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(Self { groups })
+    }
+
+    fn size_hint(depth: usize) -> (usize, Option<usize>) {
+        Vec::<QueryGroup>::size_hint(depth)
     }
 }
 

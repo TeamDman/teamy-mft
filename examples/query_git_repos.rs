@@ -22,9 +22,7 @@ fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     let query = QueryArgs {
-        plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(
-            ".git",
-        ))),
+        plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(".git"))),
         ..Default::default()
     };
     query.visit_rows(|row| {

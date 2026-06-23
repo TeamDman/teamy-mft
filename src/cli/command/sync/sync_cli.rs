@@ -30,6 +30,10 @@ impl SyncArgs {
             !(self.daemon && self.no_daemon),
             "`--daemon` and `--no-daemon` cannot be used together"
         );
+        eyre::ensure!(
+            !plan.recursive || plan.path.is_some(),
+            "`--recursive` requires a target path"
+        );
 
         if self.daemon {
             let config = crate::machine::ipc::load_machine_daemon_client_config()?;
@@ -42,8 +46,18 @@ impl SyncArgs {
         } else {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
             if let Some(path) = plan.path.as_deref() {
-                let drive_letter = crate::sync::sync_path_into_published_overlay(&sync_dir, path)?;
-                println!("Updated published overlay for drive {drive_letter} with path {path}");
+                let drive_letter = if plan.recursive {
+                    crate::sync::sync_path_recursively_into_published_overlay(&sync_dir, path)?
+                } else {
+                    crate::sync::sync_path_into_published_overlay(&sync_dir, path)?
+                };
+                if plan.recursive {
+                    println!(
+                        "Updated published overlay for drive {drive_letter} with subtree {path}"
+                    );
+                } else {
+                    println!("Updated published overlay for drive {drive_letter} with path {path}");
+                }
             } else {
                 let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
                 crate::machine::daemon::sync_machine_cache(
@@ -55,5 +69,30 @@ impl SyncArgs {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SyncArgs;
+    use crate::sync::SyncPlan;
+
+    #[test]
+    fn recursive_sync_requires_target_path() {
+        let error = SyncArgs {
+            plan: SyncPlan {
+                recursive: true,
+                ..SyncPlan::default()
+            },
+            ..SyncArgs::default()
+        }
+        .invoke()
+        .expect_err("recursive sync without a path should fail before execution");
+
+        assert!(
+            error
+                .to_string()
+                .contains("`--recursive` requires a target path")
+        );
     }
 }
