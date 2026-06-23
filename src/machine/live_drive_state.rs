@@ -33,6 +33,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
@@ -230,10 +231,23 @@ impl LiveDriveState {
                     paths.mft_path.display()
                 )
             })?;
+        info!(
+            drive = %paths.drive_letter,
+            mft_path = %paths.mft_path.display(),
+            "Building live drive observation graph from cached MFT snapshot"
+        );
+        let graph_start = Instant::now();
         let base_graph =
             LiveDriveGraph::from_mft_with_cancel(paths.drive_letter, &mft_file, cancel)?;
-        let base_rows = load_rows_from_index_path(&paths.base_index_path)?;
+        let graph_elapsed = graph_start.elapsed();
         let base_source_mft_len_bytes = mft_file.size().get::<uom::si::information::byte>() as u64;
+        info!(
+            drive = %paths.drive_letter,
+            node_count = base_graph.nodes.len(),
+            start_usn = cursor.next_usn,
+            elapsed_ms = graph_elapsed.as_millis(),
+            "Loaded live drive observation graph"
+        );
 
         Ok(Self {
             drive_letter: paths.drive_letter,
@@ -245,7 +259,7 @@ impl LiveDriveState {
             current_next_usn: cursor.next_usn,
             journal_id: cursor.journal_id,
             base_source_mft_len_bytes,
-            base_rows,
+            base_rows: Vec::new(),
             current_graph: base_graph,
             current_rows_cache: None,
             current_index_bytes_cache: None,

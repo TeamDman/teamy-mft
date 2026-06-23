@@ -61,11 +61,18 @@ impl ServiceWatchUsnArgs {
 
         for drive_letter in drive_letters {
             let paths = published_drive_paths(&config.sync_dir, drive_letter);
-            states.push(LiveDriveState::load_for_observation_with_cancel(
+            let state = LiveDriveState::load_for_observation_with_cancel(
                 &config.sync_dir,
                 paths,
                 Some(&cancel),
-            )?);
+            )?;
+            println!("usn-watch-drive-ready={drive_letter}");
+            println!(
+                "usn-watch-drive-start-usn-{}={}",
+                drive_letter,
+                state.current_next_usn()
+            );
+            states.push(state);
         }
 
         info!(
@@ -83,6 +90,13 @@ impl ServiceWatchUsnArgs {
             for state in &mut states {
                 for event in state.observe_usn_events_with_cancel(Some(&cancel))? {
                     if !event_matches_scopes(&event, &scopes) {
+                        debug!(
+                            drive = %event.drive_letter,
+                            usn = event.usn,
+                            name = %event.name,
+                            projected_paths = %event.projected_paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join("|"),
+                            "Observed USN event outside watch scope"
+                        );
                         continue;
                     }
                     log_observed_event(&event);
