@@ -39,7 +39,7 @@ fn main() -> eyre::Result<()> {
     let scope = dunce::canonicalize(&scope)?;
 
     let mut plan = QueryPlan::single_rule(QueryRule::MatchAll);
-    plan.r#in = Some(scope.to_string_lossy().into_owned());
+    plan.r#in = vec![scope.to_string_lossy().into_owned()];
     let args = QueryArgs {
         plan,
         ..Default::default()

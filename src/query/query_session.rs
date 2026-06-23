@@ -261,7 +261,7 @@ impl CachedPublishedDriveQuery {
             let mut base_rows = Self::collect_matching_row_refs(
                 &base_parsed_index,
                 query_plan,
-                filter.scope(),
+                filter.scopes(),
                 cancel,
             )
             .wrap_err_with(|| {
@@ -273,7 +273,7 @@ impl CachedPublishedDriveQuery {
             let mut overlay_rows = Self::collect_matching_row_refs(
                 &overlay_parsed_index,
                 query_plan,
-                filter.scope(),
+                filter.scopes(),
                 cancel,
             )
             .wrap_err_with(|| {
@@ -340,7 +340,7 @@ impl CachedPublishedDriveQuery {
         let (_loaded_rows, control_flow) = visit_parsed_search_index_rows(
             &parsed_index,
             query_plan,
-            filter.scope(),
+            filter.scopes(),
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row| {
@@ -359,14 +359,14 @@ impl CachedPublishedDriveQuery {
     fn collect_matching_row_refs<'a>(
         parsed_index: &'a ParsedSearchIndex<'a>,
         query_plan: &QueryPlan,
-        scope: Option<&QueryScope>,
+        scopes: &[QueryScope],
         cancel: Option<&AtomicBool>,
     ) -> eyre::Result<Vec<MatchingRowRef>> {
         let mut rows = Vec::new();
         let (_loaded_rows, _control_flow) = visit_matching_parsed_row_indices(
             parsed_index,
             query_plan,
-            scope,
+            scopes,
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row_index| {

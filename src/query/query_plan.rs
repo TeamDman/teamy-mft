@@ -18,9 +18,9 @@ use figue::{self as args};
 pub struct QueryPlan {
     #[facet(flatten, default)]
     pub query: QueryString,
-    /// Restrict results to this path. Directories include descendants; files match exactly.
+    /// Restrict results to these paths. Directories include descendants; files match exactly. Repeat `--in` to OR scopes.
     #[facet(args::named, default)]
-    pub r#in: Option<String>,
+    pub r#in: Vec<String>,
     /// Apply profile-specific `.teamy_mft_rules` files in addition to global rules.
     #[facet(args::named, default)]
     pub profile: Option<String>,

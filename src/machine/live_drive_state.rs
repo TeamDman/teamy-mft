@@ -463,7 +463,7 @@ impl LiveDriveState {
         let (_loaded_rows, _control_flow) = visit_parsed_search_index_rows(
             &parsed_index,
             request,
-            filter.scope(),
+            filter.scopes(),
             true,
             false,
             |row| {
@@ -1265,7 +1265,7 @@ mod tests {
 
         let error = state
             .query(&QueryPlan {
-                r#in: Some(missing_scope.to_string_lossy().into_owned()),
+                r#in: vec![missing_scope.to_string_lossy().into_owned()],
                 ..QueryPlan::new("alpha")
             })
             .expect_err("missing scope should be rejected");
@@ -1329,7 +1329,7 @@ mod tests {
         let graph = graph_from_file_paths(&[nested_file.as_path(), sibling_file.as_path()]);
         let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
         let request = QueryPlan {
-            r#in: Some(scope_dir.to_string_lossy().into_owned()),
+            r#in: vec![scope_dir.to_string_lossy().into_owned()],
             ..QueryPlan::new(".mp3>")
         };
 
@@ -1360,7 +1360,7 @@ mod tests {
         let graph = graph_from_file_paths(&[scope_file.as_path(), other_file.as_path()]);
         let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
         let request = QueryPlan {
-            r#in: Some(scope_file.to_string_lossy().into_owned()),
+            r#in: vec![scope_file.to_string_lossy().into_owned()],
             ..QueryPlan::new("track")
         };
 
@@ -1510,7 +1510,7 @@ mod tests {
             published_drive_paths(cache_dir.path(), drive_letter),
         )?;
         let base_request = QueryPlan {
-            r#in: Some(scope_dir.path().to_string_lossy().into_owned()),
+            r#in: vec![scope_dir.path().to_string_lossy().into_owned()],
             include_deleted: true,
             show_filtered: true,
             ..QueryPlan::new(needle.clone())

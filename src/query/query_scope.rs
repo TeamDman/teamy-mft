@@ -20,6 +20,15 @@ impl QueryScope {
     }
 }
 
+pub(crate) fn resolve_query_scopes(scopes: &[String]) -> eyre::Result<Vec<QueryScope>> {
+    scopes
+        .iter()
+        .map(String::as_str)
+        .map(|scope| resolve_query_scope(Some(scope)))
+        .map(|scope| scope.map(|scope| scope.expect("single scope should resolve to Some")))
+        .collect()
+}
+
 pub(crate) fn resolve_query_scope(scope: Option<&str>) -> eyre::Result<Option<QueryScope>> {
     let Some(scope) = scope else {
         return Ok(None);

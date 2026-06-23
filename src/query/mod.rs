@@ -34,7 +34,7 @@ pub use query_row_filter::QueryRowFilter;
 pub use query_rule::QueryRule;
 pub use query_runtime::QueryRuntime;
 pub(crate) use query_scope::QueryScope;
-pub(crate) use query_scope::resolve_query_scope;
+pub(crate) use query_scope::resolve_query_scopes;
 pub use query_session::QuerySession;
 pub use query_session::QuerySessionBackend;
 pub use query_string::QueryString;

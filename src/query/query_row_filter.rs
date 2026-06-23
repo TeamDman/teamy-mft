@@ -2,7 +2,7 @@ use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryScope;
-use crate::query::resolve_query_scope;
+use crate::query::resolve_query_scopes;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -11,7 +11,7 @@ use std::path::Path;
     reason = "Query filter flags mirror independent CLI/RPC filtering switches"
 )]
 pub struct QueryRowFilter {
-    scope: Option<QueryScope>,
+    scopes: Vec<QueryScope>,
     filter_rules: Option<QueryFilterRules>,
     include_deleted: bool,
     only_deleted: bool,
@@ -25,7 +25,7 @@ impl QueryRowFilter {
     /// Returns an error if the query scope cannot be canonicalized.
     pub fn new(request: &QueryPlan, filter_rules: Option<QueryFilterRules>) -> eyre::Result<Self> {
         Ok(Self {
-            scope: resolve_query_scope(request.r#in.as_deref())?,
+            scopes: resolve_query_scopes(&request.r#in)?,
             filter_rules,
             include_deleted: request.include_deleted,
             only_deleted: request.only_deleted,
@@ -54,14 +54,12 @@ impl QueryRowFilter {
 
     #[must_use]
     pub fn matches_scope(&self, path: &Path) -> bool {
-        self.scope
-            .as_ref()
-            .is_none_or(|scope| scope.matches_path(path))
+        self.scopes.is_empty() || self.scopes.iter().any(|scope| scope.matches_path(path))
     }
 
     #[must_use]
-    pub(crate) fn scope(&self) -> Option<&QueryScope> {
-        self.scope.as_ref()
+    pub(crate) fn scopes(&self) -> &[QueryScope] {
+        &self.scopes
     }
 
     #[must_use]

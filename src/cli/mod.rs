@@ -179,6 +179,20 @@ mod tests {
     }
 
     #[test]
+    fn query_accepts_repeated_in_scopes() {
+        let cli: Cli =
+            figue::from_slice(&["query", "flowers", "--in", r".\src", "--in", r".\tests"]).unwrap();
+
+        let Command::Query(args) = cli.command else {
+            panic!("expected query command");
+        };
+        assert_eq!(
+            args.plan.r#in,
+            vec![String::from(r".\src"), String::from(r".\tests")]
+        );
+    }
+
+    #[test]
     fn profile_accepts_profiles_alias() {
         let canonical: Cli = figue::from_slice(&["profile", "list"]).unwrap();
         let alias: Cli = figue::from_slice(&["profiles", "list"]).unwrap();

@@ -454,7 +454,7 @@ fn discover_rule_files_for_drive(
         drive_letter,
         sync_dir,
         rules_query,
-        None,
+        &[],
         false,
         false,
         |row| {
