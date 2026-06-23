@@ -53,12 +53,9 @@ impl ServiceWatchUsnArgs {
         let cancel = AtomicBool::new(false);
         let config = crate::machine::config::load_required_machine_config()?;
         let scopes = resolve_query_scopes(&self.r#in)?;
-        let drive_letters =
-            if self.drive_letter_pattern == DriveLetterPattern::default() && !scopes.is_empty() {
-                drive_letters_from_scopes(&scopes)?
-            } else {
-                self.drive_letter_pattern.into_drive_letters()?
-            };
+        let drive_letters = self
+            .drive_letter_pattern
+            .into_drive_letters_for_scope_roots(scopes.iter().map(|scope| scope.root.as_path()))?;
         let poll_interval = Duration::from_millis(self.poll_ms.unwrap_or(500).max(50));
         let mut states = Vec::new();
 
@@ -105,32 +102,6 @@ fn event_matches_scopes(event: &ObservedUsnEvent, scopes: &[QueryScope]) -> bool
             .projected_paths
             .iter()
             .any(|path| scopes.iter().any(|scope| scope.matches_path(path)))
-}
-
-fn drive_letters_from_scopes(scopes: &[QueryScope]) -> eyre::Result<Vec<char>> {
-    let mut drive_letters = Vec::new();
-    for scope in scopes {
-        let Some(prefix) = scope.root.as_path().components().next() else {
-            continue;
-        };
-        let std::path::Component::Prefix(prefix) = prefix else {
-            continue;
-        };
-        let (std::path::Prefix::Disk(drive) | std::path::Prefix::VerbatimDisk(drive)) =
-            prefix.kind()
-        else {
-            continue;
-        };
-        let drive = char::from(drive).to_ascii_uppercase();
-        if !drive_letters.contains(&drive) {
-            drive_letters.push(drive);
-        }
-    }
-    eyre::ensure!(
-        !drive_letters.is_empty(),
-        "Could not infer drive letters from --in scopes; pass --drive explicitly"
-    );
-    Ok(drive_letters)
 }
 
 fn log_observed_event(event: &ObservedUsnEvent) {

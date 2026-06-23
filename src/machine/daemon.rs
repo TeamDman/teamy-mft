@@ -24,6 +24,7 @@ use crate::query::QueryLimit;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
+use crate::query::resolve_query_scopes;
 use crate::query::visit_drive_search_index_rows;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::sync::IfExistsOutputBehaviour;
@@ -721,10 +722,11 @@ impl DaemonWorker {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
         let mut degraded_drives = Vec::new();
+        let scopes = resolve_query_scopes(&query_plan.r#in)
+            .map_err(|error| MachineError::request_invalid(error.to_string()))?;
         let drive_letters = query_plan
             .drive_letter_pattern
-            .clone()
-            .into_drive_letters()
+            .into_drive_letters_for_scope_roots(scopes.iter().map(|scope| scope.root.as_path()))
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
 
         for &drive in &drive_letters {
