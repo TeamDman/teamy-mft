@@ -125,6 +125,11 @@ impl UsnEvent {
                 | USN_REASON_HARD_LINK_CHANGE)
             != 0
     }
+
+    #[must_use]
+    pub fn reason_names(&self) -> Vec<&'static str> {
+        reason_names(self.reason)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -426,6 +431,45 @@ pub fn create_journal(
     let journal = VolumeUsnJournalHandle::open_writable(drive_letter)?;
     journal.create_journal(maximum_size, allocation_delta)?;
     query_journal_status(drive_letter)
+}
+
+#[must_use]
+pub fn reason_names(reason: u32) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for (mask, name) in [
+        (USN_REASON_FILE_CREATE, "file-create"),
+        (USN_REASON_FILE_DELETE, "file-delete"),
+        (USN_REASON_RENAME_OLD_NAME, "rename-old-name"),
+        (USN_REASON_RENAME_NEW_NAME, "rename-new-name"),
+        (USN_REASON_HARD_LINK_CHANGE, "hard-link-change"),
+        (USN_REASON_BASIC_INFO_CHANGE, "basic-info-change"),
+        (USN_REASON_CLOSE, "close"),
+        (USN_REASON_DATA_OVERWRITE, "data-overwrite"),
+        (USN_REASON_DATA_EXTEND, "data-extend"),
+        (USN_REASON_DATA_TRUNCATION, "data-truncation"),
+        (USN_REASON_COMPRESSION_CHANGE, "compression-change"),
+        (USN_REASON_EA_CHANGE, "ea-change"),
+        (USN_REASON_ENCRYPTION_CHANGE, "encryption-change"),
+        (USN_REASON_INDEXABLE_CHANGE, "indexable-change"),
+        (USN_REASON_INTEGRITY_CHANGE, "integrity-change"),
+        (USN_REASON_NAMED_DATA_OVERWRITE, "named-data-overwrite"),
+        (USN_REASON_NAMED_DATA_EXTEND, "named-data-extend"),
+        (USN_REASON_NAMED_DATA_TRUNCATION, "named-data-truncation"),
+        (USN_REASON_OBJECT_ID_CHANGE, "object-id-change"),
+        (USN_REASON_REPARSE_POINT_CHANGE, "reparse-point-change"),
+        (USN_REASON_SECURITY_CHANGE, "security-change"),
+        (USN_REASON_STREAM_CHANGE, "stream-change"),
+        (USN_REASON_TRANSACTED_CHANGE, "transacted-change"),
+        (
+            USN_REASON_DESIRED_STORAGE_CLASS_CHANGE,
+            "desired-storage-class-change",
+        ),
+    ] {
+        if reason & mask != 0 {
+            names.push(name);
+        }
+    }
+    names
 }
 
 fn parse_records_with_cancel(

@@ -87,6 +87,19 @@ pub struct LiveDriveState {
     query_cache_dirty: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedUsnEvent {
+    pub drive_letter: char,
+    pub frn: u64,
+    pub parent_frn: u64,
+    pub usn: u64,
+    pub reason: u32,
+    pub reason_names: Vec<&'static str>,
+    pub is_directory: bool,
+    pub name: String,
+    pub projected_paths: Vec<PathBuf>,
+}
+
 impl LiveDriveState {
     /// # Errors
     ///
@@ -181,6 +194,68 @@ impl LiveDriveState {
         Ok(state)
     }
 
+    /// Load the published MFT graph and start observation at the current USN
+    /// journal tail instead of replaying from the published checkpoint.
+    ///
+    /// This is intended for diagnostics that observe new events without
+    /// mutating published indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the published snapshot cannot be loaded, the base
+    /// index cannot be read, the USN journal is unavailable, or cancellation is
+    /// requested.
+    #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
+    pub fn load_for_observation_with_cancel(
+        sync_dir: &Path,
+        paths: PublishedDrivePaths,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<Self> {
+        let checkpoint = load_checkpoint(&paths.checkpoint_path)?;
+        let journal = VolumeUsnJournalHandle::open(paths.drive_letter)?;
+        let cursor = journal.query_cursor()?;
+        let _span = info_span!(
+            "load_live_drive_observation_base",
+            drive = %paths.drive_letter,
+            start_usn = cursor.next_usn,
+            journal_id = cursor.journal_id
+        )
+        .entered();
+
+        let mft_file =
+            MftFile::from_path_with_cancel(&paths.mft_path, cancel).wrap_err_with(|| {
+                format!(
+                    "Failed loading base MFT snapshot for drive {} from {}",
+                    paths.drive_letter,
+                    paths.mft_path.display()
+                )
+            })?;
+        let base_graph =
+            LiveDriveGraph::from_mft_with_cancel(paths.drive_letter, &mft_file, cancel)?;
+        let base_rows = load_rows_from_index_path(&paths.base_index_path)?;
+        let base_source_mft_len_bytes = mft_file.size().get::<uom::si::information::byte>() as u64;
+
+        Ok(Self {
+            drive_letter: paths.drive_letter,
+            sync_dir: sync_dir.to_path_buf(),
+            paths,
+            volume_serial_number: checkpoint.and_then(|checkpoint| checkpoint.volume_serial_number),
+            snapshot_usn: cursor.next_usn,
+            published_last_usn: cursor.next_usn,
+            current_next_usn: cursor.next_usn,
+            journal_id: cursor.journal_id,
+            base_source_mft_len_bytes,
+            base_rows,
+            current_graph: base_graph,
+            current_rows_cache: None,
+            current_index_bytes_cache: None,
+            overlay_rows_cache: None,
+            overlay_index_bytes_cache: None,
+            published_dirty: false,
+            query_cache_dirty: true,
+        })
+    }
+
     #[must_use]
     pub fn published_dirty(&self) -> bool {
         self.published_dirty
@@ -199,6 +274,79 @@ impl LiveDriveState {
     #[must_use]
     pub fn current_next_usn(&self) -> u64 {
         self.current_next_usn
+    }
+
+    /// Read available topology USN events, apply them to the in-memory graph,
+    /// and return the projected path candidates for each touched record.
+    ///
+    /// This does not write overlay indexes or checkpoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the USN journal cannot be read or the journal cursor
+    /// no longer matches the loaded snapshot.
+    #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
+    pub fn observe_usn_events_with_cancel(
+        &mut self,
+        cancel: Option<&AtomicBool>,
+    ) -> eyre::Result<Vec<ObservedUsnEvent>> {
+        let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
+        let cursor = journal.query_cursor()?;
+        validate_active_cursor(
+            self.drive_letter,
+            self.snapshot_usn,
+            self.journal_id,
+            self.current_next_usn,
+            cursor,
+        )?;
+        let batch = journal.read_available_since_with_cancel(
+            self.current_next_usn,
+            self.journal_id,
+            cancel,
+        )?;
+        if batch.next_usn == self.current_next_usn {
+            return Ok(Vec::new());
+        }
+
+        let mut observed = Vec::new();
+        for event in batch.events {
+            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                eyre::bail!(
+                    "Cancelled observing USN journal events for drive {}",
+                    self.drive_letter
+                );
+            }
+            if !event.affects_topology() {
+                continue;
+            }
+            self.current_graph.apply_event(&event);
+            let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
+            let mut visiting = FxHashSet::<u64>::default();
+            let projected_paths = self
+                .current_graph
+                .projected_paths_for(event.frn, &mut memo, &mut visiting)
+                .into_iter()
+                .map(|projected| projected.path.to_string().into())
+                .collect::<Vec<PathBuf>>();
+            observed.push(ObservedUsnEvent {
+                drive_letter: self.drive_letter,
+                frn: event.frn,
+                parent_frn: event.parent_frn,
+                usn: event.usn,
+                reason: event.reason,
+                reason_names: event.reason_names(),
+                is_directory: event.is_directory(),
+                name: event.name,
+                projected_paths,
+            });
+        }
+
+        self.current_next_usn = batch.next_usn;
+        self.published_dirty = self.current_next_usn != self.published_last_usn;
+        if !observed.is_empty() {
+            self.query_cache_dirty = true;
+        }
+        Ok(observed)
     }
 
     /// # Errors

@@ -1,3 +1,4 @@
+use crate::cli::command::service::ServiceWatchUsnArgs;
 use crate::cli::command::service::install::ServiceInstallArgs;
 use crate::cli::command::service::is_running::ServiceIsRunningArgs;
 use crate::cli::command::service::logs::ServiceLogsArgs;
@@ -36,6 +37,8 @@ pub enum ServiceCommand {
     Logs(ServiceLogsArgs),
     /// Internal daemon runtime entrypoint
     Run(ServiceRunArgs),
+    /// Watch USN journal topology events without updating indexes
+    WatchUsn(ServiceWatchUsnArgs),
 }
 
 impl Default for ServiceCommand {
@@ -58,6 +61,7 @@ impl ServiceArgs {
             ServiceCommand::IsRunning(args) => args.invoke(),
             ServiceCommand::Logs(args) => args.invoke(),
             ServiceCommand::Run(args) => args.invoke(),
+            ServiceCommand::WatchUsn(args) => args.invoke(),
         }
     }
 }
