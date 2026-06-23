@@ -138,28 +138,37 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let source = if event
-            .metadata()
-            .target()
-            .starts_with(crate::machine::daemon_log::DAEMON_REMOTE_TARGET)
-        {
-            if writer.has_ansi_escapes() {
-                "[daemon] ".bright_blue().to_string()
-            } else {
-                String::from("[daemon] ")
-            }
-        } else {
-            if writer.has_ansi_escapes() {
-                "[client] ".bright_green().to_string()
-            } else {
-                String::from("[client] ")
-            }
-        };
+        let source = source_prefix(
+            event
+                .metadata()
+                .target()
+                .starts_with(crate::machine::daemon_log::DAEMON_REMOTE_TARGET),
+            writer.has_ansi_escapes(),
+        );
         writer.write_str(&source)?;
         if event.metadata().target() == crate::machine::daemon_log::DAEMON_REMOTE_TARGET {
             return format_daemon_remote_event(&mut writer, event);
         }
         self.inner.format_event(ctx, writer, event)
+    }
+}
+
+fn source_prefix(daemon_remote: bool, ansi: bool) -> String {
+    let elevated = !daemon_remote && crate::windows_utils::elevation::is_elevated();
+    let label = match (daemon_remote, elevated) {
+        (true, _) => "[daemon] ",
+        (false, true) => "[client elevated] ",
+        (false, false) => "[client] ",
+    };
+    if !ansi {
+        return label.to_string();
+    }
+    if daemon_remote {
+        label.bright_blue().to_string()
+    } else if elevated {
+        label.bright_yellow().to_string()
+    } else {
+        label.bright_green().to_string()
     }
 }
 

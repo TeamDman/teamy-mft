@@ -7,6 +7,7 @@ mod start;
 mod status;
 mod stop;
 mod uninstall;
+mod watch_usn;
 
 pub use install::ServiceInstallArgs;
 pub use install::install_machine_config;
@@ -14,7 +15,9 @@ pub use install::install_machine_daemon_service;
 pub use is_running::ServiceIsRunningArgs;
 pub use logs::ServiceLogsArgs;
 pub use service_cli::ServiceArgs;
+pub use service_cli::ServiceCommand;
 pub use start::ServiceStartArgs;
 pub use status::ServiceStatusArgs;
 pub use stop::ServiceStopArgs;
 pub use uninstall::ServiceUninstallArgs;
+pub use watch_usn::ServiceWatchUsnArgs;
