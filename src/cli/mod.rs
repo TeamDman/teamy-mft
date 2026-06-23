@@ -212,4 +212,62 @@ mod tests {
             crate::cli::command::profile::ProfileCommand::Tutorial(_)
         ));
     }
+
+    #[test]
+    fn protection_enable_target_defaults_to_all_at_invoke_boundary() {
+        let cli: Cli = figue::from_slice(&["protection", "enable"]).unwrap();
+
+        let Command::Protection(args) = cli.command else {
+            panic!("expected protection command");
+        };
+        let crate::cli::command::protection::ProtectionCommand::Enable(args) = args.command else {
+            panic!("expected protection enable command");
+        };
+        assert_eq!(args.target, None);
+    }
+
+    #[test]
+    fn protection_disable_target_defaults_to_index_at_invoke_boundary() {
+        let cli: Cli = figue::from_slice(&["protection", "disable"]).unwrap();
+
+        let Command::Protection(args) = cli.command else {
+            panic!("expected protection command");
+        };
+        let crate::cli::command::protection::ProtectionCommand::Disable(args) = args.command else {
+            panic!("expected protection disable command");
+        };
+        assert_eq!(args.target, None);
+    }
+
+    #[test]
+    fn protection_accepts_explicit_targets() {
+        let enable: Cli = figue::from_slice(&["protection", "enable", "mft"]).unwrap();
+        let disable: Cli = figue::from_slice(&["protection", "disable", "all"]).unwrap();
+
+        let Command::Protection(enable_args) = enable.command else {
+            panic!("expected protection command");
+        };
+        let crate::cli::command::protection::ProtectionCommand::Enable(enable_args) =
+            enable_args.command
+        else {
+            panic!("expected protection enable command");
+        };
+        assert_eq!(
+            enable_args.target,
+            Some(crate::cli::command::protection::ProtectionTarget::Mft)
+        );
+
+        let Command::Protection(disable_args) = disable.command else {
+            panic!("expected protection command");
+        };
+        let crate::cli::command::protection::ProtectionCommand::Disable(disable_args) =
+            disable_args.command
+        else {
+            panic!("expected protection disable command");
+        };
+        assert_eq!(
+            disable_args.target,
+            Some(crate::cli::command::protection::ProtectionTarget::All)
+        );
+    }
 }
