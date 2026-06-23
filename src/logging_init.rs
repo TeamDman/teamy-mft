@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::cli::global_args::GlobalArgs;
 use chrono::Local;
 use color_eyre::owo_colors::OwoColorize;
@@ -26,6 +27,8 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
+
+mod stop_after_layer;
 
 struct SourceAwareEventFormat<E> {
     inner: E,
@@ -370,7 +373,10 @@ fn tracy_log_filter() -> eyre::Result<EnvFilter> {
 /// # Panics
 ///
 /// This function may panic if locking or cloning the log file handle fails.
-pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
+pub fn init_logging(
+    global_args: &GlobalArgs,
+    cancellation_token: CancellationToken,
+) -> eyre::Result<()> {
     LazyLock::force(&LOG_START);
 
     let subscriber = Registry::default();
@@ -390,6 +396,10 @@ pub fn init_logging(global_args: &GlobalArgs) -> eyre::Result<()> {
 
     let subscriber = subscriber.with(stderr_layer);
     let subscriber = subscriber.with(crate::machine::daemon_log::DaemonTraceLayer);
+    let subscriber =
+        subscriber.with(global_args.stop_after.as_ref().map(|stop_after| {
+            stop_after_layer::StopAfterLayer::new(stop_after, cancellation_token)
+        }));
 
     let json_log_path = match global_args.log_file.as_ref() {
         None => None,

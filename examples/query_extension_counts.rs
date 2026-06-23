@@ -19,6 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use teamy_mft::cancellation::CancellationToken;
 use teamy_mft::cli::command::query::QueryArgs;
 use teamy_mft::cli::global_args::GlobalArgs;
 use teamy_mft::logging_init::init_logging;
@@ -30,7 +31,7 @@ const NO_EXTENSION: &str = "(no extension)";
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    init_logging(&GlobalArgs::default())?;
+    init_logging(&GlobalArgs::default(), CancellationToken::new())?;
 
     let scope = std::env::args()
         .nth(1)

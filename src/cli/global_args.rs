@@ -22,6 +22,10 @@ pub struct GlobalArgs {
     #[facet(args::named)]
     pub json: Option<String>,
 
+    /// Request graceful cancellation after the named tracing/Tracy span closes.
+    #[facet(rename = "stop-after", default, args::named)]
+    pub stop_after: Option<String>,
+
     /// Console PID for console reuse (hidden)
     #[facet(args::named)]
     pub console_pid: Option<u32>,
