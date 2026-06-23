@@ -3,6 +3,7 @@ use arbitrary::Arbitrary;
 use eyre::ensure;
 use facet::Facet;
 use std::fmt;
+use std::path::Path;
 use std::str::FromStr;
 use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 
@@ -53,6 +54,47 @@ impl DriveLetterPattern {
         ensure!(!rtn.is_empty(), "No drive letters found in: '{}'", input);
 
         Ok(rtn)
+    }
+
+    /// Resolve the pattern, inferring drives from scope roots when the pattern
+    /// is the wildcard default.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the explicit pattern is invalid, no drives can be
+    /// inferred from scope roots, or no drives are available.
+    pub fn into_drive_letters_for_scope_roots<'a>(
+        &self,
+        scope_roots: impl IntoIterator<Item = &'a Path>,
+    ) -> eyre::Result<Vec<char>> {
+        if self != &Self::default() {
+            return self.into_drive_letters();
+        }
+
+        let mut drive_letters = Vec::new();
+        for scope_root in scope_roots {
+            let Some(prefix) = scope_root.components().next() else {
+                continue;
+            };
+            let std::path::Component::Prefix(prefix) = prefix else {
+                continue;
+            };
+            let (std::path::Prefix::Disk(drive) | std::path::Prefix::VerbatimDisk(drive)) =
+                prefix.kind()
+            else {
+                continue;
+            };
+            let drive = char::from(drive).to_ascii_uppercase();
+            if !drive_letters.contains(&drive) {
+                drive_letters.push(drive);
+            }
+        }
+
+        if drive_letters.is_empty() {
+            self.into_drive_letters()
+        } else {
+            Ok(drive_letters)
+        }
     }
 }
 
@@ -137,6 +179,27 @@ mod tests {
                 .to_string()
                 .contains("Invalid drive letter character at position 1: '1'")
         );
+    }
+
+    #[test]
+    fn default_pattern_infers_drives_from_scope_roots() -> eyre::Result<()> {
+        let drive_letters = DriveLetterPattern::default().into_drive_letters_for_scope_roots([
+            std::path::Path::new(r"G:\repo"),
+            std::path::Path::new(r"G:\other"),
+            std::path::Path::new(r"C:\repo"),
+        ])?;
+
+        assert_eq!(drive_letters, vec!['G', 'C']);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_pattern_overrides_scope_roots() -> eyre::Result<()> {
+        let drive_letters = DriveLetterPattern("C".to_string())
+            .into_drive_letters_for_scope_roots([std::path::Path::new(r"G:\repo")])?;
+
+        assert_eq!(drive_letters, vec!['C']);
+        Ok(())
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
 use crate::query::QueryRuntime;
 use crate::query::QueryScope;
+use crate::query::resolve_query_scopes;
 use crate::query::search_index_query::mapped_search_index_has_rows;
 use crate::query::search_index_query::visit_matching_parsed_row_indices;
 use crate::query::visit_parsed_search_index_rows;
@@ -147,10 +148,10 @@ impl QuerySession {
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_published_index_rows").entered();
+        let scopes = resolve_query_scopes(&query_plan.r#in)?;
         let drive_letters = query_plan
             .drive_letter_pattern
-            .clone()
-            .into_drive_letters()?;
+            .into_drive_letters_for_scope_roots(scopes.iter().map(|scope| scope.root.as_path()))?;
         let filter_rules = QueryFilterRules::discover_for_drive_letters(
             &drive_letters,
             &self.sync_dir,

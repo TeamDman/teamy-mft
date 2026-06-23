@@ -270,4 +270,34 @@ mod tests {
             Some(crate::cli::command::protection::ProtectionTarget::All)
         );
     }
+
+    #[test]
+    fn service_watch_usn_accepts_drive_scopes_and_poll_interval() {
+        let cli: Cli = figue::from_slice(&[
+            "service",
+            "watch-usn",
+            "--drive",
+            "C",
+            "--in",
+            r"C:\a\b",
+            "--in",
+            r"C:\a\c",
+            "--poll-ms",
+            "250",
+        ])
+        .unwrap();
+
+        let Command::Service(args) = cli.command else {
+            panic!("expected service command");
+        };
+        let crate::cli::command::service::ServiceCommand::WatchUsn(args) = args.command else {
+            panic!("expected service watch-usn command");
+        };
+        assert_eq!(args.drive_letter_pattern.as_ref(), "C");
+        assert_eq!(
+            args.r#in,
+            vec![String::from(r"C:\a\b"), String::from(r"C:\a\c")]
+        );
+        assert_eq!(args.poll_ms, Some(250));
+    }
 }
