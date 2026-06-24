@@ -1,17 +1,18 @@
+use crate::cancellation::CancellationToken;
 use crate::machine::ipc::CorrelationId;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
 use crate::query::QuerySession;
-use crate::windows_utils::ctrl_c::GracefulCancellationGuard;
 use eyre::WrapErr;
+use std::fmt;
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
+use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 use tracing::debug;
 use tracing::info_span;
-
-use super::ctrl_c_forwarder::CtrlCForwarder;
 
 pub type QueryRowVisitor<'a> = dyn FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>> + 'a;
 
@@ -28,9 +29,7 @@ pub enum QueryRuntime {
 }
 
 struct LocalQueryVisitor {
-    _ctrl_c_guard: GracefulCancellationGuard,
-    cancel: Arc<AtomicBool>,
-    cancel_signal: CtrlCForwarder<()>,
+    cancel: CancellationToken,
     query_session: QuerySession,
     query_plan: QueryPlan,
 }
@@ -40,12 +39,19 @@ struct DaemonQueryVisitor {
     cleanup: DaemonQueryCleanup,
 }
 
-#[derive(Debug)]
 struct DaemonQueryCleanup {
-    _ctrl_c_guard: GracefulCancellationGuard,
     response_join: JoinHandle<eyre::Result<CorrelationId>>,
     log_drain: JoinHandle<()>,
-    cancel_signal: CtrlCForwarder<eyre::Result<()>>,
+    cancel: CancellationToken,
+    cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>,
+    cancel_watch_stop: mpsc::Sender<()>,
+    cancel_watch_join: JoinHandle<eyre::Result<()>>,
+}
+
+impl fmt::Debug for DaemonQueryCleanup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DaemonQueryCleanup").finish_non_exhaustive()
+    }
 }
 
 impl QueryRuntime {
@@ -65,20 +71,26 @@ impl QueryRuntime {
     pub fn visit_rows(
         self,
         query_plan: QueryPlan,
+        cancellation_token: CancellationToken,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
-        self.visit_rows_dyn(query_plan, &mut visit)
+        self.visit_rows_dyn(query_plan, cancellation_token, &mut visit)
     }
 
     pub(crate) fn visit_rows_dyn(
         self,
         query_plan: QueryPlan,
+        cancellation_token: CancellationToken,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
         match self {
-            Self::Local => LocalQueryVisitor::prepare(query_plan)?.visit_rows(visit),
-            Self::DaemonRpc => DaemonQueryVisitor::prepare(query_plan)?.visit_rows(visit),
+            Self::Local => {
+                LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
+            }
+            Self::DaemonRpc => {
+                DaemonQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
+            }
         }
     }
 
@@ -105,14 +117,9 @@ impl QueryRuntime {
 }
 
 impl LocalQueryVisitor {
-    fn prepare(query_plan: QueryPlan) -> eyre::Result<Self> {
-        let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_signal = CtrlCForwarder::spawn_flag(Arc::clone(&cancel));
+    fn prepare(query_plan: QueryPlan, cancellation_token: CancellationToken) -> eyre::Result<Self> {
         Ok(Self {
-            _ctrl_c_guard: ctrl_c_guard,
-            cancel,
-            cancel_signal,
+            cancel: cancellation_token,
             query_session: QuerySession::local()?,
             query_plan,
         })
@@ -120,24 +127,36 @@ impl LocalQueryVisitor {
 
     fn visit_rows(mut self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
         let _guard = info_span!("visit_local_rows").entered();
-        let result = self.query_session.visit_rows_with_cancel_dyn(
-            self.query_plan,
-            Some(self.cancel.as_ref()),
-            visit,
-        );
-        self.cancel_signal.finish();
-        result
+        self.query_session
+            .visit_rows_dyn(self.query_plan, &self.cancel, visit)
     }
 }
 
 impl DaemonQueryVisitor {
-    fn prepare(query_plan: QueryPlan) -> eyre::Result<Self> {
-        let ctrl_c_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
+    fn prepare(query_plan: QueryPlan, cancellation_token: CancellationToken) -> eyre::Result<Self> {
+        let request_cancel = cancellation_token.child_token();
         let config = crate::machine::ipc::load_machine_daemon_client_config()?;
         crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
         let (cancel_tx, cancel_rx) = vox::channel::<u8>();
+        let cancel_tx = Arc::new(Mutex::new(Some(cancel_tx)));
+        let (cancel_watch_stop, cancel_watch_stop_rx) = mpsc::channel::<()>();
+        let cancel_watch_join = std::thread::spawn({
+            let request_cancel = request_cancel.clone();
+            let cancel_tx = Arc::clone(&cancel_tx);
+            move || {
+                loop {
+                    if request_cancel.is_cancelled() {
+                        return send_daemon_cancel(cancel_tx);
+                    }
+                    match cancel_watch_stop_rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            }
+        });
         let response_join = std::thread::spawn(move || {
             crate::machine::ipc::query_stream(&config, query_plan, rows_tx, logs_tx, cancel_rx)
                 .wrap_err(
@@ -147,10 +166,12 @@ impl DaemonQueryVisitor {
         Ok(Self {
             rows_rx,
             cleanup: DaemonQueryCleanup {
-                _ctrl_c_guard: ctrl_c_guard,
                 response_join,
                 log_drain: crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx),
-                cancel_signal: CtrlCForwarder::spawn_sender(cancel_tx),
+                cancel: request_cancel,
+                cancel_tx,
+                cancel_watch_stop,
+                cancel_watch_join,
             },
         })
     }
@@ -158,10 +179,11 @@ impl DaemonQueryVisitor {
     fn visit_rows(self, visit: &mut QueryRowVisitor<'_>) -> eyre::Result<()> {
         let _guard = info_span!("visit_daemon_rows").entered();
         let visit_result = QueryRuntime::visit_daemon_rows_from_channel(self.rows_rx, visit);
+        let cleanup = self.cleanup;
         if matches!(visit_result, Ok(ControlFlow::Break(()))) {
-            self.cleanup.cancel_signal.request_cancel()?;
+            cleanup.request_cancel("Daemon query stream cancelled by visitor")?;
         }
-        let cleanup_result = self.cleanup.finish();
+        let cleanup_result = cleanup.finish();
         match (visit_result, cleanup_result) {
             (Ok(_), Ok(())) => Ok(()),
             (Err(error), Ok(())) => Err(error.wrap_err("visitor failed")),
@@ -174,8 +196,16 @@ impl DaemonQueryVisitor {
 }
 
 impl DaemonQueryCleanup {
+    fn request_cancel(&self, reason: impl Into<String>) -> eyre::Result<()> {
+        self.cancel.request_cancel(reason);
+        send_daemon_cancel(Arc::clone(&self.cancel_tx))
+    }
+
     fn finish(self) -> eyre::Result<()> {
-        self.cancel_signal.finish()?;
+        let _ = self.cancel_watch_stop.send(());
+        self.cancel_watch_join.join().map_err(|join_error| {
+            eyre::eyre!("Daemon cancel watcher thread panicked: {join_error:?}")
+        })??;
         let response = self
             .response_join
             .join()
@@ -189,6 +219,24 @@ impl DaemonQueryCleanup {
         );
         Ok(())
     }
+}
+
+fn send_daemon_cancel(cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>) -> eyre::Result<()> {
+    let Some(cancel_tx) = cancel_tx
+        .lock()
+        .map_err(|_| eyre::eyre!("Daemon cancel sender mutex poisoned"))?
+        .take()
+    else {
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async move {
+        let _ = cancel_tx.send(1).await;
+        let _ = cancel_tx.close(Vec::new()).await;
+    });
+    Ok(())
 }
 
 #[cfg(test)]

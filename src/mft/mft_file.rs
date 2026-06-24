@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
 use crate::mft::mft_record_size::MftRecordSize;
@@ -10,8 +11,6 @@ use std::fmt::Debug;
 use std::io::Read;
 use std::ops::Deref;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 use teamy_uom_extensions::HumanInformationExt;
 use thousands::Separable;
@@ -116,26 +115,13 @@ impl MftFile {
         self.bytes.len() / entry_size_bytes
     }
 
-    /// Load an MFT file from the given path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be opened, read, or parsed.
-    #[instrument(level = "debug")]
-    pub fn from_path(mft_file_path: &Path) -> eyre::Result<Self> {
-        Self::from_path_with_cancel(mft_file_path, None)
-    }
-
     /// Load an MFT file from the given path, checking `cancel` between read chunks.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be opened, read, parsed, or if cancellation is requested.
     #[instrument(level = "debug")]
-    pub fn from_path_with_cancel(
-        mft_file_path: &Path,
-        cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<Self> {
+    pub fn from_path(mft_file_path: &Path, cancel: &CancellationToken) -> eyre::Result<Self> {
         let file = {
             let _span = debug_span!("open_file", path = %mft_file_path.display()).entered();
             std::fs::File::open(mft_file_path)
@@ -178,7 +164,7 @@ impl MftFile {
             let mut reader = std::io::BufReader::new(&file);
             let mut chunk = vec![0u8; 1024 * 1024];
             loop {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     bail!("Cancelled reading {}", mft_file_path.display());
                 }
                 let read = reader

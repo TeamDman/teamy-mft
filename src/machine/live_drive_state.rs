@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::machine::config::OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::PublishedDrivePaths;
@@ -31,8 +32,6 @@ use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tracing::debug;
 use tracing::info;
@@ -104,22 +103,13 @@ pub struct ObservedUsnEvent {
 impl LiveDriveState {
     /// # Errors
     ///
-    /// Returns an error if the published snapshot/checkpoint cannot be loaded or the
-    /// USN journal continuity check fails.
-    #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
-    pub fn load(sync_dir: &Path, paths: PublishedDrivePaths) -> eyre::Result<Self> {
-        Self::load_with_cancel(sync_dir, paths, None)
-    }
-
-    /// # Errors
-    ///
     /// Returns an error if the published snapshot/checkpoint cannot be loaded, the
     /// USN journal continuity check fails, or cancellation is requested.
     #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
-    pub fn load_with_cancel(
+    pub fn load(
         sync_dir: &Path,
         paths: PublishedDrivePaths,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?.wrap_err_with(|| {
             format!(
@@ -158,14 +148,13 @@ impl LiveDriveState {
         )
         .entered();
 
-        let mft_file =
-            MftFile::from_path_with_cancel(&paths.mft_path, cancel).wrap_err_with(|| {
-                format!(
-                    "Failed loading base MFT snapshot for drive {} from {}",
-                    paths.drive_letter,
-                    paths.mft_path.display()
-                )
-            })?;
+        let mft_file = MftFile::from_path(&paths.mft_path, cancel).wrap_err_with(|| {
+            format!(
+                "Failed loading base MFT snapshot for drive {} from {}",
+                paths.drive_letter,
+                paths.mft_path.display()
+            )
+        })?;
         let base_graph =
             LiveDriveGraph::from_mft_with_cancel(paths.drive_letter, &mft_file, cancel)?;
         let base_rows = load_rows_from_index_path(&paths.base_index_path)?;
@@ -210,7 +199,7 @@ impl LiveDriveState {
     pub fn load_for_observation_with_cancel(
         sync_dir: &Path,
         paths: PublishedDrivePaths,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?;
         let journal = VolumeUsnJournalHandle::open(paths.drive_letter)?;
@@ -223,14 +212,13 @@ impl LiveDriveState {
         )
         .entered();
 
-        let mft_file =
-            MftFile::from_path_with_cancel(&paths.mft_path, cancel).wrap_err_with(|| {
-                format!(
-                    "Failed loading base MFT snapshot for drive {} from {}",
-                    paths.drive_letter,
-                    paths.mft_path.display()
-                )
-            })?;
+        let mft_file = MftFile::from_path(&paths.mft_path, cancel).wrap_err_with(|| {
+            format!(
+                "Failed loading base MFT snapshot for drive {} from {}",
+                paths.drive_letter,
+                paths.mft_path.display()
+            )
+        })?;
         info!(
             drive = %paths.drive_letter,
             mft_path = %paths.mft_path.display(),
@@ -302,7 +290,7 @@ impl LiveDriveState {
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
     pub fn observe_usn_events_with_cancel(
         &mut self,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<Vec<ObservedUsnEvent>> {
         let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
         let cursor = journal.query_cursor()?;
@@ -313,18 +301,14 @@ impl LiveDriveState {
             self.current_next_usn,
             cursor,
         )?;
-        let batch = journal.read_available_since_with_cancel(
-            self.current_next_usn,
-            self.journal_id,
-            cancel,
-        )?;
+        let batch = journal.read_available_since(self.current_next_usn, self.journal_id, cancel)?;
         if batch.next_usn == self.current_next_usn {
             return Ok(Vec::new());
         }
 
         let mut observed = Vec::new();
         for event in batch.events {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 eyre::bail!(
                     "Cancelled observing USN journal events for drive {}",
                     self.drive_letter
@@ -365,17 +349,9 @@ impl LiveDriveState {
 
     /// # Errors
     ///
-    /// Returns an error if reading additional journal records fails.
-    #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
-    pub fn refresh(&mut self) -> eyre::Result<()> {
-        self.refresh_with_cancel(None)
-    }
-
-    /// # Errors
-    ///
     /// Returns an error if reading additional journal records fails or cancellation is requested.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
-    pub fn refresh_with_cancel(&mut self, cancel: Option<&AtomicBool>) -> eyre::Result<()> {
+    pub fn refresh(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
         let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
         let cursor = journal.query_cursor()?;
         validate_active_cursor(
@@ -392,20 +368,12 @@ impl LiveDriveState {
     ///
     /// Returns an error if the current in-memory index cannot be built or queried.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, query = ?request.query))]
-    pub fn query(&mut self, request: &QueryPlan) -> Result<Vec<QueryResultRow>, MachineError> {
-        self.query_with_cancel(request, None)
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if the current in-memory index cannot be built or queried.
-    #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, query = ?request.query))]
-    pub fn query_with_cancel(
+    pub fn query(
         &mut self,
         request: &QueryPlan,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
-        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        if cancel.is_cancelled() {
             return Ok(Vec::new());
         }
         let filter_rules = QueryFilterRules::discover_for_drive_letters(
@@ -425,8 +393,8 @@ impl LiveDriveState {
     ///
     /// Returns an error if the overlay index or checkpoint cannot be written.
     #[instrument(level = "info", skip_all, fields(drive = %self.drive_letter, published_last_usn = self.published_last_usn, current_next_usn = self.current_next_usn))]
-    pub fn flush_published(&mut self) -> eyre::Result<()> {
-        self.ensure_full_query_cache()?;
+    pub fn flush_published(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+        self.ensure_full_query_cache(cancel)?;
         let overlay_rows = self
             .overlay_rows_cache
             .as_deref()
@@ -462,13 +430,9 @@ impl LiveDriveState {
     fn refresh_from_journal_with_cancel(
         &mut self,
         journal: &VolumeUsnJournalHandle,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<()> {
-        let batch = journal.read_available_since_with_cancel(
-            self.current_next_usn,
-            self.journal_id,
-            cancel,
-        )?;
+        let batch = journal.read_available_since(self.current_next_usn, self.journal_id, cancel)?;
         if batch.next_usn == self.current_next_usn {
             trace!(
                 drive = %self.drive_letter,
@@ -481,7 +445,7 @@ impl LiveDriveState {
 
         let mut applied_events = 0usize;
         for event in batch.events {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 eyre::bail!(
                     "Cancelled applying USN journal events for drive {}",
                     self.drive_letter
@@ -508,14 +472,7 @@ impl LiveDriveState {
         Ok(())
     }
 
-    fn ensure_current_query_cache(&mut self) -> eyre::Result<()> {
-        self.ensure_current_query_cache_with_cancel(None)
-    }
-
-    fn ensure_current_query_cache_with_cancel(
-        &mut self,
-        cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<()> {
+    fn ensure_current_query_cache(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
         if !self.query_cache_dirty
             && self.current_rows_cache.is_some()
             && self.current_index_bytes_cache.is_some()
@@ -529,8 +486,8 @@ impl LiveDriveState {
             published_dirty = self.published_dirty
         )
         .entered();
-        let current_rows = self.current_graph.project_rows_with_cancel(cancel)?;
-        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        let current_rows = self.current_graph.project_rows(cancel)?;
+        if cancel.is_cancelled() {
             eyre::bail!(
                 "Cancelled rebuilding live query cache for drive {}",
                 self.drive_letter
@@ -560,8 +517,8 @@ impl LiveDriveState {
         Ok(())
     }
 
-    fn ensure_full_query_cache(&mut self) -> eyre::Result<()> {
-        self.ensure_current_query_cache()?;
+    fn ensure_full_query_cache(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+        self.ensure_current_query_cache(cancel)?;
         if self.overlay_rows_cache.is_some() && self.overlay_index_bytes_cache.is_some() {
             return Ok(());
         }
@@ -572,6 +529,7 @@ impl LiveDriveState {
             published_dirty = self.published_dirty
         )
         .entered();
+        cancel.bail_if_cancelled()?;
         let current_rows = self
             .current_rows_cache
             .as_deref()
@@ -602,12 +560,12 @@ impl LiveDriveState {
         &mut self,
         request: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
-        self.ensure_current_query_cache_with_cancel(cancel)
+        self.ensure_current_query_cache(cancel)
             .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
 
-        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        if cancel.is_cancelled() {
             return Ok(Vec::new());
         }
 
@@ -629,7 +587,7 @@ impl LiveDriveState {
             true,
             false,
             |row| {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     return Ok(ControlFlow::Break(()));
                 }
 
@@ -653,7 +611,7 @@ impl LiveDriveGraph {
     fn from_mft_with_cancel(
         drive_letter: char,
         mft_file: &MftFile,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<Self> {
         let file_names = fast_entry::collect_filenames(mft_file);
         let records = mft_file.iter_records().collect::<Vec<_>>();
@@ -674,7 +632,7 @@ impl LiveDriveGraph {
 
         let mut nodes = FxHashMap::<u64, LiveNode>::default();
         for (entry_id, record) in records.iter().enumerate() {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 eyre::bail!("Cancelled building live graph for drive {drive_letter}");
             }
             let frn = frns[entry_id];
@@ -775,17 +733,8 @@ impl LiveDriveGraph {
         }
     }
 
-    #[cfg(test)]
-    fn project_rows(&self) -> Vec<SearchIndexPathRow> {
-        self.project_rows_with_cancel(None)
-            .expect("project_rows without cancellation should not fail")
-    }
-
-    fn project_rows_with_cancel(
-        &self,
-        cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<Vec<SearchIndexPathRow>> {
-        self.projected_rows_with_cancel(cancel).map(|rows| {
+    fn project_rows(&self, cancel: &CancellationToken) -> eyre::Result<Vec<SearchIndexPathRow>> {
+        self.projected_rows(cancel).map(|rows| {
             rows.into_iter()
                 .map(|projected| SearchIndexPathRow {
                     path: projected.path,
@@ -795,22 +744,19 @@ impl LiveDriveGraph {
         })
     }
 
-    fn projected_rows_with_cancel(
-        &self,
-        cancel: Option<&AtomicBool>,
-    ) -> eyre::Result<Vec<ProjectedPath>> {
+    fn projected_rows(&self, cancel: &CancellationToken) -> eyre::Result<Vec<ProjectedPath>> {
         let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
         let mut visiting = FxHashSet::<u64>::default();
         let mut path_states = BTreeMap::<Pathlike, bool>::new();
         for frn in self.nodes.keys().copied() {
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 eyre::bail!(
                     "Cancelled projecting live drive rows for drive {}",
                     self.drive_letter
                 );
             }
             for projected in self.projected_paths_for(frn, &mut memo, &mut visiting) {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     eyre::bail!(
                         "Cancelled projecting live drive rows for drive {}",
                         self.drive_letter
@@ -1039,6 +985,7 @@ mod tests {
     use super::diff_overlay_rows;
     use super::join_windows_path;
     use super::validate_active_cursor;
+    use crate::cancellation::CancellationToken;
     use crate::daemon::MachineErrorKind;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
@@ -1053,7 +1000,6 @@ mod tests {
     use eyre::ContextCompat;
     use rustc_hash::FxHashMap;
     use std::path::Path;
-    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     fn base_graph() -> LiveDriveGraph {
@@ -1266,7 +1212,9 @@ mod tests {
             name: String::from("beta.txt"),
         });
 
-        let rows = graph.project_rows();
+        let rows = graph
+            .project_rows(&CancellationToken::new())
+            .expect("projecting test graph should succeed");
         assert!(
             rows.iter()
                 .any(|row| row.path == r"C:\beta.txt" && !row.has_deleted_entries)
@@ -1317,9 +1265,10 @@ mod tests {
             },
         );
         let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+        let cancel = CancellationToken::new();
 
         let rows = state
-            .query(&QueryPlan::new("music"))
+            .query(&QueryPlan::new("music"), &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rows.len(), 1);
@@ -1332,10 +1281,11 @@ mod tests {
     fn live_query_cancelled_before_index_query_returns_no_rows() -> eyre::Result<()> {
         let cache_dir = tempfile::tempdir()?;
         let mut state = state_from_graph(cache_dir.path(), 'C', base_graph());
-        let cancel = AtomicBool::new(true);
+        let cancel = CancellationToken::new();
+        cancel.request_cancel("test cancellation");
 
         let rows = state
-            .query_with_cancel(&QueryPlan::new("alpha"), Some(&cancel))
+            .query(&QueryPlan::new("alpha"), &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert!(rows.is_empty());
@@ -1369,9 +1319,10 @@ mod tests {
             limit: QueryLimit::from(1),
             ..QueryPlan::new(".txt>")
         };
+        let cancel = CancellationToken::new();
 
         let rows = state
-            .query(&request)
+            .query(&request, &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rows.len(), 1);
@@ -1406,9 +1357,10 @@ mod tests {
             only_deleted: true,
             ..QueryPlan::new(".txt>")
         };
+        let cancel = CancellationToken::new();
 
         let rows = state
-            .query(&request)
+            .query(&request, &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rows.len(), 1);
@@ -1426,10 +1378,13 @@ mod tests {
         let missing_scope = cache_dir.path().join("missing-scope-dir");
 
         let error = state
-            .query(&QueryPlan {
-                r#in: vec![missing_scope.to_string_lossy().into_owned()],
-                ..QueryPlan::new("alpha")
-            })
+            .query(
+                &QueryPlan {
+                    r#in: vec![missing_scope.to_string_lossy().into_owned()],
+                    ..QueryPlan::new("alpha")
+                },
+                &CancellationToken::new(),
+            )
             .expect_err("missing scope should be rejected");
 
         assert_eq!(error.kind, MachineErrorKind::RequestInvalid);
@@ -1449,7 +1404,7 @@ mod tests {
         write_rule_discovery_index(&state.paths, &[bad_rules_path.as_path()])?;
 
         let error = state
-            .query(&QueryPlan::new("alpha"))
+            .query(&QueryPlan::new("alpha"), &CancellationToken::new())
             .expect_err("invalid discovered rules should degrade live query");
 
         assert_eq!(error.kind, MachineErrorKind::Degraded);
@@ -1494,9 +1449,10 @@ mod tests {
             r#in: vec![scope_dir.to_string_lossy().into_owned()],
             ..QueryPlan::new(".mp3>")
         };
+        let cancel = CancellationToken::new();
 
         let rows = state
-            .query(&request)
+            .query(&request, &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rows.len(), 1);
@@ -1525,9 +1481,10 @@ mod tests {
             r#in: vec![scope_file.to_string_lossy().into_owned()],
             ..QueryPlan::new("track")
         };
+        let cancel = CancellationToken::new();
 
         let rows = state
-            .query(&request)
+            .query(&request, &cancel)
             .map_err(|error| eyre::eyre!(error.message))?;
 
         assert_eq!(rows.len(), 1);
@@ -1567,9 +1524,10 @@ mod tests {
 
         let mut state = state_from_graph(cache_dir.path(), 'C', graph);
         write_rule_discovery_index(&state.paths, &[rules_path.as_path()])?;
+        let cancel = CancellationToken::new();
 
         let default_rows = state
-            .query(&QueryPlan::new("music"))
+            .query(&QueryPlan::new("music"), &cancel)
             .map_err(|error| eyre::eyre!(error.message.clone()))?;
         assert_eq!(
             default_rows
@@ -1581,10 +1539,13 @@ mod tests {
         assert!(default_rows.iter().all(|row| !row.is_filtered));
 
         let show_filtered_rows = state
-            .query(&QueryPlan {
-                show_filtered: true,
-                ..QueryPlan::new("music")
-            })
+            .query(
+                &QueryPlan {
+                    show_filtered: true,
+                    ..QueryPlan::new("music")
+                },
+                &cancel,
+            )
             .map_err(|error| eyre::eyre!(error.message.clone()))?;
         assert_eq!(
             show_filtered_rows
@@ -1598,10 +1559,13 @@ mod tests {
         );
 
         let only_filtered_rows = state
-            .query(&QueryPlan {
-                only_filtered: true,
-                ..QueryPlan::new("music")
-            })
+            .query(
+                &QueryPlan {
+                    only_filtered: true,
+                    ..QueryPlan::new("music")
+                },
+                &cancel,
+            )
             .map_err(|error| eyre::eyre!(error.message.clone()))?;
         assert_eq!(only_filtered_rows.len(), 1);
         assert_eq!(
@@ -1621,7 +1585,7 @@ mod tests {
         state.query_cache_dirty = false;
 
         let error = state
-            .query(&QueryPlan::new("alpha"))
+            .query(&QueryPlan::new("alpha"), &CancellationToken::new())
             .expect_err("invalid cache bytes should degrade");
 
         assert_eq!(error.kind, MachineErrorKind::Degraded);
@@ -1660,16 +1624,19 @@ mod tests {
             .wrap_err("failed extracting drive letter from temp dir")?;
         let needle = format!("__teamy_mft_live_refresh_{}__", current_unix_ms());
         let created_path = scope_dir.path().join(format!("{needle}.txt"));
+        let cancel = CancellationToken::new();
 
         sync_machine_cache(
             cache_dir.path(),
             &[drive_letter],
             IfExistsOutputBehaviour::Overwrite,
+            &cancel,
         )?;
 
         let mut state = LiveDriveState::load(
             cache_dir.path(),
             published_drive_paths(cache_dir.path(), drive_letter),
+            &cancel,
         )?;
         let base_request = QueryPlan {
             r#in: vec![scope_dir.path().to_string_lossy().into_owned()],
@@ -1679,16 +1646,16 @@ mod tests {
         };
         assert!(
             state
-                .query(&base_request)
+                .query(&base_request, &cancel)
                 .map_err(|error| eyre::eyre!(error.message.clone()))?
                 .is_empty()
         );
 
         std::fs::write(&created_path, b"hello from live refresh")?;
         std::thread::sleep(Duration::from_millis(250));
-        state.refresh()?;
+        state.refresh(&cancel)?;
         let rows = state
-            .query(&base_request)
+            .query(&base_request, &cancel)
             .map_err(|error| eyre::eyre!(error.message.clone()))?;
         assert!(
             rows.iter().any(|row| row

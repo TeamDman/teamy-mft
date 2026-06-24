@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::cli::command::service::ServiceWatchUsnArgs;
 use crate::cli::command::service::install::ServiceInstallArgs;
 use crate::cli::command::service::is_running::ServiceIsRunningArgs;
@@ -51,7 +52,7 @@ impl ServiceArgs {
     /// # Errors
     ///
     /// Returns an error if the selected service subcommand fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
         match self.command {
             ServiceCommand::Install(args) => args.invoke(),
             ServiceCommand::Uninstall(args) => args.invoke(),
@@ -60,8 +61,8 @@ impl ServiceArgs {
             ServiceCommand::Status(args) => args.invoke(),
             ServiceCommand::IsRunning(args) => args.invoke(),
             ServiceCommand::Logs(args) => args.invoke(),
-            ServiceCommand::Run(args) => args.invoke(),
-            ServiceCommand::WatchUsn(args) => args.invoke(),
+            ServiceCommand::Run(args) => args.invoke(cancellation_token),
+            ServiceCommand::WatchUsn(args) => args.invoke(cancellation_token),
         }
     }
 }

@@ -1,5 +1,6 @@
 pub mod command;
 pub mod global_args;
+use crate::cancellation::CancellationToken;
 use crate::cli::command::Command;
 use crate::cli::global_args::GlobalArgs;
 use arbitrary::Arbitrary;
@@ -34,8 +35,8 @@ impl Cli {
     /// # Errors
     ///
     /// Returns an error if the command execution fails.
-    pub fn invoke(self) -> eyre::Result<()> {
-        self.command.invoke()
+    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+        self.command.invoke(cancellation_token)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::machine::config::published_drive_paths;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::live_drive_state::ObservedUsnEvent;
@@ -8,8 +9,6 @@ use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tracing::debug;
 use tracing::info;
@@ -47,10 +46,9 @@ impl ServiceWatchUsnArgs {
     /// Returns an error if the machine cache cannot be loaded, selected drives
     /// cannot be resolved, USN journals cannot be read, or scope paths cannot be
     /// resolved.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, cancel: CancellationToken) -> eyre::Result<()> {
         ensure_elevated()?;
-        let _cancel_guard = crate::windows_utils::ctrl_c::use_graceful_cancellation();
-        let cancel = AtomicBool::new(false);
+        cancel.bail_if_cancelled()?;
         let config = crate::machine::config::load_required_machine_config()?;
         let scopes = resolve_query_scopes(&self.r#in)?;
         let drive_letters = self
@@ -61,11 +59,8 @@ impl ServiceWatchUsnArgs {
 
         for drive_letter in drive_letters {
             let paths = published_drive_paths(&config.sync_dir, drive_letter);
-            let state = LiveDriveState::load_for_observation_with_cancel(
-                &config.sync_dir,
-                paths,
-                Some(&cancel),
-            )?;
+            let state =
+                LiveDriveState::load_for_observation_with_cancel(&config.sync_dir, paths, &cancel)?;
             println!("usn-watch-drive-ready={drive_letter}");
             println!(
                 "usn-watch-drive-start-usn-{}={}",
@@ -86,9 +81,11 @@ impl ServiceWatchUsnArgs {
         println!("usn-watch-scope-count={}", scopes.len());
         println!("usn-watch-poll-ms={}", poll_interval.as_millis());
 
-        while !crate::windows_utils::ctrl_c::interrupted() {
+        while !cancel.is_cancelled() {
             for state in &mut states {
-                for event in state.observe_usn_events_with_cancel(Some(&cancel))? {
+                cancel.bail_if_cancelled()?;
+                for event in state.observe_usn_events_with_cancel(&cancel)? {
+                    cancel.bail_if_cancelled()?;
                     if !event_matches_scopes(&event, &scopes) {
                         debug!(
                             drive = %event.drive_letter,
@@ -105,8 +102,7 @@ impl ServiceWatchUsnArgs {
             std::thread::sleep(poll_interval);
         }
 
-        cancel.store(true, Ordering::Relaxed);
-        Ok(())
+        cancel.bail_if_cancelled()
     }
 }
 

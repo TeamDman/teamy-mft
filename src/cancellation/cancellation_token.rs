@@ -13,12 +13,24 @@ pub struct CancellationToken {
 struct CancellationInner {
     cancelled: AtomicBool,
     reason: Mutex<Option<String>>,
+    parent: Option<CancellationToken>,
 }
 
 impl CancellationToken {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn child_token(&self) -> Self {
+        Self {
+            inner: Arc::new(CancellationInner {
+                cancelled: AtomicBool::new(false),
+                reason: Mutex::new(None),
+                parent: Some(self.clone()),
+            }),
+        }
     }
 
     pub fn request_cancel(&self, reason: impl Into<String>) {
@@ -38,15 +50,27 @@ impl CancellationToken {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.cancelled.load(Ordering::Acquire)
+            || self
+                .inner
+                .parent
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
     }
 
     #[must_use]
     pub fn cancellation_reason(&self) -> Option<String> {
-        self.inner
+        let reason = self
+            .inner
             .reason
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .clone();
+        reason.or_else(|| {
+            self.inner
+                .parent
+                .as_ref()
+                .and_then(CancellationToken::cancellation_reason)
+        })
     }
 
     /// # Errors

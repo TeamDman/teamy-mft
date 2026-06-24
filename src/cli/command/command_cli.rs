@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::cli::command::fsutil::FsutilArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
@@ -66,20 +67,20 @@ impl Command {
     /// # Errors
     ///
     /// Returns an error if tracing initialization fails or the command execution fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
         match self {
-            Command::Daemon(args) | Command::Service(args) => args.invoke(),
-            Command::Sync(args) => args.invoke(),
+            Command::Daemon(args) | Command::Service(args) => args.invoke(cancellation_token),
+            Command::Sync(args) => args.invoke(cancellation_token),
             Command::Install(args) => args.invoke(),
             Command::Uninstall(args) => args.invoke(),
-            Command::ListPaths(args) => args.invoke(),
+            Command::ListPaths(args) => args.invoke(cancellation_token),
             Command::Move(args) => args.invoke(),
             Command::Rule(args) => args.invoke(),
             Command::Profile(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
             Command::Fsutil(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
-            Command::Query(args) => args.invoke_and_print(),
+            Command::Query(args) => args.invoke_and_print(cancellation_token),
             Command::Tray(args) => args.invoke(),
         }
     }

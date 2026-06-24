@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::presentation::ResultListPresentation;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -56,7 +57,7 @@ impl QueryArgs {
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_filtered = self.plan.show_filtered, only_filtered = self.plan.only_filtered, density = ?self.density))]
-    pub fn invoke_and_print(self) -> eyre::Result<()> {
+    pub fn invoke_and_print(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
         let stdout_is_terminal = std::io::stdout().is_terminal();
         let colorize = stdout_is_terminal
             && (self.plan.include_deleted
@@ -72,7 +73,7 @@ impl QueryArgs {
 
         if !use_columns {
             let mut stdout = std::io::stdout().lock();
-            self.visit_rows(|row| {
+            self.visit_rows(&cancellation_token, |row| {
                 row.render_path(&mut stdout, colorize)?;
                 writeln!(&mut stdout)?;
                 Ok(ControlFlow::Continue(()))
@@ -81,7 +82,7 @@ impl QueryArgs {
         }
 
         let mut results = Vec::new();
-        self.visit_rows(|row| {
+        self.visit_rows(&cancellation_token, |row| {
             results.push(row);
             Ok(ControlFlow::Continue(()))
         })?;
@@ -140,9 +141,11 @@ impl QueryArgs {
     /// be canonicalized, or if daemon/disk-backed index reads fail.
     pub fn visit_rows(
         &self,
+        cancellation_token: &CancellationToken,
         visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
-        self.prepare_runtime()?.visit_rows(self.plan.clone(), visit)
+        self.prepare_runtime()?
+            .visit_rows(self.plan.clone(), cancellation_token.clone(), visit)
     }
 
     fn runtime(&self) -> QueryRuntime {
@@ -168,6 +171,7 @@ impl QueryArgs {
 #[cfg(test)]
 mod tests {
     use super::QueryArgs;
+    use crate::cancellation::CancellationToken;
     use crate::query::QueryRuntime;
     use std::ops::ControlFlow;
 
@@ -221,7 +225,7 @@ mod tests {
         };
 
         let error = args
-            .visit_rows(|_| Ok(ControlFlow::Continue(())))
+            .visit_rows(&CancellationToken::new(), |_| Ok(ControlFlow::Continue(())))
             .expect_err("conflicting daemon flags should fail early");
 
         assert!(

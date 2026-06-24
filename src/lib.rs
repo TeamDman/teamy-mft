@@ -107,7 +107,7 @@ pub fn main() -> eyre::Result<()> {
     }
 
     tracy_capture_padding("before_cli_invoke");
-    cli.invoke()?;
+    cli.invoke(cancellation_token.clone())?;
     tracy_capture_padding("after_cli_invoke");
     cancellation_token.bail_if_cancelled()?;
 
