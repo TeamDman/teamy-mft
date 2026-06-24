@@ -19,10 +19,7 @@
 //!
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
-use color_eyre::owo_colors::OwoColorize;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use teamy_mft::cancellation::install_ctrlc_handler;
 use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryNeedle;
 use teamy_mft::query::QueryPlan;
@@ -33,21 +30,7 @@ const SOFTWARE_TERMINAL_SEGMENTS: [&str; 3] = [".git", "package.json", "Cargo.to
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        // spawn ctrl+c handler
-        let cancel = Arc::clone(&cancel);
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("ctrl+c runtime should build");
-            let _ = runtime.block_on(tokio::signal::ctrl_c());
-            cancel.store(true, Ordering::Relaxed);
-            println!("{}", "^C".red().bold());
-        });
-    };
+    let cancel = install_ctrlc_handler()?;
 
     // Reuse one explicit published-index session so repeated queries can keep
     // drive cache state warm in-process.
@@ -56,17 +39,15 @@ fn main() -> eyre::Result<()> {
     println!("{:<20} count", "name");
     for segment in SOFTWARE_TERMINAL_SEGMENTS {
         let mut count = 0_usize;
-        session.visit_rows_with_cancel(
+        session.visit_rows(
             QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
-            Some(&cancel),
+            &cancel,
             |_row| {
                 count += 1;
                 Ok(ControlFlow::Continue(()))
             },
         )?;
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
+        cancel.bail_if_cancelled()?;
         println!("{:<20} {}", segment, count);
     }
 

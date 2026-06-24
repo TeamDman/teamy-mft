@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::current_unix_ms;
@@ -41,9 +42,7 @@ use std::ops::ControlFlow;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicIsize;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -74,9 +73,8 @@ use windows::Win32::System::Services::SERVICE_WIN32_OWN_PROCESS;
 use windows::Win32::System::Services::SetServiceStatus;
 use windows::Win32::System::Services::StartServiceCtrlDispatcherW;
 
-static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SERVICE_STATUS_HANDLE_SLOT: AtomicIsize = AtomicIsize::new(0);
-static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static SERVICE_CANCELLATION_TOKEN: StdMutex<Option<CancellationToken>> = StdMutex::new(None);
 
 type DaemonPipeReader = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
 type DaemonPipeWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
@@ -118,6 +116,7 @@ struct DaemonRuntimeState {
 struct MachineDaemonService {
     config: MachineConfig,
     worker: DaemonWorker,
+    cancellation_token: CancellationToken,
 }
 
 #[derive(Debug)]
@@ -136,7 +135,7 @@ enum DriveWorkerCommand {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
         response: oneshot::Sender<Result<DaemonDriveQueryRows, MachineError>>,
     },
     Warm,
@@ -166,7 +165,7 @@ struct DriveWorker {
     drive: char,
     tx: Sender<DriveWorkerCommand>,
     status: Arc<StdMutex<DriveWorkerStatusSnapshot>>,
-    stop_requested: Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
 }
 
 enum DaemonWorkerCommand {
@@ -185,7 +184,7 @@ struct DaemonWorker {
     status: Arc<StdMutex<DaemonWorkerStatusSnapshot>>,
     drive_workers: Arc<StdMutex<FxHashMap<char, DriveWorker>>>,
     sync_dir: std::path::PathBuf,
-    stop_requested: Arc<AtomicBool>,
+    cancellation_token: CancellationToken,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -224,15 +223,20 @@ struct DriveWorkerState {
 }
 
 impl DriveWorker {
-    fn start(drive: char, sync_dir: std::path::PathBuf, mode: DriveWorkerRuntimeMode) -> Self {
+    fn start(
+        drive: char,
+        sync_dir: std::path::PathBuf,
+        mode: DriveWorkerRuntimeMode,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let status = Arc::new(StdMutex::new(DriveWorkerStatusSnapshot::default()));
-        let stop_requested = Arc::new(AtomicBool::new(false));
+        let worker_cancellation_token = cancellation_token.child_token();
         std::thread::Builder::new()
             .name(format!("teamy-mft-drive-{drive}"))
             .spawn({
                 let status_for_thread = Arc::clone(&status);
-                let stop_requested_for_thread = Arc::clone(&stop_requested);
+                let cancellation_token_for_thread = worker_cancellation_token.clone();
                 move || {
                     let mut state = DriveWorkerState {
                         drive,
@@ -248,7 +252,7 @@ impl DriveWorker {
                         &mut state,
                         &rx,
                         &status_for_thread,
-                        &stop_requested_for_thread,
+                        &cancellation_token_for_thread,
                     );
                 }
             })
@@ -257,7 +261,7 @@ impl DriveWorker {
             drive,
             tx,
             status,
-            stop_requested,
+            cancellation_token: worker_cancellation_token,
         }
     }
 
@@ -266,7 +270,7 @@ impl DriveWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
         let (response, rx) = oneshot::channel();
         self.tx
@@ -298,7 +302,8 @@ impl DriveWorker {
     }
 
     fn stop(&self) {
-        self.stop_requested.store(true, Ordering::Relaxed);
+        self.cancellation_token
+            .request_cancel(format!("Drive {} worker stop requested", self.drive));
         let _ = self.tx.send(DriveWorkerCommand::Stop);
     }
 }
@@ -311,10 +316,10 @@ impl DriveWorkerState {
     fn query_with_cancel(
         &mut self,
         request: &QueryPlan,
-        cancel: &AtomicBool,
+        cancel: &CancellationToken,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
         // dwrk[impl worker.query.cancelled-without-degrading]
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.is_cancelled() {
             return Ok(DaemonDriveQueryRows {
                 rows: Vec::new(),
                 degraded: None,
@@ -328,8 +333,8 @@ impl DriveWorkerState {
                 })
                 .map_err(|error| MachineError::degraded(error.to_string()));
         }
-        if let Err(error) = self.refresh_with_cancel(Some(cancel)) {
-            if cancel.load(Ordering::Relaxed) {
+        if let Err(error) = self.refresh_with_cancel(cancel) {
+            if cancel.is_cancelled() {
                 return Ok(DaemonDriveQueryRows {
                     rows: Vec::new(),
                     degraded: None,
@@ -358,18 +363,18 @@ impl DriveWorkerState {
         self.state
             .as_mut()
             .ok_or_else(|| MachineError::degraded(format!("Drive {} is not loaded", self.drive)))?
-            .query_with_cancel(request, Some(cancel))
+            .query(request, cancel)
             .map(|rows| DaemonDriveQueryRows {
                 rows,
                 degraded: None,
             })
     }
 
-    fn refresh(&mut self) -> Result<(), MachineError> {
-        self.refresh_with_cancel(None)
+    fn refresh(&mut self, cancel: &CancellationToken) -> Result<(), MachineError> {
+        self.refresh_with_cancel(cancel)
     }
 
-    fn refresh_with_cancel(&mut self, cancel: Option<&AtomicBool>) -> Result<(), MachineError> {
+    fn refresh_with_cancel(&mut self, cancel: &CancellationToken) -> Result<(), MachineError> {
         if !self.is_live_observed() {
             return Ok(());
         }
@@ -395,7 +400,7 @@ impl DriveWorkerState {
                         paths.base_index_path.display()
                     );
                 }
-                LiveDriveState::load_with_cancel(&self.sync_dir, paths, cancel)
+                LiveDriveState::load(&self.sync_dir, paths, cancel)
             })()
             .map_err(|error| {
                 let message = format!(
@@ -415,7 +420,7 @@ impl DriveWorkerState {
             .state
             .as_mut()
             .expect("drive should be loaded before refresh")
-            .refresh_with_cancel(cancel);
+            .refresh(cancel);
         if let Err(error) = refresh_result {
             self.state = None;
             let message = format!(
@@ -428,14 +433,14 @@ impl DriveWorkerState {
         Ok(())
     }
 
-    fn flush(&mut self) {
+    fn flush(&mut self, cancel: &CancellationToken) {
         let Some(state) = self.state.as_mut() else {
             return;
         };
         if !state.published_dirty() {
             return;
         }
-        if let Err(error) = state.flush_published() {
+        if let Err(error) = state.flush_published(cancel) {
             warn!(drive = %self.drive, error = %error, "Failed flushing live overlay during daemon shutdown/idle");
         }
     }
@@ -456,12 +461,12 @@ fn run_drive_worker(
     state: &mut DriveWorkerState,
     rx: &Receiver<DriveWorkerCommand>,
     status: &StdMutex<DriveWorkerStatusSnapshot>,
-    stop_requested: &AtomicBool,
+    cancellation_token: &CancellationToken,
 ) {
     publish_drive_worker_status(state, status);
     loop {
-        if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed) {
-            state.flush();
+        if cancellation_token.is_cancelled() {
+            state.flush(cancellation_token);
             publish_drive_worker_status(state, status);
             break;
         }
@@ -483,7 +488,7 @@ fn run_drive_worker(
                 );
                 let result = {
                     let _entered = span.enter();
-                    if cancel.load(Ordering::Relaxed) {
+                    if cancel.is_cancelled() {
                         Ok(DaemonDriveQueryRows {
                             rows: Vec::new(),
                             degraded: None,
@@ -504,7 +509,7 @@ fn run_drive_worker(
                 let _ = response.send(result);
             }
             Ok(DriveWorkerCommand::Flush) => {
-                state.flush();
+                state.flush(cancellation_token);
                 publish_drive_worker_status(state, status);
             }
             Ok(DriveWorkerCommand::Warm) => {
@@ -516,7 +521,7 @@ fn run_drive_worker(
                     state.loading = true;
                     publish_drive_worker_status(state, status);
                 }
-                if let Err(error) = state.refresh() {
+                if let Err(error) = state.refresh(cancellation_token) {
                     match published_drive_cache_available(state.drive, &state.sync_dir) {
                         Ok(true) => {
                             let message = format!(
@@ -552,7 +557,7 @@ fn run_drive_worker(
             }
             Ok(DriveWorkerCommand::Stop)
             | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                state.flush();
+                state.flush(cancellation_token);
                 publish_drive_worker_status(state, status);
                 break;
             }
@@ -566,7 +571,7 @@ fn run_drive_worker(
                     publish_drive_worker_status(state, status);
                     continue;
                 }
-                if let Err(error) = state.refresh() {
+                if let Err(error) = state.refresh(cancellation_token) {
                     warn!(
                         drive = %state.drive,
                         error = %error.message,
@@ -595,25 +600,25 @@ fn publish_drive_worker_status(
 }
 
 impl DaemonWorker {
-    fn start(config: &MachineConfig) -> Self {
+    fn start(config: &MachineConfig, cancellation_token: CancellationToken) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut state = DaemonRuntimeState::new(config);
         let status = Arc::new(StdMutex::new(DaemonWorkerStatusSnapshot::default()));
         let drive_workers = Arc::new(StdMutex::new(FxHashMap::default()));
-        let stop_requested = Arc::new(AtomicBool::new(false));
+        let worker_cancellation_token = cancellation_token.child_token();
         std::thread::Builder::new()
             .name("teamy-mft-daemon-worker".to_owned())
             .spawn({
                 let status_for_thread = Arc::clone(&status);
                 let drive_workers_for_thread = Arc::clone(&drive_workers);
-                let stop_requested_for_thread = Arc::clone(&stop_requested);
+                let cancellation_token_for_thread = worker_cancellation_token.clone();
                 move || {
                     run_daemon_worker(
                         &mut state,
                         &rx,
                         &status_for_thread,
                         &drive_workers_for_thread,
-                        &stop_requested_for_thread,
+                        &cancellation_token_for_thread,
                     );
                 }
             })
@@ -623,7 +628,7 @@ impl DaemonWorker {
             status,
             drive_workers,
             sync_dir: config.sync_dir.clone().into_inner(),
-            stop_requested,
+            cancellation_token: worker_cancellation_token,
         }
     }
 
@@ -632,7 +637,7 @@ impl DaemonWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<DaemonQueryOutcome, MachineError> {
         self.query_drive_workers(query_plan, correlation_id, rpc_method, cancel)
             .await
@@ -701,7 +706,8 @@ impl DaemonWorker {
     }
 
     fn stop(&self) {
-        self.stop_requested.store(true, Ordering::Relaxed);
+        self.cancellation_token
+            .request_cancel("Daemon worker stop requested");
         let _ = self.tx.send(DaemonWorkerCommand::Stop);
         if let Ok(workers) = self.drive_workers.lock() {
             for worker in workers.values() {
@@ -717,7 +723,7 @@ impl DaemonWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: Arc<AtomicBool>,
+        cancel: CancellationToken,
     ) -> Result<DaemonQueryOutcome, MachineError> {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
@@ -730,7 +736,7 @@ impl DaemonWorker {
             .map_err(|error| MachineError::request_invalid(error.to_string()))?;
 
         for &drive in &drive_letters {
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.is_cancelled() {
                 tracing::warn!("Daemon query cancelled by client");
                 break;
             }
@@ -751,7 +757,7 @@ impl DaemonWorker {
                     per_drive_request,
                     correlation_id.clone(),
                     rpc_method,
-                    Arc::clone(&cancel),
+                    cancel.clone(),
                 )
                 .await
             {
@@ -796,6 +802,7 @@ impl DaemonWorker {
                     drive,
                     self.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
+                    self.cancellation_token.clone(),
                 )
             })
             .clone()
@@ -807,12 +814,12 @@ fn run_daemon_worker(
     rx: &Receiver<DaemonWorkerCommand>,
     status: &StdMutex<DaemonWorkerStatusSnapshot>,
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
-    stop_requested: &AtomicBool,
+    cancellation_token: &CancellationToken,
 ) {
     publish_worker_status(state, status);
     loop {
-        if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed) {
-            state.flush_dirty_drives();
+        if cancellation_token.is_cancelled() {
+            state.flush_dirty_drives(cancellation_token);
             publish_worker_status(state, status);
             break;
         }
@@ -851,14 +858,14 @@ fn run_daemon_worker(
                 );
                 let result = {
                     let _entered = span.enter();
-                    run_daemon_worker_sync(state, sync_plan)
+                    run_daemon_worker_sync(state, sync_plan, cancellation_token)
                 };
                 state.active_jobs = state.active_jobs.saturating_sub(1);
                 publish_worker_status(state, status);
                 let _ = response.send(result);
             }
             Ok(DaemonWorkerCommand::Flush) => {
-                state.flush_dirty_drives();
+                state.flush_dirty_drives(cancellation_token);
                 if let Ok(workers) = drive_workers.lock() {
                     for worker in workers.values() {
                         worker.flush();
@@ -868,7 +875,7 @@ fn run_daemon_worker(
             }
             Ok(DaemonWorkerCommand::Stop)
             | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                state.flush_dirty_drives();
+                state.flush_dirty_drives(cancellation_token);
                 if let Ok(workers) = drive_workers.lock() {
                     for worker in workers.values() {
                         worker.stop();
@@ -878,14 +885,13 @@ fn run_daemon_worker(
                 break;
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                if stop_requested.load(Ordering::Relaxed) || STOP_REQUESTED.load(Ordering::Relaxed)
-                {
-                    state.flush_dirty_drives();
+                if cancellation_token.is_cancelled() {
+                    state.flush_dirty_drives(cancellation_token);
                     publish_worker_status(state, status);
                     break;
                 }
-                state.refresh_loaded_drives();
-                warm_next_drive_worker(state, drive_workers);
+                state.refresh_loaded_drives(cancellation_token);
+                warm_next_drive_worker(state, drive_workers, cancellation_token);
                 publish_worker_status(state, status);
             }
         }
@@ -895,6 +901,7 @@ fn run_daemon_worker(
 fn warm_next_drive_worker(
     state: &mut DaemonRuntimeState,
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
+    cancellation_token: &CancellationToken,
 ) {
     // dwrk[impl worker.warmup.gradual-per-drive]
     if state.warm_drive_letters.is_empty() {
@@ -924,6 +931,7 @@ fn warm_next_drive_worker(
                     drive,
                     state.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
+                    cancellation_token.clone(),
                 )
             })
             .clone();
@@ -963,12 +971,13 @@ fn publish_worker_status(
 fn run_daemon_worker_sync(
     state: &mut DaemonRuntimeState,
     request: SyncPlan,
+    cancel: &CancellationToken,
 ) -> Result<(), MachineError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| MachineError::degraded(error.to_string()))?;
-    runtime.block_on(state.sync(request))
+    runtime.block_on(state.sync(request, cancel))
 }
 
 fn query_published_drive(
@@ -1071,8 +1080,12 @@ impl DaemonRuntimeState {
         }
     }
 
-    async fn sync(&mut self, request: SyncPlan) -> Result<(), MachineError> {
-        self.flush_dirty_drives();
+    async fn sync(
+        &mut self,
+        request: SyncPlan,
+        cancel: &CancellationToken,
+    ) -> Result<(), MachineError> {
+        self.flush_dirty_drives(cancel);
         crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
             .map_err(|error| MachineError::degraded(error.to_string()))?;
         if request.recursive && request.path.is_none() {
@@ -1107,7 +1120,7 @@ impl DaemonRuntimeState {
             repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
             let sync_result =
-                sync_machine_cache_async(&self.sync_dir, &drive_letters, request.if_exists)
+                sync_machine_cache_async(&self.sync_dir, &drive_letters, request.if_exists, cancel)
                     .await
                     .map_err(|error| MachineError::degraded(error.to_string()))?;
 
@@ -1123,9 +1136,9 @@ impl DaemonRuntimeState {
                 self.degraded.remove(&drive);
             }
             for &drive in &sync_result.live_drives {
-                self.refresh_drive(drive)?;
+                self.refresh_drive(drive, cancel)?;
                 self.drive_mut(drive)?
-                    .flush_published()
+                    .flush_published(cancel)
                     .map_err(|error| MachineError::degraded(error.to_string()))?;
             }
         }
@@ -1133,34 +1146,38 @@ impl DaemonRuntimeState {
         Ok(())
     }
 
-    fn refresh_loaded_drives(&mut self) {
+    fn refresh_loaded_drives(&mut self, cancel: &CancellationToken) {
         let drives = self.drives.keys().copied().collect::<Vec<_>>();
         for drive in drives {
-            if let Err(error) = self.refresh_drive(drive) {
+            if let Err(error) = self.refresh_drive(drive, cancel) {
                 warn!(drive = %drive, error = %error.message, "Drive refresh degraded; falling back to disk until next reload");
             }
         }
     }
 
-    fn flush_dirty_drives(&mut self) {
+    fn flush_dirty_drives(&mut self, cancel: &CancellationToken) {
         for (&drive, state) in &mut self.drives {
             if !state.published_dirty() {
                 continue;
             }
-            if let Err(error) = state.flush_published() {
+            if let Err(error) = state.flush_published(cancel) {
                 warn!(drive = %drive, error = %error, "Failed flushing live overlay during daemon shutdown/idle");
             }
         }
     }
 
-    fn refresh_drive(&mut self, drive: char) -> Result<(), MachineError> {
+    fn refresh_drive(
+        &mut self,
+        drive: char,
+        cancel: &CancellationToken,
+    ) -> Result<(), MachineError> {
         if let Some(message) = self.degraded.get(&drive).cloned() {
             return Err(MachineError::degraded(message));
         }
 
         if !self.drives.contains_key(&drive) {
             self.loading.insert(drive, "loading".to_owned());
-            let state = self.load_drive_state(drive).map_err(|error| {
+            let state = self.load_drive_state(drive, cancel).map_err(|error| {
                 let message = format!("Drive {drive} could not be loaded for live query: {error}");
                 self.loading.remove(&drive);
                 self.degraded.insert(drive, message.clone());
@@ -1174,7 +1191,7 @@ impl DaemonRuntimeState {
             .drives
             .get_mut(&drive)
             .expect("drive should be loaded before refresh")
-            .refresh();
+            .refresh(cancel);
         if let Err(error) = refresh_result {
             self.drives.remove(&drive);
             let message = error.to_string();
@@ -1191,7 +1208,11 @@ impl DaemonRuntimeState {
             .ok_or_else(|| MachineError::degraded(format!("Drive {drive} is not loaded")))
     }
 
-    fn load_drive_state(&self, drive: char) -> eyre::Result<LiveDriveState> {
+    fn load_drive_state(
+        &self,
+        drive: char,
+        cancel: &CancellationToken,
+    ) -> eyre::Result<LiveDriveState> {
         let paths = published_drive_paths(&self.sync_dir, drive);
         if !paths.mft_path.is_file() {
             eyre::bail!(
@@ -1207,7 +1228,7 @@ impl DaemonRuntimeState {
                 paths.base_index_path.display()
             );
         }
-        LiveDriveState::load(&self.sync_dir, paths)
+        LiveDriveState::load(&self.sync_dir, paths, cancel)
     }
 }
 
@@ -1220,9 +1241,13 @@ fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
 }
 
 impl MachineDaemonService {
-    fn new(config: MachineConfig) -> Self {
-        let worker = DaemonWorker::start(&config);
-        Self { config, worker }
+    fn new(config: MachineConfig, cancellation_token: CancellationToken) -> Self {
+        let worker = DaemonWorker::start(&config, cancellation_token.clone());
+        Self {
+            config,
+            worker,
+            cancellation_token,
+        }
     }
 
     async fn run_query_in_span(
@@ -1231,6 +1256,7 @@ impl MachineDaemonService {
         correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
         let worker = self.worker.clone();
+        let request_cancellation_token = self.cancellation_token.child_token();
         let query_plan_for_body = query_plan.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
@@ -1249,7 +1275,7 @@ impl MachineDaemonService {
                     query_plan_for_body,
                     correlation_id.clone(),
                     "query",
-                    Arc::new(AtomicBool::new(false)),
+                    request_cancellation_token,
                 )
                 .await
             {
@@ -1276,8 +1302,8 @@ impl MachineDaemonService {
     ) -> Result<(), MachineError> {
         let worker = self.worker.clone();
         let query_plan_for_body = query_plan.clone();
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let cancel_flag_for_watcher = Arc::clone(&cancel_flag);
+        let request_cancellation_token = self.cancellation_token.child_token();
+        let cancellation_token_for_watcher = request_cancellation_token.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
@@ -1295,7 +1321,7 @@ impl MachineDaemonService {
                 query_plan_for_body.clone(),
                 correlation_id.clone(),
                 "query_stream",
-                Arc::clone(&cancel_flag),
+                request_cancellation_token.clone(),
             );
             tokio::pin!(query);
             let outcome = loop {
@@ -1304,7 +1330,8 @@ impl MachineDaemonService {
                     cancel_result = cancel.recv() => {
                         match cancel_result {
                             Ok(Some(_) | None) => {
-                                cancel_flag_for_watcher.store(true, Ordering::Relaxed);
+                                cancellation_token_for_watcher
+                                    .request_cancel("Daemon query stream cancelled by client");
                                 tracing::warn!("Daemon query stream cancelled by client");
                                 return Ok(());
                             }
@@ -1316,7 +1343,13 @@ impl MachineDaemonService {
                 }
             };
             for row in outcome.rows {
-                if cancel_flag.load(Ordering::Relaxed) || query_stream_cancelled(cancel).await {
+                if request_cancellation_token.is_cancelled() {
+                    tracing::warn!("Daemon query stream cancelled");
+                    return Ok(());
+                }
+                if query_stream_cancelled(cancel).await {
+                    request_cancellation_token
+                        .request_cancel("Daemon query stream cancelled by client");
                     tracing::warn!("Daemon query stream cancelled by client");
                     return Ok(());
                 }
@@ -1356,7 +1389,6 @@ async fn query_stream_cancelled(cancel: &mut vox::Rx<u8>) -> bool {
 
 fn next_correlation_id(method: &str) -> CorrelationId {
     let _ = method;
-    let _ = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     CorrelationId::new()
 }
 
@@ -1427,7 +1459,8 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         let response = async move {
             tracing::info!(service_name = %service_name, "Daemon shutdown requested");
-            STOP_REQUESTED.store(true, Ordering::Relaxed);
+            self.cancellation_token
+                .request_cancel("Daemon shutdown requested");
             if let Some(handle) = current_service_status_handle() {
                 let _ = set_service_status(handle, SERVICE_STOP_PENDING);
             }
@@ -1677,7 +1710,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         if request.follow {
             let mut live_rx = daemon_log_hub().subscribe();
             loop {
-                if STOP_REQUESTED.load(Ordering::Relaxed) {
+                if self.cancellation_token.is_cancelled() {
                     let _ = logs
                         .send(crate::machine::daemon_log::DaemonLogWireEvent {
                             timestamp_unix_ms: crate::machine::config::current_unix_ms(),
@@ -1812,17 +1845,20 @@ fn collect_published_drive_summaries_for_letters(
 /// # Errors
 ///
 /// Returns an error if the daemon runtime cannot be started.
-pub fn run_daemon(service_mode: bool) -> eyre::Result<()> {
+pub fn run_daemon(service_mode: bool, cancellation_token: CancellationToken) -> eyre::Result<()> {
     if service_mode {
-        run_windows_service_dispatcher()
+        run_windows_service_dispatcher(cancellation_token)
     } else {
         let config = load_machine_config()?
             .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
-        run_daemon_runtime(config)
+        run_daemon_runtime(config, cancellation_token)
     }
 }
 
-fn run_windows_service_dispatcher() -> eyre::Result<()> {
+fn run_windows_service_dispatcher(cancellation_token: CancellationToken) -> eyre::Result<()> {
+    *SERVICE_CANCELLATION_TOKEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation_token);
     let config = load_machine_config()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let mut service_name = crate::machine::security::encode_wide(&config.service_name);
@@ -1846,7 +1882,6 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows::core::PW
 }
 
 fn service_main_impl() -> eyre::Result<()> {
-    STOP_REQUESTED.store(false, Ordering::Relaxed);
     let config = load_machine_config()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let service_name = config.service_name.as_str().easy_pcwstr()?;
@@ -1857,9 +1892,17 @@ fn service_main_impl() -> eyre::Result<()> {
     SERVICE_STATUS_HANDLE_SLOT.store(handle.0 as isize, Ordering::Relaxed);
     set_service_status(handle, SERVICE_START_PENDING)?;
     set_service_status(handle, SERVICE_RUNNING)?;
-    let run_result = run_daemon_runtime(config);
+    let cancellation_token = SERVICE_CANCELLATION_TOKEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .ok_or_else(|| eyre::eyre!("service cancellation token was not initialized"))?;
+    let run_result = run_daemon_runtime(config, cancellation_token);
     let _ = set_service_status(handle, SERVICE_STOPPED);
     SERVICE_STATUS_HANDLE_SLOT.store(0, Ordering::Relaxed);
+    *SERVICE_CANCELLATION_TOKEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     run_result
 }
 
@@ -1871,7 +1914,13 @@ unsafe extern "system" fn service_control_handler(
 ) -> u32 {
     match control {
         SERVICE_CONTROL_STOP | SERVICE_CONTROL_SHUTDOWN => {
-            STOP_REQUESTED.store(true, Ordering::Relaxed);
+            if let Some(cancellation_token) = SERVICE_CANCELLATION_TOKEN
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+            {
+                cancellation_token.request_cancel("Windows service stop requested");
+            }
             if let Some(handle) = current_service_status_handle() {
                 let _ = set_service_status(handle, SERVICE_STOP_PENDING);
             }
@@ -1909,7 +1958,10 @@ fn set_service_status(
     Ok(())
 }
 
-fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
+fn run_daemon_runtime(
+    config: MachineConfig,
+    cancellation_token: CancellationToken,
+) -> eyre::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -1929,7 +1981,7 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
             &protection_status,
         );
         debug!("Machine cache protection check completed");
-        let service = MachineDaemonService::new(config.clone());
+        let service = MachineDaemonService::new(config.clone(), cancellation_token.clone());
         let last_activity = Arc::new(StdMutex::new(Instant::now()));
         let active_connections = Arc::new(AtomicUsize::new(0));
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
@@ -1944,7 +1996,7 @@ fn run_daemon_runtime(config: MachineConfig) -> eyre::Result<()> {
         );
 
         loop {
-            if STOP_REQUESTED.load(Ordering::Relaxed) {
+            if cancellation_token.is_cancelled() {
                 break;
             }
             if active_connections.load(Ordering::Relaxed) == 0
@@ -2028,24 +2080,31 @@ pub fn sync_machine_cache(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
+    cancel: &CancellationToken,
 ) -> eyre::Result<MachineCacheSyncResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(sync_machine_cache_async(sync_dir, drive_letters, if_exists))
+    runtime.block_on(sync_machine_cache_async(
+        sync_dir,
+        drive_letters,
+        if_exists,
+        cancel,
+    ))
 }
 
 async fn sync_machine_cache_async(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
+    cancel: &CancellationToken,
 ) -> eyre::Result<MachineCacheSyncResult> {
     std::fs::create_dir_all(sync_dir)?;
     let (live_drives, snapshot_cursors, skipped_drives) =
         collect_supported_drives_for_machine_sync(drive_letters);
     let drive_infos =
         resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
-    execute_sync(drive_infos.clone(), &if_exists).await?;
+    execute_sync(drive_infos.clone(), &if_exists, cancel).await?;
 
     for info in drive_infos {
         let paths = published_drive_paths(sync_dir, info.drive_letter);
@@ -2114,6 +2173,7 @@ mod tests {
     use super::DriveWorkerState;
     use super::DriveWorkerStatusSnapshot;
     use super::warm_next_drive_worker;
+    use crate::cancellation::CancellationToken;
     use crate::machine::config::published_drive_paths;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
@@ -2121,8 +2181,6 @@ mod tests {
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use rustc_hash::FxHashMap;
     use std::sync::Mutex as StdMutex;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
     use std::time::Duration;
     use std::time::Instant;
 
@@ -2164,7 +2222,8 @@ mod tests {
     #[test]
     fn cancelled_drive_query_does_not_mark_drive_snapshot_only() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let cancel = AtomicBool::new(true);
+        let cancel = CancellationToken::new();
+        cancel.request_cancel("test cancellation");
         let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
 
         let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
@@ -2179,7 +2238,7 @@ mod tests {
     #[test]
     fn drive_query_load_failure_without_cancel_reports_degraded() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let cancel = AtomicBool::new(false);
+        let cancel = CancellationToken::new();
         let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
 
         let error = state
@@ -2191,7 +2250,7 @@ mod tests {
                 .message
                 .contains("Drive Z has no published MFT snapshot")
         );
-        assert!(!cancel.load(Ordering::Relaxed));
+        assert!(!cancel.is_cancelled());
         Ok(())
     }
 
@@ -2208,7 +2267,7 @@ mod tests {
         )?
         .write_to_path(&paths.base_index_path)?;
 
-        let cancel = AtomicBool::new(false);
+        let cancel = CancellationToken::new();
         let mut state = state(&temp_dir, 'C', DriveWorkerRuntimeMode::PublishedIndexOnly);
 
         let result = state.query_with_cancel(&QueryPlan::new("track"), &cancel)?;
@@ -2229,6 +2288,7 @@ mod tests {
             'C',
             temp_dir.path().to_path_buf(),
             DriveWorkerRuntimeMode::PublishedIndexOnly,
+            CancellationToken::new(),
         );
 
         worker.warm();
@@ -2279,7 +2339,8 @@ mod tests {
         };
         let drive_workers = StdMutex::new(FxHashMap::default());
 
-        warm_next_drive_worker(&mut state, &drive_workers);
+        let cancellation_token = CancellationToken::new();
+        warm_next_drive_worker(&mut state, &drive_workers, &cancellation_token);
 
         let worker = drive_workers
             .lock()

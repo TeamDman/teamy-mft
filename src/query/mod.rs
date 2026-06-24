@@ -1,4 +1,3 @@
-mod ctrl_c_forwarder;
 mod query_filter_rules;
 mod query_group;
 mod query_index_match;

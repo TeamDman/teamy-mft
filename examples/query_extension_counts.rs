@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use teamy_mft::cancellation::CancellationToken;
+use teamy_mft::cancellation::install_ctrlc_handler;
 use teamy_mft::cli::command::query::QueryArgs;
 use teamy_mft::cli::global_args::GlobalArgs;
 use teamy_mft::logging_init::init_logging;
@@ -31,7 +31,8 @@ const NO_EXTENSION: &str = "(no extension)";
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
-    init_logging(&GlobalArgs::default(), CancellationToken::new())?;
+    let cancellation_token = install_ctrlc_handler()?;
+    init_logging(&GlobalArgs::default(), cancellation_token.clone())?;
 
     let scope = std::env::args()
         .nth(1)
@@ -50,7 +51,7 @@ fn main() -> eyre::Result<()> {
     let mut total_files = 0_usize;
 
     let start = std::time::Instant::now();
-    args.visit_rows(|row| {
+    args.visit_rows(&cancellation_token, |row| {
         let path = row.path.as_path();
         if !path.is_file() {
             return Ok(ControlFlow::Continue(()));

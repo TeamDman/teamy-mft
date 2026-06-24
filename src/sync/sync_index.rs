@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collection;
 use crate::mft::mft_file::MftFile;
 use crate::search_index::format::SearchIndexHeader;
@@ -59,7 +60,7 @@ impl SyncIndex {
     ///
     /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
     /// resolved, or index files cannot be read, built, or written.
-    pub fn invoke(drive_infos: Vec<DriveSyncInfo>) -> eyre::Result<()> {
+    pub fn invoke(drive_infos: Vec<DriveSyncInfo>, cancel: &CancellationToken) -> eyre::Result<()> {
         info!(
             "Building search indexes for drives: {}",
             drive_infos.iter().map(|info| info.drive_letter).join(", ")
@@ -73,7 +74,7 @@ impl SyncIndex {
                 index_path = %info.index_output_path.display(),
             )
             .entered();
-            Self::invoke_for_mft_path(&info)?;
+            Self::invoke_for_mft_path(&info, cancel)?;
         }
 
         info!("Index sync stage completed");
@@ -113,7 +114,7 @@ impl SyncIndex {
         }
     }
 
-    fn invoke_for_mft_path(info: &DriveSyncInfo) -> eyre::Result<()> {
+    fn invoke_for_mft_path(info: &DriveSyncInfo, cancel: &CancellationToken) -> eyre::Result<()> {
         if !info.mft_output_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",
@@ -129,7 +130,7 @@ impl SyncIndex {
                 mft_path = %info.mft_output_path.display(),
             )
             .entered();
-            MftFile::from_path(&info.mft_output_path).wrap_err_with(|| {
+            MftFile::from_path(&info.mft_output_path, cancel).wrap_err_with(|| {
                 format!(
                     "Failed parsing MFT snapshot for drive {} from {}",
                     info.drive_letter,

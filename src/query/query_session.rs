@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
 use crate::query::Pathlike;
@@ -20,8 +21,6 @@ use eyre::ensure;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use tracing::info_span;
 
 use super::query_runtime::QueryRowVisitor;
@@ -83,32 +82,21 @@ impl QuerySession {
     pub fn visit_rows(
         &mut self,
         query_plan: QueryPlan,
+        cancel: &CancellationToken,
         visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
-        self.visit_rows_with_cancel(query_plan, None, visit)
+        let mut visit = visit;
+        self.visit_rows_dyn(query_plan, cancel, &mut visit)
     }
 
-    /// # Errors
-    ///
-    /// Returns an error if the configured backend cannot answer the query.
-    /// Cancellation is best-effort and returns after the rows visited so far.
-    pub fn visit_rows_with_cancel(
+    pub(crate) fn visit_rows_dyn(
         &mut self,
         query_plan: QueryPlan,
-        cancel: Option<&AtomicBool>,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
-    ) -> eyre::Result<()> {
-        self.visit_rows_with_cancel_dyn(query_plan, cancel, &mut visit)
-    }
-
-    pub(crate) fn visit_rows_with_cancel_dyn(
-        &mut self,
-        query_plan: QueryPlan,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
-        let _guard = info_span!("visit_rows_with_cancel_dyn").entered();
-        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        let _guard = info_span!("visit_rows_dyn").entered();
+        if cancel.is_cancelled() {
             return Ok(());
         }
 
@@ -134,7 +122,11 @@ impl QuerySession {
                 self.visit_published_index_rows(&query_plan, cancel, &mut visit_with_limit)?;
             }
             QuerySessionBackend::DaemonRpc => {
-                QueryRuntime::daemon_rpc().visit_rows_dyn(query_plan, &mut visit_with_limit)?;
+                QueryRuntime::daemon_rpc().visit_rows_dyn(
+                    query_plan,
+                    cancel.clone(),
+                    &mut visit_with_limit,
+                )?;
             }
         }
 
@@ -144,7 +136,7 @@ impl QuerySession {
     fn visit_published_index_rows(
         &mut self,
         query_plan: &QueryPlan,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_published_index_rows").entered();
@@ -161,13 +153,13 @@ impl QuerySession {
 
         for &drive in &drive_letters {
             let _guard = info_span!("visit_drive_rows", drive = %drive).entered();
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 break;
             }
 
             let control_flow = self
                 .cached_drive(drive)?
-                .visit_rows_with_cancel(query_plan, &filter, cancel, &mut visit)
+                .visit_rows(query_plan, &filter, cancel, &mut visit)
                 .wrap_err_with(|| {
                     format!("failed querying cached published index for drive {drive}")
                 })?;
@@ -230,15 +222,15 @@ impl CachedPublishedDriveQuery {
         })
     }
 
-    fn visit_rows_with_cancel(
+    fn visit_rows(
         &self,
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<ControlFlow<()>> {
-        let _guard = info_span!("visit_rows_with_cancel", drive = %self.drive).entered();
-        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+        let _guard = info_span!("visit_rows", drive = %self.drive).entered();
+        if cancel.is_cancelled() {
             return Ok(ControlFlow::Break(()));
         }
 
@@ -268,7 +260,7 @@ impl CachedPublishedDriveQuery {
             .wrap_err_with(|| {
                 format!("failed querying cached base index for drive {}", self.drive)
             })?;
-            if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            if cancel.is_cancelled() {
                 return Ok(ControlFlow::Break(()));
             }
             let mut overlay_rows = Self::collect_matching_row_refs(
@@ -290,7 +282,7 @@ impl CachedPublishedDriveQuery {
             let mut base_offset = 0_usize;
             let mut overlay_offset = 0_usize;
             while base_offset < base_rows.len() || overlay_offset < overlay_rows.len() {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     return Ok(ControlFlow::Break(()));
                 }
                 let row = match (base_rows.get(base_offset), overlay_rows.get(overlay_offset)) {
@@ -334,7 +326,7 @@ impl CachedPublishedDriveQuery {
         mapped: &MappedSearchIndex,
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<ControlFlow<()>> {
         let parsed_index = SearchIndexBytes::new(mapped.bytes()).parse_trusted_for_query()?;
@@ -345,7 +337,7 @@ impl CachedPublishedDriveQuery {
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row| {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     return Ok(ControlFlow::Break(()));
                 }
                 let Some(row) = filter.classify_and_match(row) else {
@@ -361,7 +353,7 @@ impl CachedPublishedDriveQuery {
         parsed_index: &'a ParsedSearchIndex<'a>,
         query_plan: &QueryPlan,
         scopes: &[QueryScope],
-        cancel: Option<&AtomicBool>,
+        cancel: &CancellationToken,
     ) -> eyre::Result<Vec<MatchingRowRef>> {
         let mut rows = Vec::new();
         let (_loaded_rows, _control_flow) = visit_matching_parsed_row_indices(
@@ -371,7 +363,7 @@ impl CachedPublishedDriveQuery {
             query_plan.include_deleted,
             query_plan.only_deleted,
             |row_index| {
-                if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+                if cancel.is_cancelled() {
                     return Ok(ControlFlow::Break(()));
                 }
                 let row = parsed_index.row_view(row_index as usize)?;
@@ -406,6 +398,7 @@ struct MatchingRowRef {
 #[cfg(test)]
 mod tests {
     use super::QuerySession;
+    use crate::cancellation::CancellationToken;
     use crate::machine::config::published_drive_paths;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
@@ -420,7 +413,8 @@ mod tests {
         query_plan: QueryPlan,
     ) -> eyre::Result<Vec<String>> {
         let mut rows = Vec::new();
-        session.visit_rows(query_plan, |row| {
+        let cancel = CancellationToken::new();
+        session.visit_rows(query_plan, &cancel, |row| {
             rows.push(row.path.to_string());
             Ok(ControlFlow::Continue(()))
         })?;
@@ -526,12 +520,13 @@ mod tests {
             sync_dir: temp_dir.path().to_path_buf(),
             published_index_cache: std::collections::HashMap::new(),
         };
-        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let cancel = CancellationToken::new();
+        cancel.request_cancel("test cancellation");
         let mut visited = 0_usize;
 
-        session.visit_rows_with_cancel(
+        session.visit_rows(
             fixture_drive_plan("Cargo.toml"),
-            Some(&cancel),
+            &cancel,
             |_row| -> eyre::Result<ControlFlow<()>> {
                 visited += 1;
                 Ok(ControlFlow::Continue(()))
@@ -566,9 +561,10 @@ mod tests {
             published_index_cache: std::collections::HashMap::new(),
         };
         let mut visited = Vec::new();
-        session.visit_rows_with_cancel(
+        let cancel = CancellationToken::new();
+        session.visit_rows(
             fixture_drive_plan("Repos"),
-            None,
+            &cancel,
             |row| -> eyre::Result<ControlFlow<()>> {
                 visited.push(row.path.to_string());
                 Ok(ControlFlow::Continue(()))
@@ -577,9 +573,9 @@ mod tests {
 
         let count = {
             let mut count = 0_usize;
-            session.visit_rows_with_cancel(
+            session.visit_rows(
                 fixture_drive_plan("Repos"),
-                None,
+                &cancel,
                 |_row| -> eyre::Result<ControlFlow<()>> {
                     count += 1;
                     Ok(ControlFlow::Continue(()))
@@ -619,8 +615,9 @@ mod tests {
         let mut plan = fixture_drive_plan("Repos");
         plan.limit = 1_usize.into();
         let mut visited = 0_usize;
+        let cancel = CancellationToken::new();
 
-        session.visit_rows_with_cancel(plan, None, |_row| -> eyre::Result<ControlFlow<()>> {
+        session.visit_rows(plan, &cancel, |_row| -> eyre::Result<ControlFlow<()>> {
             visited += 1;
             Ok(ControlFlow::Continue(()))
         })?;
@@ -681,8 +678,9 @@ mod tests {
         let mut plan = fixture_drive_plan("Cargo.toml");
         plan.include_deleted = true;
         let mut rows = Vec::new();
+        let cancel = CancellationToken::new();
 
-        session.visit_rows(plan, |row| {
+        session.visit_rows(plan, &cancel, |row| {
             rows.push(row);
             Ok(ControlFlow::Continue(()))
         })?;

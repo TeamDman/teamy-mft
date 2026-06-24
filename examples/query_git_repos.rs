@@ -12,6 +12,7 @@
 //!
 //! Requires a synced MFT index. Run `teamy-mft sync` first if needed.
 
+use teamy_mft::cancellation::install_ctrlc_handler;
 use teamy_mft::cli::command::query::QueryArgs;
 use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryNeedle;
@@ -20,12 +21,13 @@ use teamy_mft::query::QueryRule;
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
+    let cancel = install_ctrlc_handler()?;
 
     let query = QueryArgs {
         plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(".git"))),
         ..Default::default()
     };
-    query.visit_rows(|row| {
+    query.visit_rows(&cancel, |row| {
         // path is the .git dir; print its parent (the repo root)
         if let Some(repo_root) = row.parent() {
             println!("{}", repo_root.display());

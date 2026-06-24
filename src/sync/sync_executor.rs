@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::sync::DriveSyncInfo;
 use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncIndex;
@@ -15,6 +16,7 @@ use tracing::info_span;
 pub async fn execute_sync(
     drive_infos: Vec<DriveSyncInfo>,
     if_exists: &IfExistsOutputBehaviour,
+    cancel: &CancellationToken,
 ) -> eyre::Result<()> {
     // The two stages have different skip/overwrite/abort filtering rules, so
     // they must each run their own preflight over the same initial drive set.
@@ -117,7 +119,7 @@ pub async fn execute_sync(
             drive_count = fallback_index_drive_infos.len(),
         )
         .entered();
-        SyncIndex::invoke(fallback_index_drive_infos)
+        SyncIndex::invoke(fallback_index_drive_infos, cancel)
     };
 
     tokio::try_join!(in_memory_indexing, disk_indexing)?;

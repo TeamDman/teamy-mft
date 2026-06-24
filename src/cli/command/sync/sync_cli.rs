@@ -1,3 +1,4 @@
+use crate::cancellation::CancellationToken;
 use crate::sync::SyncPlan;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -24,7 +25,7 @@ impl SyncArgs {
     ///
     /// Returns an error if the machine daemon is not installed, cannot be started,
     /// or rejects the sync request.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
         let plan = self.plan;
         eyre::ensure!(
             !(self.daemon && self.no_daemon),
@@ -64,6 +65,7 @@ impl SyncArgs {
                     &sync_dir,
                     &drive_letters,
                     plan.if_exists,
+                    &cancellation_token,
                 )?;
             }
         }
@@ -75,6 +77,7 @@ impl SyncArgs {
 #[cfg(test)]
 mod tests {
     use super::SyncArgs;
+    use crate::cancellation::CancellationToken;
     use crate::sync::SyncPlan;
 
     #[test]
@@ -86,7 +89,7 @@ mod tests {
             },
             ..SyncArgs::default()
         }
-        .invoke()
+        .invoke(CancellationToken::new())
         .expect_err("recursive sync without a path should fail before execution");
 
         assert!(
