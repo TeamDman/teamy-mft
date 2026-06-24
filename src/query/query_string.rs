@@ -17,6 +17,7 @@ impl Default for QueryString {
 }
 
 impl QueryString {
+    #[must_use]
     pub fn single_rule(rule: QueryRule) -> Self {
         Self {
             groups: vec![QueryGroup { rules: vec![rule] }],

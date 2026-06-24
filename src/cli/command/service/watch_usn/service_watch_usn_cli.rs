@@ -16,6 +16,7 @@ use tracing::warn;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 #[facet(rename_all = "kebab-case")]
+#[derive(Default)]
 pub struct ServiceWatchUsnArgs {
     /// Drive letter pattern to watch (e.g., `*`, `C`, `CD`, `C,D`). Compatibility alias: `--drive`.
     #[facet(args::named, args::long_alias = "drive", default)]
@@ -30,15 +31,6 @@ pub struct ServiceWatchUsnArgs {
     pub poll_ms: Option<u64>,
 }
 
-impl Default for ServiceWatchUsnArgs {
-    fn default() -> Self {
-        Self {
-            drive_letter_pattern: DriveLetterPattern::default(),
-            r#in: Vec::new(),
-            poll_ms: None,
-        }
-    }
-}
 
 impl ServiceWatchUsnArgs {
     /// # Errors
