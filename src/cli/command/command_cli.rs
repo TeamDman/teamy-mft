@@ -70,17 +70,17 @@ impl Command {
     pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
         match self {
             Command::Daemon(args) | Command::Service(args) => args.invoke(cancellation_token),
-            Command::Sync(args) => args.invoke(cancellation_token),
+            Command::Sync(args) => args.invoke(&cancellation_token),
             Command::Install(args) => args.invoke(),
             Command::Uninstall(args) => args.invoke(),
-            Command::ListPaths(args) => args.invoke(cancellation_token),
+            Command::ListPaths(args) => args.invoke(&cancellation_token),
             Command::Move(args) => args.invoke(),
             Command::Rule(args) => args.invoke(),
             Command::Profile(args) => args.invoke(),
             Command::Protection(args) => args.invoke(),
             Command::Fsutil(args) => args.invoke(),
             Command::Status(args) => args.invoke(),
-            Command::Query(args) => args.invoke_and_print(cancellation_token),
+            Command::Query(args) => args.invoke_and_print(&cancellation_token),
             Command::Tray(args) => args.invoke(),
         }
     }

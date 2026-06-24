@@ -62,7 +62,7 @@ impl ServiceArgs {
             ServiceCommand::IsRunning(args) => args.invoke(),
             ServiceCommand::Logs(args) => args.invoke(),
             ServiceCommand::Run(args) => args.invoke(cancellation_token),
-            ServiceCommand::WatchUsn(args) => args.invoke(cancellation_token),
+            ServiceCommand::WatchUsn(args) => args.invoke(&cancellation_token),
         }
     }
 }

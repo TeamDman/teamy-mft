@@ -71,7 +71,7 @@ impl QueryRuntime {
     pub fn visit_rows(
         self,
         query_plan: QueryPlan,
-        cancellation_token: CancellationToken,
+        cancellation_token: &CancellationToken,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
         self.visit_rows_dyn(query_plan, cancellation_token, &mut visit)
@@ -80,14 +80,12 @@ impl QueryRuntime {
     pub(crate) fn visit_rows_dyn(
         self,
         query_plan: QueryPlan,
-        cancellation_token: CancellationToken,
+        cancellation_token: &CancellationToken,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
         match self {
-            Self::Local => {
-                LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
-            }
+            Self::Local => LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit),
             Self::DaemonRpc => {
                 DaemonQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
             }
@@ -117,9 +115,12 @@ impl QueryRuntime {
 }
 
 impl LocalQueryVisitor {
-    fn prepare(query_plan: QueryPlan, cancellation_token: CancellationToken) -> eyre::Result<Self> {
+    fn prepare(
+        query_plan: QueryPlan,
+        cancellation_token: &CancellationToken,
+    ) -> eyre::Result<Self> {
         Ok(Self {
-            cancel: cancellation_token,
+            cancel: cancellation_token.clone(),
             query_session: QuerySession::local()?,
             query_plan,
         })
@@ -133,7 +134,10 @@ impl LocalQueryVisitor {
 }
 
 impl DaemonQueryVisitor {
-    fn prepare(query_plan: QueryPlan, cancellation_token: CancellationToken) -> eyre::Result<Self> {
+    fn prepare(
+        query_plan: QueryPlan,
+        cancellation_token: &CancellationToken,
+    ) -> eyre::Result<Self> {
         let request_cancel = cancellation_token.child_token();
         let config = crate::machine::ipc::load_machine_daemon_client_config()?;
         crate::machine::ipc::ensure_daemon_ready(&config)?;
@@ -148,7 +152,7 @@ impl DaemonQueryVisitor {
             move || {
                 loop {
                     if request_cancel.is_cancelled() {
-                        return send_daemon_cancel(cancel_tx);
+                        return send_daemon_cancel(&cancel_tx);
                     }
                     match cancel_watch_stop_rx.recv_timeout(Duration::from_millis(50)) {
                         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
@@ -198,7 +202,7 @@ impl DaemonQueryVisitor {
 impl DaemonQueryCleanup {
     fn request_cancel(&self, reason: impl Into<String>) -> eyre::Result<()> {
         self.cancel.request_cancel(reason);
-        send_daemon_cancel(Arc::clone(&self.cancel_tx))
+        send_daemon_cancel(&self.cancel_tx)
     }
 
     fn finish(self) -> eyre::Result<()> {
@@ -221,10 +225,10 @@ impl DaemonQueryCleanup {
     }
 }
 
-fn send_daemon_cancel(cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>) -> eyre::Result<()> {
+fn send_daemon_cancel(cancel_tx: &Arc<Mutex<Option<vox::Tx<u8>>>>) -> eyre::Result<()> {
     let Some(cancel_tx) = cancel_tx
         .lock()
-        .map_err(|_| eyre::eyre!("Daemon cancel sender mutex poisoned"))?
+        .map_err(|poison_error| eyre::eyre!("Daemon cancel sender mutex poisoned: {poison_error}"))?
         .take()
     else {
         return Ok(());

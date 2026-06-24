@@ -57,7 +57,7 @@ impl QueryArgs {
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_filtered = self.plan.show_filtered, only_filtered = self.plan.only_filtered, density = ?self.density))]
-    pub fn invoke_and_print(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke_and_print(self, cancellation_token: &CancellationToken) -> eyre::Result<()> {
         let stdout_is_terminal = std::io::stdout().is_terminal();
         let colorize = stdout_is_terminal
             && (self.plan.include_deleted
@@ -73,7 +73,7 @@ impl QueryArgs {
 
         if !use_columns {
             let mut stdout = std::io::stdout().lock();
-            self.visit_rows(&cancellation_token, |row| {
+            self.visit_rows(cancellation_token, |row| {
                 row.render_path(&mut stdout, colorize)?;
                 writeln!(&mut stdout)?;
                 Ok(ControlFlow::Continue(()))
@@ -82,7 +82,7 @@ impl QueryArgs {
         }
 
         let mut results = Vec::new();
-        self.visit_rows(&cancellation_token, |row| {
+        self.visit_rows(cancellation_token, |row| {
             results.push(row);
             Ok(ControlFlow::Continue(()))
         })?;
@@ -145,7 +145,7 @@ impl QueryArgs {
         visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
         self.prepare_runtime()?
-            .visit_rows(self.plan.clone(), cancellation_token.clone(), visit)
+            .visit_rows(self.plan.clone(), cancellation_token, visit)
     }
 
     fn runtime(&self) -> QueryRuntime {
@@ -156,6 +156,10 @@ impl QueryArgs {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the query is empty, daemon flags conflict, or the
+    /// selected profile is not allowed for the current query.
     pub fn prepare_runtime(&self) -> eyre::Result<QueryRuntime> {
         debug!("Running query with args: {:?}", self);
         self.check_query()?;

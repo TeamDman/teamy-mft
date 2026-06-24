@@ -38,7 +38,7 @@ impl ServiceWatchUsnArgs {
     /// Returns an error if the machine cache cannot be loaded, selected drives
     /// cannot be resolved, USN journals cannot be read, or scope paths cannot be
     /// resolved.
-    pub fn invoke(self, cancel: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(self, cancel: &CancellationToken) -> eyre::Result<()> {
         ensure_elevated()?;
         cancel.bail_if_cancelled()?;
         let config = crate::machine::config::load_required_machine_config()?;
@@ -52,7 +52,7 @@ impl ServiceWatchUsnArgs {
         for drive_letter in drive_letters {
             let paths = published_drive_paths(&config.sync_dir, drive_letter);
             let state =
-                LiveDriveState::load_for_observation_with_cancel(&config.sync_dir, paths, &cancel)?;
+                LiveDriveState::load_for_observation_with_cancel(&config.sync_dir, paths, cancel)?;
             println!("usn-watch-drive-ready={drive_letter}");
             println!(
                 "usn-watch-drive-start-usn-{}={}",
@@ -76,7 +76,7 @@ impl ServiceWatchUsnArgs {
         while !cancel.is_cancelled() {
             for state in &mut states {
                 cancel.bail_if_cancelled()?;
-                for event in state.observe_usn_events_with_cancel(&cancel)? {
+                for event in state.observe_usn_events_with_cancel(cancel)? {
                     cancel.bail_if_cancelled()?;
                     if !event_matches_scopes(&event, &scopes) {
                         debug!(
