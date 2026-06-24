@@ -159,7 +159,7 @@ fn visit_matching_row_indices(
                 }
             }
 
-            return Ok(ControlFlow::Continue(()));
+            Ok(ControlFlow::Continue(()))
         }
         MatchingRowIndices::RowIndices(row_indices) => {
             let _span = info_span!("visit_matched_row_indices").entered();
@@ -354,8 +354,8 @@ fn collect_matching_row_refs(
             {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("push_matching_row_ref").entered();
-                rows.push(MatchingRowRef { row_index, path });
-            }
+                rows.push(MatchingRowRef { row_index, path })
+            };
             Ok(ControlFlow::Continue(()))
         },
     )?;
