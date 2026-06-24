@@ -1,3 +1,4 @@
+use super::query_runtime::QueryRowVisitor;
 use crate::cancellation::CancellationToken;
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
@@ -22,8 +23,6 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use tracing::info_span;
-
-use super::query_runtime::QueryRowVisitor;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum QuerySessionBackend {

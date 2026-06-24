@@ -19,7 +19,9 @@ pub mod windows_utils;
 
 use crate::cli::Cli;
 use crate::windows_utils::console::console_attach;
-use chrono::{DateTime, Local, Utc};
+use chrono::DateTime;
+use chrono::Local;
+use chrono::Utc;
 use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::info_span;
