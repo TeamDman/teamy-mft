@@ -268,8 +268,6 @@ pub(crate) fn visit_matching_parsed_row_indices(
 
 fn visit_matching_search_index_rows(
     index_path: &Path,
-    _drive_letter: char,
-    _index_kind: &'static str,
     query_plan: &QueryPlan,
     scopes: &[QueryScope],
     include_deleted: bool,
@@ -354,7 +352,7 @@ fn collect_matching_row_refs(
             {
                 #[cfg(feature = "extended_observability_per_record")]
                 let _span = tracing::debug_span!("push_matching_row_ref").entered();
-                rows.push(MatchingRowRef { row_index, path })
+                rows.push(MatchingRowRef { row_index, path });
             };
             Ok(ControlFlow::Continue(()))
         },
@@ -475,8 +473,6 @@ pub(crate) fn visit_drive_search_index_rows(
 
     let (loaded_rows, _) = visit_matching_search_index_rows(
         &paths.base_index_path,
-        drive_letter,
-        "base",
         query_plan,
         scopes,
         include_deleted,

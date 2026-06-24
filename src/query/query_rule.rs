@@ -69,12 +69,12 @@ impl QueryRule {
     #[must_use]
     pub fn normalized_extension_suffix(&self) -> Option<&str> {
         match self {
-            Self::MatchAll => None,
             Self::EndsWithCaseInsensitive(needle) => {
                 let suffix = needle.normalized_str();
                 (suffix.starts_with('.') && suffix.len() > 1).then_some(suffix)
             }
-            Self::PrefixCaseInsensitive(_)
+            Self::MatchAll
+            | Self::PrefixCaseInsensitive(_)
             | Self::ContainsCaseInsensitive(_)
             | Self::EqualsCaseInsensitive(_) => None,
         }
@@ -83,13 +83,13 @@ impl QueryRule {
     #[must_use]
     pub fn normalized_contains_trigrams(&self) -> Option<Vec<[u8; QUERY_TRIGRAM_LEN]>> {
         match self {
-            Self::MatchAll => None,
             Self::ContainsCaseInsensitive(needle)
                 if needle.normalized_bytes().len() >= QUERY_TRIGRAM_LEN =>
             {
                 Some(needle.normalized_trigrams())
             }
-            Self::PrefixCaseInsensitive(_)
+            Self::MatchAll
+            | Self::PrefixCaseInsensitive(_)
             | Self::ContainsCaseInsensitive(_)
             | Self::EndsWithCaseInsensitive(_)
             | Self::EqualsCaseInsensitive(_) => None,

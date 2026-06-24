@@ -227,7 +227,7 @@ impl DriveWorker {
         drive: char,
         sync_dir: std::path::PathBuf,
         mode: DriveWorkerRuntimeMode,
-        cancellation_token: CancellationToken,
+        cancellation_token: &CancellationToken,
     ) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let status = Arc::new(StdMutex::new(DriveWorkerStatusSnapshot::default()));
@@ -600,7 +600,7 @@ fn publish_drive_worker_status(
 }
 
 impl DaemonWorker {
-    fn start(config: &MachineConfig, cancellation_token: CancellationToken) -> Self {
+    fn start(config: &MachineConfig, cancellation_token: &CancellationToken) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut state = DaemonRuntimeState::new(config);
         let status = Arc::new(StdMutex::new(DaemonWorkerStatusSnapshot::default()));
@@ -802,7 +802,7 @@ impl DaemonWorker {
                     drive,
                     self.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
-                    self.cancellation_token.clone(),
+                    &self.cancellation_token,
                 )
             })
             .clone()
@@ -931,7 +931,7 @@ fn warm_next_drive_worker(
                     drive,
                     state.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
-                    cancellation_token.clone(),
+                    cancellation_token,
                 )
             })
             .clone();
@@ -1242,7 +1242,7 @@ fn format_degraded_query_drives(degraded_drives: &[(char, String)]) -> String {
 
 impl MachineDaemonService {
     fn new(config: MachineConfig, cancellation_token: CancellationToken) -> Self {
-        let worker = DaemonWorker::start(&config, cancellation_token.clone());
+        let worker = DaemonWorker::start(&config, &cancellation_token);
         Self {
             config,
             worker,
@@ -1518,7 +1518,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn sync(
         &self,
-        request: SyncPlan,
+        sync_plan: SyncPlan,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<(), MachineError> {
         let correlation_id = next_correlation_id("sync");
@@ -1530,14 +1530,14 @@ impl MachineDaemonRpc for MachineDaemonService {
             rpc_method = "sync"
         );
         let response = async move {
-            if let Some(path) = request.path.as_deref() {
-                if request.recursive {
+            if let Some(path) = sync_plan.path.as_deref() {
+                if sync_plan.recursive {
                     tracing::info!(path, "Starting daemon recursive path sync");
                 } else {
                     tracing::info!(path, "Starting daemon path sync");
                 }
             } else {
-                let drive_count = request
+                let drive_count = sync_plan
                     .drive_letter_pattern
                     .clone()
                     .into_drive_letters()
@@ -1545,20 +1545,20 @@ impl MachineDaemonRpc for MachineDaemonService {
                     .len();
                 tracing::info!(
                     drive_count,
-                    if_exists = ?request.if_exists,
+                    if_exists = ?sync_plan.if_exists,
                     "Starting daemon sync"
                 );
             }
-            match worker.sync(request.clone(), correlation_id.clone()).await {
+            match worker.sync(sync_plan.clone(), correlation_id.clone()).await {
                 Ok(()) => {
-                    if let Some(path) = request.path.as_deref() {
-                        if request.recursive {
+                    if let Some(path) = sync_plan.path.as_deref() {
+                        if sync_plan.recursive {
                             tracing::info!(path, "Daemon recursive path sync completed");
                         } else {
                             tracing::info!(path, "Daemon path sync completed");
                         }
                     } else {
-                        let drive_count = request
+                        let drive_count = sync_plan
                             .drive_letter_pattern
                             .clone()
                             .into_drive_letters()
@@ -1582,7 +1582,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn status(
         &self,
-        request: StatusRequest,
+        status_request: StatusRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<StatusResponse, MachineError> {
         let correlation_id = next_correlation_id("status");
@@ -1599,7 +1599,7 @@ impl MachineDaemonRpc for MachineDaemonService {
             let snapshot = worker.snapshot();
             let published_drives = collect_published_drive_summaries_for_letters(
                 &config.sync_dir,
-                &request.drive_letters,
+                &status_request.drive_letters,
             )
             .unwrap_or_default()
             .into_iter()
@@ -1662,7 +1662,7 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn query_usn_journal(
         &self,
-        request: crate::machine::ipc::UsnJournalRequest,
+        usn_journal_request: crate::machine::ipc::UsnJournalRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
     ) -> Result<crate::machine::ipc::UsnJournalStatus, MachineError> {
         let correlation_id = next_correlation_id("query_usn_journal");
@@ -1671,11 +1671,14 @@ impl MachineDaemonRpc for MachineDaemonService {
             "daemon_rpc",
             correlation_id = %correlation_id,
             rpc_method = "query_usn_journal",
-            drive = %request.drive_letter
+            drive = %usn_journal_request.drive_letter
         );
         let response = async move {
-            tracing::info!(drive = %request.drive_letter, "Querying USN journal status");
-            crate::machine::usn::query_journal_status(request.drive_letter)
+            tracing::info!(
+                drive = %usn_journal_request.drive_letter,
+                "Querying USN journal status"
+            );
+            crate::machine::usn::query_journal_status(usn_journal_request.drive_letter)
                 .map_err(|error| MachineError::degraded(error.to_string()))
         }
         .instrument(span)
@@ -1686,16 +1689,16 @@ impl MachineDaemonRpc for MachineDaemonService {
 
     async fn stream_logs(
         &self,
-        request: LogStreamRequest,
+        log_stream_request: LogStreamRequest,
         logs: vox::Tx<crate::machine::daemon_log::DaemonLogWireEvent>,
         mut cancel: vox::Rx<u8>,
     ) -> Result<(), MachineError> {
         tracing::info!(
-            replay_recent = request.replay_recent,
-            follow = request.follow,
+            replay_recent = log_stream_request.replay_recent,
+            follow = log_stream_request.follow,
             "Attaching daemon log stream"
         );
-        if request.replay_recent {
+        if log_stream_request.replay_recent {
             for event in daemon_log_hub().snapshot() {
                 if logs
                     .send(crate::machine::daemon_log::DaemonLogWireEvent::from(&event))
@@ -1707,7 +1710,7 @@ impl MachineDaemonRpc for MachineDaemonService {
             }
         }
 
-        if request.follow {
+        if log_stream_request.follow {
             let mut live_rx = daemon_log_hub().subscribe();
             loop {
                 if self.cancellation_token.is_cancelled() {

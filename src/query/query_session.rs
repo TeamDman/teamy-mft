@@ -123,7 +123,7 @@ impl QuerySession {
             QuerySessionBackend::DaemonRpc => {
                 QueryRuntime::daemon_rpc().visit_rows_dyn(
                     query_plan,
-                    cancel.clone(),
+                    cancel,
                     &mut visit_with_limit,
                 )?;
             }

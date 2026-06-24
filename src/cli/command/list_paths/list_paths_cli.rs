@@ -48,7 +48,7 @@ impl ListPathsArgs {
         clippy::too_many_lines,
         reason = "function processes MFT data in a single pass for performance"
     )]
-    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_token: &CancellationToken) -> eyre::Result<()> {
         let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
         // Resolve drive letters from pattern
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
@@ -60,7 +60,7 @@ impl ListPathsArgs {
             .collect();
 
         for mft_file_path in &mft_files {
-            let mft_file = MftFile::from_path(mft_file_path, &cancellation_token)?;
+            let mft_file = MftFile::from_path(mft_file_path, cancellation_token)?;
             let mft_bytes: &[u8] = &mft_file;
             info!("Loaded MFT file: {}", mft_file_path.display());
 

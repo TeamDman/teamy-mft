@@ -25,7 +25,7 @@ impl SyncArgs {
     ///
     /// Returns an error if the machine daemon is not installed, cannot be started,
     /// or rejects the sync request.
-    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_token: &CancellationToken) -> eyre::Result<()> {
         let plan = self.plan;
         eyre::ensure!(
             !(self.daemon && self.no_daemon),
@@ -65,7 +65,7 @@ impl SyncArgs {
                     &sync_dir,
                     &drive_letters,
                     plan.if_exists,
-                    &cancellation_token,
+                    cancellation_token,
                 )?;
             }
         }

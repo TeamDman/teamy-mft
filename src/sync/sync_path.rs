@@ -168,8 +168,10 @@ fn load_rows_from_index_in_scope(
     let parsed = SearchIndexBytes::new(mapped.bytes())
         .parse_trusted_for_query()
         .wrap_err_with(|| format!("Failed preparing search index rows from {}", path.display()))?;
-    let mut query_plan = QueryPlan::default();
-    query_plan.include_deleted = true;
+    let query_plan = QueryPlan {
+        include_deleted: true,
+        ..QueryPlan::default()
+    };
     let mut rows = Vec::new();
     let _ = crate::query::visit_parsed_search_index_rows(
         &parsed,
