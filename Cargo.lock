@@ -2716,6 +2716,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
+name = "teamy-cancellation"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29647cb8c7d3429679a433a1caa3c799aed2a49bf6415d95fdc4d3404487dde9"
+dependencies = [
+ "ctrlc",
+ "eyre",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "teamy-figue"
 version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2764,7 +2776,6 @@ dependencies = [
  "color-eyre",
  "compact_str",
  "crossbeam-channel",
- "ctrlc",
  "directories",
  "dunce",
  "embed-resource",
@@ -2784,6 +2795,7 @@ dependencies = [
  "rustc-hash",
  "semver",
  "strum",
+ "teamy-cancellation",
  "teamy-figue",
  "teamy-uom-extensions",
  "tempfile",

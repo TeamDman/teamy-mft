@@ -31,7 +31,6 @@ pub struct ServiceWatchUsnArgs {
     pub poll_ms: Option<u64>,
 }
 
-
 impl ServiceWatchUsnArgs {
     /// # Errors
     ///
