@@ -2,6 +2,7 @@
 param(
 	[switch]$Release,
 	[switch]$NoOpenProfiler,
+	[switch]$Extended,
 	[switch]$RowLevelInsight,
 	[string]$Example,
 	[switch]$Elevated,
@@ -240,6 +241,9 @@ if ($Elevated -and -not (Test-IsAdministrator)) {
 	if ($NoOpenProfiler) {
 		$arguments += '-NoOpenProfiler'
 	}
+	if ($Extended) {
+		$arguments += '-Extended'
+	}
 	if ($RowLevelInsight) {
 		$arguments += '-RowLevelInsight'
 	}
@@ -301,7 +305,10 @@ else {
     Write-Host "teamy-mft not yet on PATH; skipping daemon stop helper."
 }
 
-$profilerFeatures = @('extended_observability')
+$profilerFeatures = @('tracy')
+if ($Extended) { 
+	$profilerFeatures += 'extended_observability'
+}
 if ($RowLevelInsight) {
 	$profilerFeatures += 'extended_observability_per_record'
 }
