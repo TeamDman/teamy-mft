@@ -2291,7 +2291,7 @@ mod tests {
             'C',
             temp_dir.path().to_path_buf(),
             DriveWorkerRuntimeMode::PublishedIndexOnly,
-            CancellationToken::new(),
+            &CancellationToken::new(),
         );
 
         worker.warm();

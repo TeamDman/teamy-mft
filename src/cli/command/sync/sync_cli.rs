@@ -89,7 +89,7 @@ mod tests {
             },
             ..SyncArgs::default()
         }
-        .invoke(CancellationToken::new())
+        .invoke(&CancellationToken::new())
         .expect_err("recursive sync without a path should fail before execution");
 
         assert!(

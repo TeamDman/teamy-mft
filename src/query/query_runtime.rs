@@ -85,7 +85,9 @@ impl QueryRuntime {
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
         match self {
-            Self::Local => LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit),
+            Self::Local => {
+                LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
+            }
             Self::DaemonRpc => {
                 DaemonQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
             }
