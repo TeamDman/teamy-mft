@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ProfileListArgs {
     /// Restrict rule discovery to drives matching this pattern
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 }
 

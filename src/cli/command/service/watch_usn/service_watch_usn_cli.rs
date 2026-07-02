@@ -19,7 +19,7 @@ use tracing::warn;
 #[derive(Default)]
 pub struct ServiceWatchUsnArgs {
     /// Drive letter pattern to watch (e.g., `*`, `C`, `CD`, `C,D`). Compatibility alias: `--drive`.
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
     /// Restrict logged events to these paths. Directories include descendants; files match exactly. Repeat `--in` to OR scopes.

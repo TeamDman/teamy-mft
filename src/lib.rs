@@ -94,7 +94,7 @@ pub fn main() -> eyre::Result<()> {
             .help(move |help| {
                 help.version(version)
                     .include_implementation_source_file(true)
-                    .include_implementation_git_url("TeamDman/teamy-mft", env!("GIT_REVISION"))
+                    .include_implementation_github_url("TeamDman/teamy-mft", env!("GIT_REVISION"))
             })
             .build(),
     )
