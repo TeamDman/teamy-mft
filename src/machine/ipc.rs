@@ -280,7 +280,7 @@ where
             timeout_ms = DAEMON_CONNECT_TIMEOUT.as_millis()
         );
         let client: MachineDaemonRpcClient = async {
-            vox::connect(&addr)
+            vox::connect_lane::<MachineDaemonRpcClient>(&addr)
                 .connect_timeout(DAEMON_CONNECT_TIMEOUT)
                 .wait_for_service(DAEMON_CONNECT_TIMEOUT)
                 .await

@@ -240,7 +240,7 @@ fn send_daemon_cancel(cancel_tx: &Arc<Mutex<Option<vox::Tx<u8>>>>) -> eyre::Resu
         .build()?;
     runtime.block_on(async move {
         let _ = cancel_tx.send(1).await;
-        let _ = cancel_tx.close(Vec::new()).await;
+        let _ = cancel_tx.close(Vec::new().into()).await;
     });
     Ok(())
 }

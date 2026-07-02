@@ -25,7 +25,7 @@ pub struct QueryPlan {
     #[facet(args::named, default)]
     pub profile: Option<String>,
     /// Drive letter pattern to match drives whose cached MFTs will be queried (e.g., "*", "C", "CD", "C,D"). Compatibility alias: `--drive`.
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
     /// Maximum number of results to show
     #[facet(args::named, default)]

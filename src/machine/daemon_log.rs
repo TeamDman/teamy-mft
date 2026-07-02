@@ -434,7 +434,7 @@ fn spawn_log_forwarder(
                     .await
                     .is_err()
                 {
-                    let _ = logs_tx.close(Vec::default()).await;
+                    let _ = logs_tx.close(Vec::default().into()).await;
                     return;
                 }
             }
@@ -463,7 +463,7 @@ fn spawn_log_forwarder(
                 }
             }
         }
-        let _ = logs_tx.close(Vec::default()).await;
+        let _ = logs_tx.close(Vec::default().into()).await;
     });
     LogForwarderHandle {
         stop_tx: Some(stop_tx),
