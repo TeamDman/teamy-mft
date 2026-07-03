@@ -25,7 +25,7 @@ facet_json = { package = "facet-json", version = "=0.46.1" }
 figue = { package = "teamy-figue", version = "=5.1.0", features = ["arbitrary"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tracing-tracy = { version = "0.11", optional = true }
+tracing-tracy = { version = "0.11", optional = true, default-features = false, features = ["enable", "system-tracing", "context-switch-tracing", "sampling", "code-transfer", "callstack-inlines", "only-localhost"] }
 widestring = "1.2.0"
 windows = { version = "0.62.0", features = [
     "Win32_System_Registry",
