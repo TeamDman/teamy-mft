@@ -19,10 +19,10 @@ bytes = "1.10.1"
 directories = "5"
 dunce = "1"
 eyre = "0.6.12"
-facet = { git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d", package = "facet", features = ["uuid"] }
-facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d" }
+facet = { git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85", package = "facet", features = ["uuid"] }
+facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85" }
 #figue = { package = "teamy-figue", version = "=5.1.0", path = "../figue/crates/figue", features = ["arbitrary"] }
-figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d", features = ["arbitrary"] }
+figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85", features = ["arbitrary"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 tracing-tracy = { version = "0.11", optional = true }
@@ -78,9 +78,9 @@ globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
 teamy-cancellation = "=0.2.0"
-vox = { git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d", package = "vox", features = ["transport-local"] }
-vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d", package = "vox-types" }
-vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "1d649aae232683e9d40203d7f94df1bfe37cfd4d", package = "vox-stream" }
+vox = { git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85", package = "vox", features = ["transport-local"] }
+vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85", package = "vox-types" }
+vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "fd83f20cd8e73f6044ecb0904e54ff88c3a12e85", package = "vox-stream" }
 
 [features]
 default = []
@@ -160,3 +160,7 @@ literal_string_with_formatting_args = "allow"
 
 # Define custom opt outs here
 # ...
+
+
+
+
