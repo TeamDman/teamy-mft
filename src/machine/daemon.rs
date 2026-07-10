@@ -1504,12 +1504,12 @@ impl MachineDaemonRpc for MachineDaemonService {
             .await;
         match response {
             Ok(()) => {
-                let _ = rows.close(Vec::default()).await;
+                let _ = rows.close(Vec::default().into()).await;
                 stop_log_forwarder(log_forwarder).await;
                 Ok(correlation_id)
             }
             Err(error) => {
-                let _ = rows.close(Vec::default()).await;
+                let _ = rows.close(Vec::default().into()).await;
                 stop_log_forwarder(log_forwarder).await;
                 Err(error)
             }
@@ -1768,7 +1768,7 @@ impl MachineDaemonRpc for MachineDaemonService {
             }
         }
 
-        let _ = logs.close(Vec::default()).await;
+        let _ = logs.close(Vec::default().into()).await;
         Ok(())
     }
 }
@@ -2018,13 +2018,13 @@ fn run_daemon_runtime(
                     let last_activity = Arc::clone(&last_activity);
                     tokio::task::spawn_local(async move {
                         let response = vox::acceptor_on(link)
-                            .on_connection(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
-                            .establish::<crate::machine::ipc::MachineDaemonRpcClient>()
+                            .on_lane(crate::machine::ipc::MachineDaemonRpcDispatcher::new(rpc_service))
+                            .establish_connection()
                             .await;
                         match response {
-                            Ok(client) => {
+                            Ok(connection) => {
                                 tracing::debug!("Daemon RPC connection established");
-                                client.caller.closed().await;
+                                connection.closed().await;
                                 tracing::debug!("Daemon RPC connection closed");
                             }
                             Err(error) => {

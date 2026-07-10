@@ -14,7 +14,7 @@ use std::time::SystemTime;
 )]
 pub struct StatusArgs {
     /// Drive letter pattern to inspect (e.g., `*`, `C`, `CD`, `C,D`). Compatibility alias: `--drive`.
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 
     /// Show per-drive artifact paths and timestamps.
