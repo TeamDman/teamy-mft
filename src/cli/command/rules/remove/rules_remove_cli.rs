@@ -19,7 +19,7 @@ pub struct RulesRemoveArgs {
     #[facet(args::named, default)]
     pub rules_file: Option<String>,
     /// Restrict discovered-file removals to drives matching this pattern
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
     /// Rule sort order for INCLUDE or EXCLUDE directives
     #[facet(args::named, default)]

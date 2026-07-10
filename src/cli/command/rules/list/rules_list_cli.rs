@@ -12,7 +12,7 @@ pub struct RulesListArgs {
     #[facet(args::named, default)]
     pub profile: Option<String>,
     /// Restrict rule discovery to drives matching this pattern. Compatibility alias: `--drive`.
-    #[facet(args::named, args::long_alias = "drive", default)]
+    #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
 }
 
