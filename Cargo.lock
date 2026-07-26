@@ -2388,9 +2388,8 @@ dependencies = [
 
 [[package]]
 name = "teamy-cancellation"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29647cb8c7d3429679a433a1caa3c799aed2a49bf6415d95fdc4d3404487dde9"
+version = "0.3.1"
+source = "git+https://github.com/TeamDman/teamy-cancellation.git?rev=7c77848#7c77848e759079e21f2039b25b147d780807725b"
 dependencies = [
  "ctrlc",
  "eyre",

@@ -24,7 +24,13 @@ facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.
 #figue = { package = "teamy-figue", version = "=5.1.0", path = "../figue/crates/figue", features = ["arbitrary"] }
 figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", features = ["arbitrary"] }
 tracing = "0.1.43"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.19", default-features = false, features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "json",
+    "registry",
+] }
 tracing-tracy = { version = "0.11", optional = true }
 widestring = "1.2.0"
 windows = { version = "0.62.0", features = [
@@ -77,7 +83,7 @@ ignore = "0.4.24"
 globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
-teamy-cancellation = "=0.2.0"
+teamy-cancellation = { git = "https://github.com/TeamDman/teamy-cancellation.git", rev = "7c77848", version = "0.3.1" }
 vox = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox", features = ["transport-local"] }
 vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox-types" }
 vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox-stream" }
