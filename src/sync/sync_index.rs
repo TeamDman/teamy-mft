@@ -9,6 +9,7 @@ use crate::sync::IfExistsOutputBehaviour;
 use eyre::Context;
 use eyre::bail;
 use itertools::Itertools;
+use std::time::Instant;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
@@ -88,6 +89,7 @@ impl SyncIndex {
     ///
     /// Returns an error if path conversion or index writing fails.
     pub fn invoke_for_mft_file(info: &DriveSyncInfo, mft_file: &MftFile) -> eyre::Result<()> {
+        let start = Instant::now();
         info!(
             drive_letter = %info.drive_letter,
             mft_path = %info.mft_output_path.display(),
@@ -102,7 +104,7 @@ impl SyncIndex {
             .entered();
             Self::build_rows_for_mft_file(info, mft_file)?
         };
-        {
+        let rtn = {
             let _span = info_span!(
                 "write_search_index_output",
                 drive = %info.drive_letter,
@@ -111,7 +113,20 @@ impl SyncIndex {
             )
             .entered();
             Self::write_index_output(info, mft_file, &rows)
-        }
+        };
+        info!(
+            drive_letter = %info.drive_letter,
+            mft_path = %info.mft_output_path.display(),
+            "Search index built in {} ms",
+            start.elapsed().as_millis()
+        );
+        rtn.wrap_err_with(|| {
+            format!(
+                "Failed building search index for drive {} from {}",
+                info.drive_letter,
+                info.mft_output_path.display()
+            )
+        })
     }
 
     fn invoke_for_mft_path(info: &DriveSyncInfo, cancel: &CancellationToken) -> eyre::Result<()> {
