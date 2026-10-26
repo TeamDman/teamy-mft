@@ -6,6 +6,7 @@ use windows::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
 use windows::Win32::UI::Shell::SHELLEXECUTEINFOW;
 use windows::Win32::UI::Shell::ShellExecuteExW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::core::Owned;
 
 /// Runs an invocable with administrative privileges using ShellExecuteExW.
 pub fn run_as_admin(invocable: &impl Invocable) -> eyre::Result<ElevatedChildProcess> {
@@ -23,7 +24,12 @@ pub fn run_as_admin(invocable: &impl Invocable) -> eyre::Result<ElevatedChildPro
         ..Default::default()
     };
     unsafe { ShellExecuteExW(&mut sei) }.wrap_err("Failed to run as administrator")?;
+    eyre::ensure!(
+        !sei.hProcess.is_invalid(),
+        "Elevated launch did not return a process handle"
+    );
     Ok(ElevatedChildProcess {
-        h_process: sei.hProcess,
+        // SAFETY: SEE_MASK_NOCLOSEPROCESS transfers this valid process handle to us.
+        h_process: unsafe { Owned::new(sei.hProcess) },
     })
 }

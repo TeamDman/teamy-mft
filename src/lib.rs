@@ -71,7 +71,9 @@ fn tracy_capture_padding(_phase: &'static str) {}
 ///
 /// # Errors
 ///
-/// Returns an error if CLI parsing or command execution fails.
+/// Returns an error if CLI parsing or command execution fails, or
+/// [`crate::windows_utils::elevation::ElevationCompleted`] when an elevated child
+/// handled the command.
 ///
 /// # Panics
 ///
@@ -121,14 +123,14 @@ pub fn main() -> eyre::Result<()> {
     logging_init::init_logging(&cli.global_args, log_source, cancellation_token.clone())?;
 
     tracy_capture_padding("before_cli_invoke");
-    cli.invoke(cancellation_token.clone())?;
+    let command_result = cli.invoke(cancellation_token.clone());
     tracy_capture_padding("after_cli_invoke");
-    cancellation_token.bail_if_cancelled()?;
 
     debug!("Goodbye!");
     #[cfg(feature = "tracy")]
     debug!(
         "Tracy may take a while to finish sending the profile, during this time the clock will stop in tracy-capture."
     );
-    Ok(())
+    command_result?;
+    cancellation_token.bail_if_cancelled()
 }

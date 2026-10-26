@@ -19,6 +19,8 @@ impl ServiceRunArgs {
         console_pid: Option<u32>,
         cancellation_token: CancellationToken,
     ) -> eyre::Result<()> {
+        // Handle relaunch here, before worker errors are converted into RPC messages.
+        crate::windows_utils::elevation::ensure_elevated(console_pid)?;
         crate::machine::daemon::run_daemon(self.service, console_pid, cancellation_token)
     }
 }
