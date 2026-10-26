@@ -27,8 +27,8 @@ impl FsutilUsnCreateJournalArgs {
     /// # Errors
     ///
     /// Returns an error if the journal cannot be created or queried afterward.
-    pub fn invoke(self) -> eyre::Result<()> {
-        ensure_elevated()?;
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
+        ensure_elevated(console_pid)?;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let maximum_size = self.maximum_size.unwrap_or(DEFAULT_MAXIMUM_SIZE);
         let allocation_delta = self.allocation_delta.unwrap_or(DEFAULT_ALLOCATION_DELTA);

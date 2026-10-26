@@ -19,11 +19,11 @@ bytes = "1.10.1"
 directories = "5"
 dunce = "1"
 eyre = "0.6.12"
-facet = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "facet", features = ["uuid"] }
-facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f" }
-#figue = { package = "teamy-figue", version = "=5.1.0", path = "../figue/crates/figue", features = ["arbitrary"] }
-figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", features = ["arbitrary"] }
+facet = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "facet", features = ["uuid"] }
+facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0" }
+figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", features = ["arbitrary"] }
 tracing = "0.1.43"
+tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.19", default-features = false, features = [
     "ansi",
     "env-filter",
@@ -52,6 +52,7 @@ windows = { version = "0.62.0", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI",
     "Win32_System_Console",
+    "Win32_System_Environment",
     "Win32_System_LibraryLoader",
     "Win32_Globalization",
     "Win32_Graphics_Gdi",
@@ -84,9 +85,9 @@ globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
 teamy-cancellation = { git = "https://github.com/TeamDman/teamy-cancellation.git", rev = "7c77848", version = "0.3.1" }
-vox = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox", features = ["transport-local"] }
-vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox-types" }
-vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "5fd9cfaa46b4babc1f79d10d714600e710c28c2f", package = "vox-stream" }
+vox = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox", features = ["transport-local"] }
+vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox-types" }
+vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox-stream" }
 
 [features]
 default = []

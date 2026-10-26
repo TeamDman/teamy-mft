@@ -18,6 +18,19 @@ The structured CLI model must serialize to command line arguments consistently f
 cli[parser.roundtrip]
 The structured CLI model must roundtrip through argument serialization and parsing for parse-safe values.
 
+## Elevated Relaunch
+
+cli[elevation.raw-arguments]
+An elevated self-relaunch must preserve the original UTF-16 argument text after
+the executable token and its separating whitespace. It must not reconstruct that
+text from parsed arguments.
+
+cli[elevation.console-pid]
+An elevated self-relaunch must prepend `--console-pid` with the current process ID
+when the option is absent. Both `--console-pid PID` and `--console-pid=PID` before
+the `--` terminator count as an existing option. Detection must follow the CLI
+parser so option values are not mistaken for flags or the `--` terminator.
+
 ## Cached MFT Traversal
 
 cli[command.list-paths.cached-mft-input]

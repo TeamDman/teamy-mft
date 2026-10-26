@@ -61,7 +61,7 @@ impl MftRecord {
     const OFFSET_FOR_RECORD_NUMBER: usize = 0x2C; // u32 on-disk
 
     /// Read a single MFT record from the given drive handle at the specified location.
-    /// Validates the "FILE" signature.
+    /// Validates the "FILE" signature and restores the sector tails from the update sequence array.
     ///
     /// Useful for reading the $MFT record itself (record 0) or other known record numbers.
     ///
@@ -89,6 +89,27 @@ impl MftRecord {
                 String::from_utf8_lossy(&data[0..4])
             );
         }
+        let usa_words = usize::from(u16::from_le_bytes([data[6], data[7]]));
+        eyre::ensure!(
+            data.len().is_multiple_of(512) && usa_words == data.len() / 512 + 1,
+            "Invalid MFT update sequence array size"
+        );
+        let usa_offset = usize::from(u16::from_le_bytes([data[4], data[5]]));
+        let usa = data
+            .get(usa_offset..usa_offset + usa_words * 2)
+            .ok_or_else(|| eyre::eyre!("Invalid MFT update sequence array offset"))?;
+        // Raw disk sectors must carry the sequence marker. The cached-record
+        // fixup helper also accepts restored tails, which could hide a torn write here.
+        eyre::ensure!(
+            data.chunks_exact(512)
+                .all(|sector| sector[510..512] == usa[..2]),
+            "Invalid MFT sector fixup"
+        );
+        eyre::ensure!(
+            crate::mft::fast_fixup::apply_fixup_in_place(&mut data)
+                != crate::mft::fast_fixup::FixupState::Invalid,
+            "Invalid MFT sector fixup"
+        );
         Ok(Self {
             data: Bytes::from(data),
         })
@@ -235,5 +256,71 @@ impl MftRecord {
     /// Iterate raw attribute slices (header + body) in this record.
     pub fn iter_attributes(&self) -> MftRecordAttributeIter<'_> {
         MftRecordAttributeIter::new(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uom::si::usize::Information;
+
+    struct RecordReader(Vec<u8>);
+
+    impl HandleReadExt for RecordReader {
+        fn try_read_exact(&self, _offset: i64, buf: &mut [u8]) -> eyre::Result<()> {
+            buf.copy_from_slice(&self.0);
+            Ok(())
+        }
+    }
+
+    fn disk_record() -> Vec<u8> {
+        let mut data = vec![0; 1024];
+        data[..4].copy_from_slice(b"FILE");
+        data[4..6].copy_from_slice(&0x30u16.to_le_bytes());
+        data[6..8].copy_from_slice(&3u16.to_le_bytes());
+        data[0x30..0x36].copy_from_slice(&[0xaa, 0xbb, 0x11, 0x22, 0x33, 0x44]);
+        data[510..512].copy_from_slice(&[0xaa, 0xbb]);
+        data[1022..1024].copy_from_slice(&[0xaa, 0xbb]);
+        data
+    }
+
+    #[test]
+    fn disk_record_restores_sector_tails_before_attribute_parsing() {
+        let record = MftRecord::try_from_handle(
+            &RecordReader(disk_record()),
+            MftRecordLocationOnDisk::new(Information::new::<byte>(0)),
+            MftRecordSize::new(Information::new::<byte>(1024)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&record[510..512], &[0x11, 0x22]);
+        assert_eq!(&record[1022..1024], &[0x33, 0x44]);
+    }
+
+    #[test]
+    fn disk_record_rejects_torn_sector() {
+        let mut data = disk_record();
+        data[1022] = 0xff;
+        let error = MftRecord::try_from_handle(
+            &RecordReader(data),
+            MftRecordLocationOnDisk::new(Information::new::<byte>(0)),
+            MftRecordSize::new(Information::new::<byte>(1024)).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Invalid MFT sector fixup");
+    }
+
+    #[test]
+    fn disk_record_rejects_sector_with_restored_tail() {
+        for (tail_offset, restored_tail) in [(510, [0x11, 0x22]), (1022, [0x33, 0x44])] {
+            let mut data = disk_record();
+            data[tail_offset..tail_offset + 2].copy_from_slice(&restored_tail);
+            let error = MftRecord::try_from_handle(
+                &RecordReader(data),
+                MftRecordLocationOnDisk::new(Information::new::<byte>(0)),
+                MftRecordSize::new(Information::new::<byte>(1024)).unwrap(),
+            )
+            .unwrap_err();
+            assert_eq!(error.to_string(), "Invalid MFT sector fixup");
+        }
     }
 }

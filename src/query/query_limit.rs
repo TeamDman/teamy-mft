@@ -4,6 +4,7 @@ use facet::Facet;
 use std::ops::Deref;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Facet)]
+#[facet(proxy = usize)]
 #[repr(transparent)]
 pub struct QueryLimit(FacetSafeNonZeroUsizeOption);
 

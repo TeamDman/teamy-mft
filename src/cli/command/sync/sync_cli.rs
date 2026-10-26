@@ -25,7 +25,11 @@ impl SyncArgs {
     ///
     /// Returns an error if the machine daemon is not installed, cannot be started,
     /// or rejects the sync request.
-    pub fn invoke(self, cancellation_token: &CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(
+        self,
+        console_pid: Option<u32>,
+        cancellation_token: &CancellationToken,
+    ) -> eyre::Result<()> {
         let plan = self.plan;
         eyre::ensure!(
             !(self.daemon && self.no_daemon),
@@ -42,8 +46,9 @@ impl SyncArgs {
             let (logs_tx, logs_rx) =
                 vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
             let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-            crate::machine::ipc::sync(&config, plan, logs_tx)?;
+            let result = crate::machine::ipc::sync(&config, plan, logs_tx);
             let _ = log_drain.join();
+            result?;
         } else {
             let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
             if let Some(path) = plan.path.as_deref() {
@@ -65,6 +70,7 @@ impl SyncArgs {
                     &sync_dir,
                     &drive_letters,
                     plan.if_exists,
+                    console_pid,
                     cancellation_token,
                 )?;
             }
@@ -89,7 +95,7 @@ mod tests {
             },
             ..SyncArgs::default()
         }
-        .invoke(&CancellationToken::new())
+        .invoke(None, &CancellationToken::new())
         .expect_err("recursive sync without a path should fail before execution");
 
         assert!(

@@ -31,17 +31,20 @@ impl ServiceInstallArgs {
     /// # Errors
     ///
     /// Returns an error if elevation, service registration, or machine config setup fails.
-    pub fn invoke(self) -> eyre::Result<()> {
-        let config = install_machine_config(self.sync_dir)?;
-        install_machine_daemon_service(&config, self.force)
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
+        let config = install_machine_config(self.sync_dir, console_pid)?;
+        install_machine_daemon_service(&config, self.force, console_pid)
     }
 }
 
 /// # Errors
 ///
 /// Returns an error if elevation, directory creation, ACL changes, or machine config setup fails.
-pub fn install_machine_config(sync_dir: Option<String>) -> eyre::Result<MachineConfig> {
-    ensure_elevated()?;
+pub fn install_machine_config(
+    sync_dir: Option<String>,
+    console_pid: Option<u32>,
+) -> eyre::Result<MachineConfig> {
+    ensure_elevated(console_pid)?;
     let owner_sid = current_user_sid_string()?;
     let sync_dir = sync_dir.map(resolve_sync_dir).transpose()?;
     let config = MachineConfig::new(owner_sid.clone(), sync_dir);
@@ -58,11 +61,15 @@ pub fn install_machine_config(sync_dir: Option<String>) -> eyre::Result<MachineC
 /// # Errors
 ///
 /// Returns an error if elevation, service registration, or development-target validation fails.
-pub fn install_machine_daemon_service(config: &MachineConfig, force: bool) -> eyre::Result<()> {
+pub fn install_machine_daemon_service(
+    config: &MachineConfig,
+    force: bool,
+    console_pid: Option<u32>,
+) -> eyre::Result<()> {
     match query_service_state(DEFAULT_SERVICE_NAME)? {
         WindowsServiceState::Missing => {}
         _ if force => {
-            ensure_elevated()?;
+            ensure_elevated(console_pid)?;
             let current_exe = std::env::current_exe()?;
             reject_development_target_exe(&current_exe)?;
             uninstall_windows_service(&config.service_name)?;

@@ -21,9 +21,9 @@ impl FsutilArgs {
     /// # Errors
     ///
     /// Returns an error if the selected fsutil-compatible subcommand fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         match self.command {
-            FsutilCommand::Usn(args) => args.invoke(),
+            FsutilCommand::Usn(args) => args.invoke(console_pid),
         }
     }
 }

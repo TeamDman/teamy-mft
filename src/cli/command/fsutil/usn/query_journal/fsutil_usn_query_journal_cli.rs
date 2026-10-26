@@ -49,7 +49,7 @@ impl FsutilUsnQueryJournalArgs {
     /// # Errors
     ///
     /// Returns an error if the journal query fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         eyre::ensure!(
             !(self.daemon && self.no_daemon),
             "`--daemon` and `--no-daemon` cannot be used together"
@@ -68,15 +68,16 @@ impl FsutilUsnQueryJournalArgs {
                     &config,
                     crate::machine::ipc::UsnJournalRequest { drive_letter },
                     logs_tx,
-                )?;
+                );
                 let _ = log_drain.join();
+                let status = status?;
                 if !filter.matches(&status) {
                     continue;
                 }
                 print_usn_journal_status(&status);
             }
         } else {
-            ensure_elevated()?;
+            ensure_elevated(console_pid)?;
             for drive_letter in drive_letters {
                 let status = crate::machine::usn::query_journal_status(drive_letter)?;
                 if !filter.matches(&status) {

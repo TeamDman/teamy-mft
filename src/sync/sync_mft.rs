@@ -63,10 +63,13 @@ impl SyncMft {
     /// or if reading/writing MFT data fails.
     pub fn invoke(
         drive_infos: Vec<DriveSyncInfo>,
+        console_pid: Option<u32>,
     ) -> eyre::Result<impl Stream<Item = eyre::Result<(DriveSyncInfo, PhysicalMftReadResult)>>>
     {
-        ensure_elevated()?;
-        enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
+        if !drive_infos.is_empty() {
+            ensure_elevated(console_pid)?;
+            enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
+        }
 
         info!(
             "Found {} drives to sync MFT files for: {}",

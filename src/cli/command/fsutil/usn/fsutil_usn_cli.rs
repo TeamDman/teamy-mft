@@ -24,10 +24,10 @@ impl FsutilUsnArgs {
     /// # Errors
     ///
     /// Returns an error if the selected USN subcommand fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         match self.command {
-            FsutilUsnCommand::QueryJournal(args) => args.invoke(),
-            FsutilUsnCommand::CreateJournal(args) => args.invoke(),
+            FsutilUsnCommand::QueryJournal(args) => args.invoke(console_pid),
+            FsutilUsnCommand::CreateJournal(args) => args.invoke(console_pid),
         }
     }
 }

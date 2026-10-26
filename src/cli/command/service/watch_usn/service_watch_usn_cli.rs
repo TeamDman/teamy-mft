@@ -37,8 +37,8 @@ impl ServiceWatchUsnArgs {
     /// Returns an error if the machine cache cannot be loaded, selected drives
     /// cannot be resolved, USN journals cannot be read, or scope paths cannot be
     /// resolved.
-    pub fn invoke(self, cancel: &CancellationToken) -> eyre::Result<()> {
-        ensure_elevated()?;
+    pub fn invoke(self, console_pid: Option<u32>, cancel: &CancellationToken) -> eyre::Result<()> {
+        ensure_elevated(console_pid)?;
         cancel.bail_if_cancelled()?;
         let config = crate::machine::config::load_required_machine_config()?;
         let scopes = resolve_query_scopes(&self.r#in)?;

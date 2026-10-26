@@ -11,6 +11,7 @@ pub use drive_sync_info::resolve_drive_infos;
 pub use drive_sync_info::resolve_drive_infos_in_dir;
 pub use drive_sync_info::resolve_drive_infos_in_dir_for_letters;
 pub use if_exists_output_behaviour::IfExistsOutputBehaviour;
+pub use sync_executor::SyncWork;
 pub use sync_executor::execute_sync;
 pub use sync_index::SyncIndex;
 pub use sync_mft::SyncMft;

@@ -123,7 +123,7 @@ struct TraceFieldVisitor {
 
 impl TraceFieldVisitor {
     fn record_rendered(&mut self, field: &Field, rendered: &str) {
-        let value = strip_quotes(rendered);
+        let value = rendered.to_string();
         match field.name() {
             "correlation_id" => {
                 if let Some(correlation_id) = parse_correlation_id(&value) {
@@ -191,10 +191,6 @@ impl Visit for TraceFieldVisitor {
     fn record_f64(&mut self, field: &Field, value: f64) {
         self.record_rendered(field, &value.to_string());
     }
-}
-
-fn strip_quotes(value: &str) -> String {
-    value.trim_matches('"').to_string()
 }
 
 fn parse_correlation_id(value: &str) -> Option<CorrelationId> {
@@ -734,9 +730,28 @@ pub async fn drain_stderr_logs_until_idle(
     }
 }
 
+#[derive(Debug)]
 #[must_use]
-pub fn spawn_stderr_log_drain(rx: vox::Rx<DaemonLogWireEvent>) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
+pub struct DaemonLogDrain {
+    rpc_finished: oneshot::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl DaemonLogDrain {
+    /// Finish draining after the RPC completes, allowing queued logs to arrive.
+    ///
+    /// # Errors
+    ///
+    /// Returns the panic payload if the drain thread panicked.
+    pub fn join(self) -> std::thread::Result<()> {
+        let _ = self.rpc_finished.send(());
+        self.thread.join()
+    }
+}
+
+pub fn spawn_stderr_log_drain(rx: vox::Rx<DaemonLogWireEvent>) -> DaemonLogDrain {
+    let (rpc_finished, completion) = oneshot::channel();
+    let thread = std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -747,8 +762,24 @@ pub fn spawn_stderr_log_drain(rx: vox::Rx<DaemonLogWireEvent>) -> std::thread::J
                 return;
             }
         };
-        runtime.block_on(drain_stderr_logs(rx));
-    })
+        runtime.block_on(async move {
+            let drain = drain_stderr_logs(rx);
+            tokio::pin!(drain);
+            tokio::select! {
+                () = &mut drain => {}
+                _ = completion => {
+                    // Before binding, dropping Vox's Tx does not wake its Rx.
+                    // Bound channels normally close after their queued logs drain.
+                    // Start the grace period only once the caller finishes the RPC.
+                    let _ = tokio::time::timeout(Duration::from_secs(1), drain).await;
+                }
+            }
+        });
+    });
+    DaemonLogDrain {
+        rpc_finished,
+        thread,
+    }
 }
 
 #[cfg(test)]
@@ -763,6 +794,36 @@ mod tests {
     use super::snapshot_for_correlation;
     use std::str::FromStr;
     use tracing_subscriber::prelude::*;
+
+    #[test]
+    fn log_drain_finishes_when_rpc_never_binds_the_channel() {
+        let (logs_tx, logs_rx) = vox::channel::<super::DaemonLogWireEvent>();
+        let drain = super::spawn_stderr_log_drain(logs_rx);
+        // A connection failure drops the RPC closure before Vox serializes its Tx.
+        drop(logs_tx);
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = completed_tx.send(drain.join().is_ok());
+        });
+        assert!(
+            completed_rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .expect("log drain hung after connection failure")
+        );
+    }
+
+    #[test]
+    fn log_drain_keeps_waiting_while_rpc_is_active() {
+        let (logs_tx, logs_rx) = vox::channel::<super::DaemonLogWireEvent>();
+        let drain = super::spawn_stderr_log_drain(logs_rx);
+        std::thread::sleep(std::time::Duration::from_millis(1_100));
+        assert!(
+            !drain.thread.is_finished(),
+            "an idle RPC must not time out its log drain"
+        );
+        drop(logs_tx);
+        drain.join().unwrap();
+    }
 
     #[test]
     fn hub_keeps_only_latest_events() {
@@ -835,6 +896,30 @@ mod tests {
                 && event.method == "ping"
                 && event.correlation_id.as_ref() == Some(&correlation_id)),
             "expected daemon pong to be captured for correlation id; got {events:#?}"
+        );
+    }
+
+    #[test]
+    fn trace_layer_preserves_quoted_multiline_messages() {
+        let correlation_id =
+            CorrelationId::from_str("33333333-3333-3333-3333-333333333333").unwrap();
+        let subscriber = tracing_subscriber::registry().with(DaemonTraceLayer);
+        let message = "\"Run length field exceeds buffer\"\n\"second line\"";
+        tracing::subscriber::with_default(subscriber, || {
+            let _span =
+                tracing::info_span!("daemon_rpc", correlation_id = %correlation_id).entered();
+            tracing::warn!(message, detail = "\"quoted field\"");
+        });
+        let events = snapshot_for_correlation(&correlation_id);
+        let event = events
+            .iter()
+            .find(|event| event.message == message)
+            .expect("message should survive capture unchanged");
+        assert!(
+            event
+                .fields
+                .iter()
+                .any(|field| field.key == "detail" && field.value == "\"quoted field\"")
         );
     }
 

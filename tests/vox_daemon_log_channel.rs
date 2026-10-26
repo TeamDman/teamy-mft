@@ -19,7 +19,7 @@ impl LogProbe for LogProbeService {
         logs.send(DaemonLogWireEvent::from(&sample_log_event()))
             .await
             .expect("server should send daemon log event");
-        logs.close(Vec::default())
+        logs.close(Vec::default().into())
             .await
             .expect("server should close daemon log channel");
         String::from("pong")
@@ -33,7 +33,7 @@ fn sample_log_event() -> DaemonLogEvent {
         target: String::from("teamy_mft::test"),
         file: Some(String::from("src/machine/daemon.rs")),
         line: Some(399),
-        message: String::from("Daemon pong"),
+        message: String::from("\"Daemon pong\"\nsecond line\n\"last line\""),
         request_id: 0,
         method: String::from("ping"),
         correlation_id: Some(
@@ -54,16 +54,16 @@ fn sample_log_event() -> DaemonLogEvent {
     }
 }
 
-async fn pair() -> (LogProbeClient, vox::NoopClient) {
+async fn pair() -> (LogProbeClient, vox::ConnectionHandle) {
     let (client_link, server_link) = vox::memory_link_pair(16);
     let server = tokio::spawn(async move {
         vox::acceptor_on(server_link)
-            .on_connection(LogProbeDispatcher::new(LogProbeService))
-            .establish::<vox::NoopClient>()
+            .on_lane(LogProbeDispatcher::new(LogProbeService))
+            .establish_connection()
             .await
             .expect("server establish")
     });
-    let client = vox::initiator_on(client_link, vox::TransportMode::Bare)
+    let client = vox::initiator_on(client_link)
         .establish::<LogProbeClient>()
         .await
         .expect("client establish");
@@ -99,7 +99,7 @@ async fn tx_arg_delivers_daemon_log_when_receiver_is_draining_during_call() {
 
     assert_eq!(response, "pong");
     assert_eq!(logs.len(), 1);
-    assert_eq!(logs[0].message, "Daemon pong");
+    assert_eq!(logs[0], sample_log_event());
     assert_eq!(logs[0].file.as_deref(), Some("src/machine/daemon.rs"));
     assert_eq!(logs[0].spans[0].name, "daemon_rpc");
 }
@@ -119,7 +119,7 @@ async fn tx_arg_delivers_daemon_log_when_receiver_starts_after_call() {
 
     assert_eq!(response, "pong");
     assert_eq!(logs.len(), 1);
-    assert_eq!(logs[0].message, "Daemon pong");
+    assert_eq!(logs[0], sample_log_event());
     assert_eq!(logs[0].file.as_deref(), Some("src/machine/daemon.rs"));
     assert_eq!(logs[0].spans[0].name, "daemon_rpc");
 }

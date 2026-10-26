@@ -18,7 +18,12 @@ pub mod tray;
 pub mod windows_utils;
 
 use crate::cli::Cli;
+use crate::cli::command::Command;
+use crate::cli::command::service::ServiceArgs;
+use crate::cli::command::service::ServiceCommand;
+use crate::logging_init::LogSource;
 use crate::windows_utils::console::console_attach;
+use crate::windows_utils::elevation::is_elevated;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
@@ -101,12 +106,19 @@ pub fn main() -> eyre::Result<()> {
     .run()
     .unwrap();
 
-    // Initialize logging
-    logging_init::init_logging(&cli.global_args, cancellation_token.clone())?;
-
     if let Some(pid) = cli.global_args.console_pid {
         console_attach(pid)?;
     }
+
+    let elevated = is_elevated();
+    let log_source = match &cli.command {
+        Command::Service(ServiceArgs {
+            command: ServiceCommand::Run(_),
+        }) if elevated => LogSource::ElevatedService,
+        _ if elevated => LogSource::ElevatedClient,
+        _ => LogSource::Client,
+    };
+    logging_init::init_logging(&cli.global_args, log_source, cancellation_token.clone())?;
 
     tracy_capture_padding("before_cli_invoke");
     cli.invoke(cancellation_token.clone())?;
