@@ -31,6 +31,12 @@ when the option is absent. Both `--console-pid PID` and `--console-pid=PID` befo
 the `--` terminator count as an existing option. Detection must follow the CLI
 parser so option values are not mistaken for flags or the `--` terminator.
 
+cli[elevation.completion]
+After an elevated child exits, the parent must return a typed completion signal
+through the command call stack. The entrypoint must preserve the child's exit
+status without printing an error report for this signal, including when context
+has been attached to it. Launch and wait failures must remain ordinary errors.
+
 ## Cached MFT Traversal
 
 cli[command.list-paths.cached-mft-input]

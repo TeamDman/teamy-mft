@@ -1,5 +1,6 @@
 mod backup_privilege;
 mod elevated_child_process;
+mod elevation_completed;
 mod ensure_elevated;
 mod is_elevated;
 mod is_in_builtin_administrators;
@@ -8,6 +9,7 @@ mod run_as_admin;
 
 pub use backup_privilege::*;
 pub use elevated_child_process::*;
+pub use elevation_completed::*;
 pub use ensure_elevated::*;
 pub use is_elevated::*;
 pub use is_in_builtin_administrators::*;
