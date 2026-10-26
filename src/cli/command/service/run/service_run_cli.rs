@@ -14,7 +14,11 @@ impl ServiceRunArgs {
     /// # Errors
     ///
     /// Returns an error if the daemon runtime cannot be started.
-    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
-        crate::machine::daemon::run_daemon(self.service, cancellation_token)
+    pub fn invoke(
+        self,
+        console_pid: Option<u32>,
+        cancellation_token: CancellationToken,
+    ) -> eyre::Result<()> {
+        crate::machine::daemon::run_daemon(self.service, console_pid, cancellation_token)
     }
 }

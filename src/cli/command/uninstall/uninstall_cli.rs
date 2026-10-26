@@ -13,10 +13,11 @@ impl UninstallArgs {
     /// # Errors
     ///
     /// Returns an error if service removal fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         let sync_dir = crate::machine::config::load_machine_config()?
             .map(|config| config.sync_dir.into_inner());
-        crate::cli::command::service::ServiceUninstallArgs { purge: self.purge }.invoke()?;
+        crate::cli::command::service::ServiceUninstallArgs { purge: self.purge }
+            .invoke(console_pid)?;
         if !self.purge
             && let Some(sync_dir) = sync_dir
         {

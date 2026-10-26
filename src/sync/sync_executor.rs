@@ -10,18 +10,51 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::info_span;
 
+#[derive(Debug)]
+pub struct SyncWork {
+    pub mft_drives: Vec<DriveSyncInfo>,
+    pub index_drives: Vec<DriveSyncInfo>,
+}
+
+impl SyncWork {
+    /// Select the MFT reads and index builds before any outputs are changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `Abort` encounters an existing MFT or base index.
+    // dwrk[impl sync.skip.preserves-snapshot-state]
+    pub fn prepare(
+        drive_infos: Vec<DriveSyncInfo>,
+        if_exists: &IfExistsOutputBehaviour,
+    ) -> eyre::Result<Self> {
+        let index_drives = SyncIndex::invoke_preflight(drive_infos.clone(), if_exists)?;
+        let mut mft_drives = SyncMft::invoke_preflight(drive_infos, if_exists)?;
+        // A retained base index must keep its matching MFT snapshot and sidecars.
+        mft_drives.retain(|info| {
+            index_drives
+                .iter()
+                .any(|index| index.drive_letter == info.drive_letter)
+        });
+        Ok(Self {
+            mft_drives,
+            index_drives,
+        })
+    }
+}
+
 /// # Errors
 ///
 /// Returns an error if the sync fails, likely caused by IO problems.
+/// Work must be selected with `SyncWork::prepare` before execution.
 pub async fn execute_sync(
-    drive_infos: Vec<DriveSyncInfo>,
-    if_exists: &IfExistsOutputBehaviour,
+    work: SyncWork,
+    console_pid: Option<u32>,
     cancel: &CancellationToken,
 ) -> eyre::Result<()> {
-    // The two stages have different skip/overwrite/abort filtering rules, so
-    // they must each run their own preflight over the same initial drive set.
-    let mft_drive_infos = SyncMft::invoke_preflight(drive_infos.clone(), if_exists)?;
-    let index_drive_infos = SyncIndex::invoke_preflight(drive_infos, if_exists)?;
+    let SyncWork {
+        mft_drives: mft_drive_infos,
+        index_drives: index_drive_infos,
+    } = work;
 
     // Drives present in both sets can build the index directly from the fresh
     // in-memory `PhysicalMftReadResult` produced by the MFT stage, avoiding a
@@ -50,7 +83,7 @@ pub async fn execute_sync(
     let mft_span = info_span!("dispatch mft sync work");
     let mft_data = {
         let _guard = mft_span.enter();
-        SyncMft::invoke(mft_drive_infos)?
+        SyncMft::invoke(mft_drive_infos, console_pid)?
     };
 
     let in_memory_index_drive_letters_for_stream = Arc::clone(&in_memory_index_drive_letters);

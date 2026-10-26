@@ -3,6 +3,15 @@
 This specification covers the runtime coordination behavior of the machine
 daemon and its per-drive workers.
 
+## Snapshot Sync
+
+dwrk[sync.skip.preserves-snapshot-state]
+With `--if-exists skip`, sync must retain the MFT snapshot, overlay, and checkpoint
+associated with an existing base index. It may rebuild a missing base index from
+a retained MFT snapshot, but must preserve that snapshot's overlay and checkpoint,
+including their absence. Only a freshly read MFT with a newly built base index may
+reset the overlay and establish a new journal checkpoint.
+
 ## Worker Modes
 
 dwrk[worker.mode.live-observed]

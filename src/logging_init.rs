@@ -5,6 +5,7 @@ use color_eyre::owo_colors::OwoColorize;
 use eyre::bail;
 use std::fmt;
 use std::fs::File;
+use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -28,8 +29,36 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
+/// Identifies the process producing local log events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogSource {
+    Client,
+    ElevatedClient,
+    ElevatedService,
+}
+
 struct SourceAwareEventFormat<E> {
     inner: E,
+    source: LogSource,
+}
+
+struct SourceLineWriter<'a, 'writer> {
+    writer: Writer<'writer>,
+    source: &'a str,
+    line_start: bool,
+}
+
+impl fmt::Write for SourceLineWriter<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for line in s.split_inclusive('\n') {
+            if self.line_start {
+                self.writer.write_str(self.source)?;
+            }
+            self.writer.write_str(line)?;
+            self.line_start = line.ends_with('\n');
+        }
+        Ok(())
+    }
 }
 
 static LOG_START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -48,7 +77,7 @@ struct DaemonRemotePrettyFields {
 
 impl DaemonRemotePrettyFields {
     fn record_rendered(&mut self, field: &Field, rendered: &str) {
-        let value = rendered.trim_matches('"').to_string();
+        let value = rendered.replace('\x1b', "\\x1b");
         match field.name() {
             "message" => self.message = Some(value),
             "daemon_target" => self.target = Some(value),
@@ -136,48 +165,57 @@ where
     fn format_event(
         &self,
         ctx: &FmtContext<'_, S, N>,
-        mut writer: Writer<'_>,
+        writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let source = source_prefix(
-            event
-                .metadata()
-                .target()
-                .starts_with(crate::machine::daemon_log::DAEMON_REMOTE_TARGET),
-            writer.has_ansi_escapes(),
-        );
-        writer.write_str(&source)?;
+        let ansi = writer.has_ansi_escapes();
+        let source = if event
+            .metadata()
+            .target()
+            .starts_with(crate::machine::daemon_log::DAEMON_REMOTE_TARGET)
+        {
+            LogSource::ElevatedService
+        } else {
+            self.source
+        };
+        let prefix = source_prefix(source, ansi);
+        let mut prefixed = SourceLineWriter {
+            writer,
+            source: &prefix,
+            line_start: true,
+        };
+        let mut writer = Writer::new(&mut prefixed);
         if event.metadata().target() == crate::machine::daemon_log::DAEMON_REMOTE_TARGET {
-            return format_daemon_remote_event(&mut writer, event);
+            return format_daemon_remote_event(&mut writer, event, ansi);
         }
         self.inner.format_event(ctx, writer, event)
     }
 }
 
-fn source_prefix(daemon_remote: bool, ansi: bool) -> String {
-    let elevated = !daemon_remote && crate::windows_utils::elevation::is_elevated();
-    let label = match (daemon_remote, elevated) {
-        (true, _) => "[daemon] ",
-        (false, true) => "[client elevated] ",
-        (false, false) => "[client] ",
+fn source_prefix(source: LogSource, ansi: bool) -> String {
+    let label = match source {
+        LogSource::ElevatedService => "elevated service | ",
+        LogSource::ElevatedClient => "elevated client  | ",
+        LogSource::Client => "client           | ",
     };
     if !ansi {
         return label.to_string();
     }
-    if daemon_remote {
-        label.bright_blue().to_string()
-    } else if elevated {
-        label.bright_yellow().to_string()
-    } else {
-        label.bright_green().to_string()
+    match source {
+        LogSource::ElevatedService => label.bright_blue().to_string(),
+        LogSource::ElevatedClient => label.bright_yellow().to_string(),
+        LogSource::Client => label.bright_green().to_string(),
     }
 }
 
-fn format_daemon_remote_event(writer: &mut Writer<'_>, event: &Event<'_>) -> fmt::Result {
+fn format_daemon_remote_event(
+    writer: &mut Writer<'_>,
+    event: &Event<'_>,
+    ansi: bool,
+) -> fmt::Result {
     let mut fields = DaemonRemotePrettyFields::default();
     event.record(&mut fields);
 
-    let ansi = writer.has_ansi_escapes();
     let elapsed = LOG_START.elapsed().as_secs_f64();
     let level = event.metadata().level();
     let target = fields
@@ -362,7 +400,8 @@ fn tracy_log_filter() -> eyre::Result<EnvFilter> {
 // tool[impl logging.stderr-output]
 // tool[impl logging.file-path-option]
 // tool[impl logging.file-structured-ndjson]
-/// Initialize logging based on the provided configuration.
+/// Initialize logging with an explicit source for local events.
+/// Forwarded service events retain their service prefix.
 ///
 /// # Errors
 ///
@@ -373,20 +412,26 @@ fn tracy_log_filter() -> eyre::Result<EnvFilter> {
 /// This function may panic if locking or cloning the log file handle fails.
 pub fn init_logging(
     global_args: &GlobalArgs,
+    source: LogSource,
     cancellation_token: CancellationToken,
 ) -> eyre::Result<()> {
     LazyLock::force(&LOG_START);
 
-    let subscriber = Registry::default();
+    let subscriber = Registry::default().with(tracing_error::ErrorLayer::default());
+    let ansi = std::io::stderr().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
 
     let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(ansi)
         .with_file(cfg!(debug_assertions))
         .with_line_number(cfg!(debug_assertions))
         .with_target(true)
         .with_writer(std::io::stderr.and(crate::windows_utils::log::LOG_BUFFER.clone()))
         .event_format(SourceAwareEventFormat {
+            source,
             inner: tracing_subscriber::fmt::format()
                 .pretty()
+                .with_ansi(ansi)
                 .with_timer(tracing_subscriber::fmt::time::uptime()),
         })
         .with_filter(default_log_filter(global_args)?)
@@ -461,4 +506,56 @@ pub fn init_logging(
     tracing::info!("Current time: {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiline_events_label_every_line_and_preserve_quotes() {
+        for (source, prefix) in [
+            (LogSource::Client, "client           | "),
+            (LogSource::ElevatedClient, "elevated client  | "),
+            (LogSource::ElevatedService, "elevated service | "),
+        ] {
+            let output = tempfile::NamedTempFile::new().unwrap();
+            let writer = output.reopen().unwrap();
+            let subscriber = tracing_subscriber::registry().with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(writer)
+                    .event_format(SourceAwareEventFormat {
+                        source,
+                        inner: tracing_subscriber::fmt::format().pretty().with_ansi(false),
+                    }),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let _span = tracing::info_span!("sync_test").entered();
+                tracing::warn!(
+                    "Failed decoding data run entry:\n   0: Run length field exceeds buffer"
+                );
+                tracing::warn!(
+                    target: "teamy_mft::daemon_remote",
+                    daemon_target = "test_daemon",
+                    daemon_file = "src/test.rs",
+                    daemon_line = 42,
+                    "\"quoted message\"\nsecond line\n\"last line\""
+                );
+            });
+            let output = std::fs::read_to_string(output.path()).unwrap();
+            let local_line = output
+                .lines()
+                .find(|line| line.contains("Failed decoding data run entry"))
+                .unwrap();
+            assert!(local_line.starts_with(prefix), "{output}");
+            assert!(output.lines().all(|line| line.contains(" | ")), "{output}");
+            assert!(
+                output.contains("elevated service | second line"),
+                "{output}"
+            );
+            assert!(output.contains("\"last line\""), "{output}");
+            assert!(!output.contains('\x1b'), "{output}");
+        }
+    }
 }

@@ -15,8 +15,8 @@ impl ProtectionDisableArgs {
     /// # Errors
     ///
     /// Returns an error if elevation is unavailable or cache ACL repair fails.
-    pub fn invoke(self) -> eyre::Result<()> {
-        ensure_elevated()?;
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
+        ensure_elevated(console_pid)?;
         let config = crate::machine::config::load_required_machine_config()?;
         let target = self.target.unwrap_or(ProtectionTarget::Index);
         match target {

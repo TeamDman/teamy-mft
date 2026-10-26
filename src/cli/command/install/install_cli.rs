@@ -28,7 +28,7 @@ impl InstallArgs {
     ///
     /// Returns an error if the daemon mode selection is invalid, machine config setup fails,
     /// or service installation fails when `--daemon` is requested.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         ensure!(
             !(self.daemon && self.no_daemon),
             "`--daemon` and `--no-daemon` cannot be used together"
@@ -38,10 +38,13 @@ impl InstallArgs {
             "`--force` requires `--daemon`; plain `install` now configures the sync directory without installing the service"
         );
 
-        let config = crate::cli::command::service::install_machine_config(self.sync_dir)?;
+        let config =
+            crate::cli::command::service::install_machine_config(self.sync_dir, console_pid)?;
         if self.daemon {
             return crate::cli::command::service::install_machine_daemon_service(
-                &config, self.force,
+                &config,
+                self.force,
+                console_pid,
             );
         }
 

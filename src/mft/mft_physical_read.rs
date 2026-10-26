@@ -103,7 +103,7 @@ pub fn read_physical_mft(drive_letter: char) -> eyre::Result<PhysicalMftReadResu
     // Gather all non-resident $DATA runlists (could be multiple segments if attribute list used).
     let decoded_runs = {
         let _span = info_span!("decode_dollar_mft_runlists", drive = %drive_letter).entered();
-        MftRecordAttributeRunListOwned::from_mft_record(&dollar_mft_record)
+        MftRecordAttributeRunListOwned::from_mft_record(&dollar_mft_record)?
     };
     if decoded_runs.is_empty() {
         eyre::bail!("No non-resident $DATA runs found in $MFT record");

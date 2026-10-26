@@ -41,7 +41,7 @@ struct DaemonQueryVisitor {
 
 struct DaemonQueryCleanup {
     response_join: JoinHandle<eyre::Result<CorrelationId>>,
-    log_drain: JoinHandle<()>,
+    log_drain: crate::machine::daemon_log::DaemonLogDrain,
     cancel: CancellationToken,
     cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>,
     cancel_watch_stop: mpsc::Sender<()>,

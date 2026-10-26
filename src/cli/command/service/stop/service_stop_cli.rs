@@ -23,7 +23,7 @@ impl ServiceStopArgs {
     /// # Errors
     ///
     /// Returns an error if the service cannot be stopped.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         let config = load_machine_daemon_client_config()?;
         let service_name = if config.service_name.is_empty() {
             DEFAULT_SERVICE_NAME
@@ -31,7 +31,7 @@ impl ServiceStopArgs {
             &config.service_name
         };
         let was_running = if self.force {
-            crate::windows_utils::elevation::ensure_elevated()?;
+            crate::windows_utils::elevation::ensure_elevated(console_pid)?;
             stop_service_if_running(service_name)?
         } else {
             match query_service_state(service_name)? {

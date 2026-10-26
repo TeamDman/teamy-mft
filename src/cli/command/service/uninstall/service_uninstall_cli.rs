@@ -19,8 +19,8 @@ impl ServiceUninstallArgs {
     /// # Errors
     ///
     /// Returns an error if elevation or service removal fails.
-    pub fn invoke(self) -> eyre::Result<()> {
-        ensure_elevated()?;
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
+        ensure_elevated(console_pid)?;
         let config = load_machine_config()?;
         let service_name = config.as_ref().map_or_else(
             || String::from(DEFAULT_SERVICE_NAME),

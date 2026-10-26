@@ -22,17 +22,28 @@ use std::path::PathBuf;
 use teamy_mft::cancellation::install_ctrlc_handler;
 use teamy_mft::cli::command::query::QueryArgs;
 use teamy_mft::cli::global_args::GlobalArgs;
+use teamy_mft::logging_init::LogSource;
 use teamy_mft::logging_init::init_logging;
 use teamy_mft::query::ControlFlow;
 use teamy_mft::query::QueryPlan;
 use teamy_mft::query::QueryRule;
+use teamy_mft::windows_utils::elevation::is_elevated;
 
 const NO_EXTENSION: &str = "(no extension)";
 
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let cancellation_token = install_ctrlc_handler()?;
-    init_logging(&GlobalArgs::default(), cancellation_token.clone())?;
+    let log_source = if is_elevated() {
+        LogSource::ElevatedClient
+    } else {
+        LogSource::Client
+    };
+    init_logging(
+        &GlobalArgs::default(),
+        log_source,
+        cancellation_token.clone(),
+    )?;
 
     let scope = std::env::args()
         .nth(1)

@@ -35,10 +35,10 @@ impl ProtectionArgs {
     /// # Errors
     ///
     /// Returns an error if the selected protection subcommand fails.
-    pub fn invoke(self) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         match self.command {
-            ProtectionCommand::Enable(args) => args.invoke(),
-            ProtectionCommand::Disable(args) => args.invoke(),
+            ProtectionCommand::Enable(args) => args.invoke(console_pid),
+            ProtectionCommand::Disable(args) => args.invoke(console_pid),
             ProtectionCommand::Status(args) => args.invoke(),
         }
     }

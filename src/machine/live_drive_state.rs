@@ -1630,6 +1630,7 @@ mod tests {
             cache_dir.path(),
             &[drive_letter],
             IfExistsOutputBehaviour::Overwrite,
+            None,
             &cancel,
         )?;
 

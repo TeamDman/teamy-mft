@@ -22,9 +22,8 @@ use figue::{self as args};
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 #[repr(u8)]
 pub enum Command {
-    /// Compatibility alias for `service`
-    Daemon(ServiceArgs),
     /// Manage the machine-wide Windows service that hosts the daemon
+    #[facet(args::alias = "daemon")]
     Service(ServiceArgs),
     /// Write `.mft` and `.mft_search_index` files (will auto-elevate via UAC if not already running as administrator)
     Sync(SyncArgs),
@@ -62,23 +61,27 @@ impl Default for Command {
 }
 
 impl Command {
-    /// Invoke the command with global arguments.
+    /// Invoke the command with the parsed console PID.
     ///
     /// # Errors
     ///
     /// Returns an error if tracing initialization fails or the command execution fails.
-    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(
+        self,
+        console_pid: Option<u32>,
+        cancellation_token: CancellationToken,
+    ) -> eyre::Result<()> {
         match self {
-            Command::Daemon(args) | Command::Service(args) => args.invoke(cancellation_token),
-            Command::Sync(args) => args.invoke(&cancellation_token),
-            Command::Install(args) => args.invoke(),
-            Command::Uninstall(args) => args.invoke(),
+            Command::Service(args) => args.invoke(console_pid, cancellation_token),
+            Command::Sync(args) => args.invoke(console_pid, &cancellation_token),
+            Command::Install(args) => args.invoke(console_pid),
+            Command::Uninstall(args) => args.invoke(console_pid),
             Command::ListPaths(args) => args.invoke(&cancellation_token),
             Command::Move(args) => args.invoke(),
             Command::Rule(args) => args.invoke(),
             Command::Profile(args) => args.invoke(),
-            Command::Protection(args) => args.invoke(),
-            Command::Fsutil(args) => args.invoke(),
+            Command::Protection(args) => args.invoke(console_pid),
+            Command::Fsutil(args) => args.invoke(console_pid),
             Command::Status(args) => args.invoke(),
             Command::Query(args) => args.invoke_and_print(&cancellation_token),
             Command::Tray(args) => args.invoke(),
