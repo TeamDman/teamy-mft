@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::cli::command::service::ServiceWatchUsnArgs;
 use crate::cli::command::service::install::ServiceInstallArgs;
 use crate::cli::command::service::is_running::ServiceIsRunningArgs;
@@ -11,6 +10,7 @@ use crate::cli::command::service::uninstall::ServiceUninstallArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use teamy_cancellation::CancellationScope;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 pub struct ServiceArgs {
@@ -55,7 +55,7 @@ impl ServiceArgs {
     pub fn invoke(
         self,
         console_pid: Option<u32>,
-        cancellation_token: CancellationToken,
+        cancellation_scope: CancellationScope,
     ) -> eyre::Result<()> {
         match self.command {
             ServiceCommand::Install(args) => args.invoke(console_pid),
@@ -65,8 +65,8 @@ impl ServiceArgs {
             ServiceCommand::Status(args) => args.invoke(),
             ServiceCommand::IsRunning(args) => args.invoke(),
             ServiceCommand::Logs(args) => args.invoke(),
-            ServiceCommand::Run(args) => args.invoke(console_pid, cancellation_token),
-            ServiceCommand::WatchUsn(args) => args.invoke(console_pid, &cancellation_token),
+            ServiceCommand::Run(args) => args.invoke(console_pid, cancellation_scope),
+            ServiceCommand::WatchUsn(args) => args.invoke(console_pid, &cancellation_scope),
         }
     }
 }

@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::machine::config::published_drive_paths;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::live_drive_state::ObservedUsnEvent;
@@ -10,6 +9,7 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use std::time::Duration;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -37,7 +37,7 @@ impl ServiceWatchUsnArgs {
     /// Returns an error if the machine cache cannot be loaded, selected drives
     /// cannot be resolved, USN journals cannot be read, or scope paths cannot be
     /// resolved.
-    pub fn invoke(self, console_pid: Option<u32>, cancel: &CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(self, console_pid: Option<u32>, cancel: &CancellationScope) -> eyre::Result<()> {
         ensure_elevated(console_pid)?;
         cancel.bail_if_cancelled()?;
         let config = crate::machine::config::load_required_machine_config()?;
@@ -93,7 +93,9 @@ impl ServiceWatchUsnArgs {
             std::thread::sleep(poll_interval);
         }
 
-        cancel.bail_if_cancelled()
+        cancel.bail_if_cancelled()?;
+
+        Ok(())
     }
 }
 

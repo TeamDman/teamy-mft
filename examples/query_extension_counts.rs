@@ -45,66 +45,68 @@ fn main() -> eyre::Result<()> {
         cancellation_token.clone(),
     )?;
 
-    let scope = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    let scope = dunce::canonicalize(&scope)?;
+    cancellation_token.with_scope(|cancellation_token| {
+        let scope = std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let scope = dunce::canonicalize(&scope)?;
 
-    let mut plan = QueryPlan::single_rule(QueryRule::MatchAll);
-    plan.r#in = vec![scope.to_string_lossy().into_owned()];
-    let args = QueryArgs {
-        plan,
-        ..Default::default()
-    };
-
-    let mut raw_counts = BTreeMap::<String, usize>::new();
-    let mut total_files = 0_usize;
-
-    let start = std::time::Instant::now();
-    args.visit_rows(&cancellation_token, |row| {
-        let path = row.path.as_path();
-        if !path.is_file() {
-            return Ok(ControlFlow::Continue(()));
-        }
-
-        total_files += 1;
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(NO_EXTENSION);
-        if let Some(count) = raw_counts.get_mut(extension) {
-            *count += 1;
-        } else {
-            raw_counts.insert(extension.to_owned(), 1);
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
-
-    let mut counts = BTreeMap::<String, usize>::new();
-    for (extension, count) in raw_counts {
-        let normalized_extension = if extension == NO_EXTENSION {
-            extension
-        } else if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
-            extension.to_ascii_lowercase()
-        } else {
-            extension
+        let mut plan = QueryPlan::single_rule(QueryRule::MatchAll);
+        plan.r#in = vec![scope.to_string_lossy().into_owned()];
+        let args = QueryArgs {
+            plan,
+            ..Default::default()
         };
-        *counts.entry(normalized_extension).or_default() += count;
-    }
 
-    println!("scope: {}", scope.display());
-    println!("files: {total_files}");
-    for (extension, count) in counts {
-        if extension == NO_EXTENSION {
-            println!("{extension}\t{count}");
-        } else {
-            println!(".{extension}\t{count}");
+        let mut raw_counts = BTreeMap::<String, usize>::new();
+        let mut total_files = 0_usize;
+
+        let start = std::time::Instant::now();
+        args.visit_rows(&cancellation_token, |row| {
+            let path = row.path.as_path();
+            if !path.is_file() {
+                return Ok(ControlFlow::Continue(()));
+            }
+
+            total_files += 1;
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or(NO_EXTENSION);
+            if let Some(count) = raw_counts.get_mut(extension) {
+                *count += 1;
+            } else {
+                raw_counts.insert(extension.to_owned(), 1);
+            }
+            Ok(ControlFlow::Continue(()))
+        })?;
+
+        let mut counts = BTreeMap::<String, usize>::new();
+        for (extension, count) in raw_counts {
+            let normalized_extension = if extension == NO_EXTENSION {
+                extension
+            } else if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                extension.to_ascii_lowercase()
+            } else {
+                extension
+            };
+            *counts.entry(normalized_extension).or_default() += count;
         }
-    }
 
-    let elapsed = start.elapsed();
-    println!("elapsed: {elapsed:.2?}");
-    Ok(())
+        println!("scope: {}", scope.display());
+        println!("files: {total_files}");
+        for (extension, count) in counts {
+            if extension == NO_EXTENSION {
+                println!("{extension}\t{count}");
+            } else {
+                println!(".{extension}\t{count}");
+            }
+        }
+
+        let elapsed = start.elapsed();
+        println!("elapsed: {elapsed:.2?}");
+        Ok(())
+    })
 }

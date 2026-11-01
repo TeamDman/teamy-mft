@@ -48,6 +48,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
+use teamy_cancellation::CancellationScope;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::net::windows::named_pipe::ServerOptions;
 use tokio::sync::Mutex;
@@ -75,7 +76,7 @@ use windows::Win32::System::Services::SetServiceStatus;
 use windows::Win32::System::Services::StartServiceCtrlDispatcherW;
 
 static SERVICE_STATUS_HANDLE_SLOT: AtomicIsize = AtomicIsize::new(0);
-static SERVICE_CANCELLATION_TOKEN: StdMutex<Option<CancellationToken>> = StdMutex::new(None);
+static SERVICE_CANCELLATION_TOKEN: StdMutex<Option<CancellationScope>> = StdMutex::new(None);
 
 type DaemonPipeReader = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
 type DaemonPipeWriter = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
@@ -118,7 +119,7 @@ struct DaemonRuntimeState {
 struct MachineDaemonService {
     config: MachineConfig,
     worker: DaemonWorker,
-    cancellation_token: CancellationToken,
+    cancellation_scope: CancellationScope,
 }
 
 #[derive(Debug)]
@@ -137,7 +138,7 @@ enum DriveWorkerCommand {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: CancellationToken,
+        cancel: CancellationScope,
         response: oneshot::Sender<Result<DaemonDriveQueryRows, MachineError>>,
     },
     Warm,
@@ -187,6 +188,7 @@ struct DaemonWorker {
     drive_workers: Arc<StdMutex<FxHashMap<char, DriveWorker>>>,
     sync_dir: std::path::PathBuf,
     cancellation_token: CancellationToken,
+    cancellation_scope: CancellationScope,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -229,34 +231,30 @@ impl DriveWorker {
         drive: char,
         sync_dir: std::path::PathBuf,
         mode: DriveWorkerRuntimeMode,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
     ) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let status = Arc::new(StdMutex::new(DriveWorkerStatusSnapshot::default()));
-        let worker_cancellation_token = cancellation_token.child_token();
+        let status_for_thread = Arc::clone(&status);
+        let (worker_cancellation_token, worker) =
+            cancellation_scope.with_async_child_scope(move |scope| async move {
+                let mut state = DriveWorkerState {
+                    drive,
+                    sync_dir,
+                    mode,
+                    state: None,
+                    snapshot_only: None,
+                    degraded: None,
+                    loading: false,
+                    active_jobs: 0,
+                };
+                run_drive_worker(&mut state, &rx, &status_for_thread, &scope);
+                eyre::Ok(())
+            });
         std::thread::Builder::new()
             .name(format!("teamy-mft-drive-{drive}"))
-            .spawn({
-                let status_for_thread = Arc::clone(&status);
-                let cancellation_token_for_thread = worker_cancellation_token.clone();
-                move || {
-                    let mut state = DriveWorkerState {
-                        drive,
-                        sync_dir,
-                        mode,
-                        state: None,
-                        snapshot_only: None,
-                        degraded: None,
-                        loading: false,
-                        active_jobs: 0,
-                    };
-                    run_drive_worker(
-                        &mut state,
-                        &rx,
-                        &status_for_thread,
-                        &cancellation_token_for_thread,
-                    );
-                }
+            .spawn(move || {
+                let _ = futures::executor::block_on(worker);
             })
             .expect("failed to spawn daemon drive worker thread");
         Self {
@@ -272,7 +270,7 @@ impl DriveWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: CancellationToken,
+        cancel: CancellationScope,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
         let (response, rx) = oneshot::channel();
         self.tx
@@ -318,7 +316,7 @@ impl DriveWorkerState {
     fn query_with_cancel(
         &mut self,
         request: &QueryPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
         // dwrk[impl worker.query.cancelled-without-degrading]
         if cancel.is_cancelled() {
@@ -372,11 +370,11 @@ impl DriveWorkerState {
             })
     }
 
-    fn refresh(&mut self, cancel: &CancellationToken) -> Result<(), MachineError> {
+    fn refresh(&mut self, cancel: &CancellationScope) -> Result<(), MachineError> {
         self.refresh_with_cancel(cancel)
     }
 
-    fn refresh_with_cancel(&mut self, cancel: &CancellationToken) -> Result<(), MachineError> {
+    fn refresh_with_cancel(&mut self, cancel: &CancellationScope) -> Result<(), MachineError> {
         if !self.is_live_observed() {
             return Ok(());
         }
@@ -435,7 +433,7 @@ impl DriveWorkerState {
         Ok(())
     }
 
-    fn flush(&mut self, cancel: &CancellationToken) {
+    fn flush(&mut self, cancel: &CancellationScope) {
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -463,12 +461,12 @@ fn run_drive_worker(
     state: &mut DriveWorkerState,
     rx: &Receiver<DriveWorkerCommand>,
     status: &StdMutex<DriveWorkerStatusSnapshot>,
-    cancellation_token: &CancellationToken,
+    cancellation_scope: &CancellationScope,
 ) {
     publish_drive_worker_status(state, status);
     loop {
-        if cancellation_token.is_cancelled() {
-            state.flush(cancellation_token);
+        if cancellation_scope.is_cancelled() {
+            state.flush(cancellation_scope);
             publish_drive_worker_status(state, status);
             break;
         }
@@ -511,7 +509,7 @@ fn run_drive_worker(
                 let _ = response.send(result);
             }
             Ok(DriveWorkerCommand::Flush) => {
-                state.flush(cancellation_token);
+                state.flush(cancellation_scope);
                 publish_drive_worker_status(state, status);
             }
             Ok(DriveWorkerCommand::Warm) => {
@@ -523,7 +521,7 @@ fn run_drive_worker(
                     state.loading = true;
                     publish_drive_worker_status(state, status);
                 }
-                if let Err(error) = state.refresh(cancellation_token) {
+                if let Err(error) = state.refresh(cancellation_scope) {
                     match published_drive_cache_available(state.drive, &state.sync_dir) {
                         Ok(true) => {
                             let message = format!(
@@ -559,7 +557,7 @@ fn run_drive_worker(
             }
             Ok(DriveWorkerCommand::Stop)
             | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                state.flush(cancellation_token);
+                state.flush(cancellation_scope);
                 publish_drive_worker_status(state, status);
                 break;
             }
@@ -573,7 +571,7 @@ fn run_drive_worker(
                     publish_drive_worker_status(state, status);
                     continue;
                 }
-                if let Err(error) = state.refresh(cancellation_token) {
+                if let Err(error) = state.refresh(cancellation_scope) {
                     warn!(
                         drive = %state.drive,
                         error = %error.message,
@@ -605,28 +603,29 @@ impl DaemonWorker {
     fn start(
         config: &MachineConfig,
         console_pid: Option<u32>,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
     ) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut state = DaemonRuntimeState::new(config, console_pid);
         let status = Arc::new(StdMutex::new(DaemonWorkerStatusSnapshot::default()));
         let drive_workers = Arc::new(StdMutex::new(FxHashMap::default()));
-        let worker_cancellation_token = cancellation_token.child_token();
+        let status_for_thread = Arc::clone(&status);
+        let drive_workers_for_thread = Arc::clone(&drive_workers);
+        let (worker_cancellation_token, worker) =
+            cancellation_scope.with_async_child_scope(move |scope| async move {
+                run_daemon_worker(
+                    &mut state,
+                    &rx,
+                    &status_for_thread,
+                    &drive_workers_for_thread,
+                    &scope,
+                );
+                eyre::Ok(())
+            });
         std::thread::Builder::new()
             .name("teamy-mft-daemon-worker".to_owned())
-            .spawn({
-                let status_for_thread = Arc::clone(&status);
-                let drive_workers_for_thread = Arc::clone(&drive_workers);
-                let cancellation_token_for_thread = worker_cancellation_token.clone();
-                move || {
-                    run_daemon_worker(
-                        &mut state,
-                        &rx,
-                        &status_for_thread,
-                        &drive_workers_for_thread,
-                        &cancellation_token_for_thread,
-                    );
-                }
+            .spawn(move || {
+                let _ = futures::executor::block_on(worker);
             })
             .expect("failed to spawn daemon worker thread");
         Self {
@@ -635,6 +634,7 @@ impl DaemonWorker {
             drive_workers,
             sync_dir: config.sync_dir.clone().into_inner(),
             cancellation_token: worker_cancellation_token,
+            cancellation_scope: cancellation_scope.clone(),
         }
     }
 
@@ -643,7 +643,7 @@ impl DaemonWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: CancellationToken,
+        cancel: CancellationScope,
     ) -> Result<DaemonQueryOutcome, MachineError> {
         self.query_drive_workers(query_plan, correlation_id, rpc_method, cancel)
             .await
@@ -729,7 +729,7 @@ impl DaemonWorker {
         query_plan: QueryPlan,
         correlation_id: CorrelationId,
         rpc_method: &'static str,
-        cancel: CancellationToken,
+        cancel: CancellationScope,
     ) -> Result<DaemonQueryOutcome, MachineError> {
         let mut rows = Vec::new();
         let mut queried_drives = 0usize;
@@ -808,7 +808,7 @@ impl DaemonWorker {
                     drive,
                     self.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
-                    &self.cancellation_token,
+                    &self.cancellation_scope,
                 )
             })
             .clone()
@@ -820,12 +820,12 @@ fn run_daemon_worker(
     rx: &Receiver<DaemonWorkerCommand>,
     status: &StdMutex<DaemonWorkerStatusSnapshot>,
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
-    cancellation_token: &CancellationToken,
+    cancellation_scope: &CancellationScope,
 ) {
     publish_worker_status(state, status);
     loop {
-        if cancellation_token.is_cancelled() {
-            state.flush_dirty_drives(cancellation_token);
+        if cancellation_scope.is_cancelled() {
+            state.flush_dirty_drives(cancellation_scope);
             publish_worker_status(state, status);
             break;
         }
@@ -864,14 +864,14 @@ fn run_daemon_worker(
                 );
                 let result = {
                     let _entered = span.enter();
-                    run_daemon_worker_sync(state, sync_plan, cancellation_token)
+                    run_daemon_worker_sync(state, sync_plan, cancellation_scope)
                 };
                 state.active_jobs = state.active_jobs.saturating_sub(1);
                 publish_worker_status(state, status);
                 let _ = response.send(result);
             }
             Ok(DaemonWorkerCommand::Flush) => {
-                state.flush_dirty_drives(cancellation_token);
+                state.flush_dirty_drives(cancellation_scope);
                 if let Ok(workers) = drive_workers.lock() {
                     for worker in workers.values() {
                         worker.flush();
@@ -881,7 +881,7 @@ fn run_daemon_worker(
             }
             Ok(DaemonWorkerCommand::Stop)
             | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                state.flush_dirty_drives(cancellation_token);
+                state.flush_dirty_drives(cancellation_scope);
                 if let Ok(workers) = drive_workers.lock() {
                     for worker in workers.values() {
                         worker.stop();
@@ -891,13 +891,13 @@ fn run_daemon_worker(
                 break;
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                if cancellation_token.is_cancelled() {
-                    state.flush_dirty_drives(cancellation_token);
+                if cancellation_scope.is_cancelled() {
+                    state.flush_dirty_drives(cancellation_scope);
                     publish_worker_status(state, status);
                     break;
                 }
-                state.refresh_loaded_drives(cancellation_token);
-                warm_next_drive_worker(state, drive_workers, cancellation_token);
+                state.refresh_loaded_drives(cancellation_scope);
+                warm_next_drive_worker(state, drive_workers, cancellation_scope);
                 publish_worker_status(state, status);
             }
         }
@@ -907,7 +907,7 @@ fn run_daemon_worker(
 fn warm_next_drive_worker(
     state: &mut DaemonRuntimeState,
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
-    cancellation_token: &CancellationToken,
+    cancellation_scope: &CancellationScope,
 ) {
     // dwrk[impl worker.warmup.gradual-per-drive]
     if state.warm_drive_letters.is_empty() {
@@ -937,7 +937,7 @@ fn warm_next_drive_worker(
                     drive,
                     state.sync_dir.clone(),
                     DriveWorkerRuntimeMode::LiveObserved,
-                    cancellation_token,
+                    cancellation_scope,
                 )
             })
             .clone();
@@ -977,7 +977,7 @@ fn publish_worker_status(
 fn run_daemon_worker_sync(
     state: &mut DaemonRuntimeState,
     request: SyncPlan,
-    cancel: &CancellationToken,
+    cancel: &CancellationScope,
 ) -> Result<(), MachineError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1090,7 +1090,7 @@ impl DaemonRuntimeState {
     async fn sync(
         &mut self,
         request: SyncPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> Result<(), MachineError> {
         self.flush_dirty_drives(cancel);
         crate::machine::security::restrict_path_to_owner(&self.sync_dir, &self.owner_sid)
@@ -1158,7 +1158,7 @@ impl DaemonRuntimeState {
         Ok(())
     }
 
-    fn refresh_loaded_drives(&mut self, cancel: &CancellationToken) {
+    fn refresh_loaded_drives(&mut self, cancel: &CancellationScope) {
         let drives = self.drives.keys().copied().collect::<Vec<_>>();
         for drive in drives {
             if let Err(error) = self.refresh_drive(drive, cancel) {
@@ -1167,7 +1167,7 @@ impl DaemonRuntimeState {
         }
     }
 
-    fn flush_dirty_drives(&mut self, cancel: &CancellationToken) {
+    fn flush_dirty_drives(&mut self, cancel: &CancellationScope) {
         for (&drive, state) in &mut self.drives {
             if !state.published_dirty() {
                 continue;
@@ -1181,7 +1181,7 @@ impl DaemonRuntimeState {
     fn refresh_drive(
         &mut self,
         drive: char,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> Result<(), MachineError> {
         if let Some(message) = self.degraded.get(&drive).cloned() {
             return Err(MachineError::degraded(message));
@@ -1223,7 +1223,7 @@ impl DaemonRuntimeState {
     fn load_drive_state(
         &self,
         drive: char,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<LiveDriveState> {
         let paths = published_drive_paths(&self.sync_dir, drive);
         if !paths.mft_path.is_file() {
@@ -1256,13 +1256,13 @@ impl MachineDaemonService {
     fn new(
         config: MachineConfig,
         console_pid: Option<u32>,
-        cancellation_token: CancellationToken,
+        cancellation_scope: CancellationScope,
     ) -> Self {
-        let worker = DaemonWorker::start(&config, console_pid, &cancellation_token);
+        let worker = DaemonWorker::start(&config, console_pid, &cancellation_scope);
         Self {
             config,
             worker,
-            cancellation_token,
+            cancellation_scope,
         }
     }
 
@@ -1272,41 +1272,52 @@ impl MachineDaemonService {
         correlation_id: &CorrelationId,
     ) -> Result<Vec<crate::query::QueryResultRow>, MachineError> {
         let worker = self.worker.clone();
-        let request_cancellation_token = self.cancellation_token.child_token();
+
         let query_plan_for_body = query_plan.clone();
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
             rpc_method = "query"
         );
-        async move {
-            tracing::info!(
-                query_groups = query_plan_for_body.query.groups().len(),
-                drive_pattern = %query_plan_for_body.drive_letter_pattern,
-                limit = ?query_plan_for_body.limit,
-                "Running daemon query"
-            );
-            match worker
-                .query(
-                    query_plan_for_body,
-                    correlation_id.clone(),
-                    "query",
-                    request_cancellation_token,
-                )
-                .await
-            {
-                Ok(outcome) => {
-                    tracing::info!(matched_rows = outcome.rows.len(), "Daemon query completed");
-                    Ok(outcome.rows)
+        let (_, request) = self.cancellation_scope.with_async_child_scope(
+            |request_cancellation_token| async move {
+                let result: Result<_, MachineError> = async {
+                    tracing::info!(
+                        query_groups = query_plan_for_body.query.groups().len(),
+                        drive_pattern = %query_plan_for_body.drive_letter_pattern,
+                        limit = ?query_plan_for_body.limit,
+                        "Running daemon query"
+                    );
+                    match worker
+                        .query(
+                            query_plan_for_body,
+                            correlation_id.clone(),
+                            "query",
+                            request_cancellation_token,
+                        )
+                        .await
+                    {
+                        Ok(outcome) => {
+                            tracing::info!(
+                                matched_rows = outcome.rows.len(),
+                                "Daemon query completed"
+                            );
+                            Ok(outcome.rows)
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error.message, "Daemon query degraded");
+                            Err(error)
+                        }
+                    }
                 }
-                Err(error) => {
-                    tracing::warn!(error = %error.message, "Daemon query degraded");
-                    Err(error)
-                }
-            }
-        }
-        .instrument(span)
-        .await
+                .await;
+                eyre::Ok(result)
+            },
+        );
+        request
+            .instrument(span)
+            .await
+            .map_err(|error| MachineError::degraded(error.to_string()))?
     }
 
     async fn run_query_stream_in_span(
@@ -1318,14 +1329,15 @@ impl MachineDaemonService {
     ) -> Result<(), MachineError> {
         let worker = self.worker.clone();
         let query_plan_for_body = query_plan.clone();
-        let request_cancellation_token = self.cancellation_token.child_token();
-        let cancellation_token_for_watcher = request_cancellation_token.clone();
+
         let span = tracing::info_span!(
             "daemon_rpc",
             correlation_id = %correlation_id,
             rpc_method = "query_stream"
         );
-        async move {
+        let (_, request) = self.cancellation_scope.with_async_child_scope(|request_cancellation_token| async move {
+            let result: Result<_, MachineError> = async {
+            let cancellation_token_for_watcher = request_cancellation_token.clone();
             tracing::info!(
                 query_groups = query_plan_for_body.query.groups().len(),
                 drive_pattern = %query_plan_for_body.drive_letter_pattern,
@@ -1382,9 +1394,13 @@ impl MachineDaemonService {
             }
             tracing::info!(matched_rows = emitted_rows, "Daemon query stream completed");
             Ok(())
-        }
-        .instrument(span)
-        .await
+            }.await;
+            eyre::Ok(result)
+        });
+        request
+            .instrument(span)
+            .await
+            .map_err(|error| MachineError::degraded(error.to_string()))?
     }
 }
 
@@ -1475,7 +1491,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         );
         let response = async move {
             tracing::info!(service_name = %service_name, "Daemon shutdown requested");
-            self.cancellation_token
+            self.cancellation_scope
                 .request_cancel("Daemon shutdown requested");
             if let Some(handle) = current_service_status_handle() {
                 let _ = set_service_status(handle, SERVICE_STOP_PENDING);
@@ -1729,7 +1745,7 @@ impl MachineDaemonRpc for MachineDaemonService {
         if log_stream_request.follow {
             let mut live_rx = daemon_log_hub().subscribe();
             loop {
-                if self.cancellation_token.is_cancelled() {
+                if self.cancellation_scope.is_cancelled() {
                     let _ = logs
                         .send(crate::machine::daemon_log::DaemonLogWireEvent {
                             timestamp_unix_ms: crate::machine::config::current_unix_ms(),
@@ -1867,21 +1883,21 @@ fn collect_published_drive_summaries_for_letters(
 pub fn run_daemon(
     service_mode: bool,
     console_pid: Option<u32>,
-    cancellation_token: CancellationToken,
+    cancellation_scope: CancellationScope,
 ) -> eyre::Result<()> {
     if service_mode {
-        run_windows_service_dispatcher(cancellation_token)
+        run_windows_service_dispatcher(cancellation_scope)
     } else {
         let config = load_machine_config()?
             .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
-        run_daemon_runtime(config, console_pid, cancellation_token)
+        run_daemon_runtime(config, console_pid, cancellation_scope)
     }
 }
 
-fn run_windows_service_dispatcher(cancellation_token: CancellationToken) -> eyre::Result<()> {
+fn run_windows_service_dispatcher(cancellation_scope: CancellationScope) -> eyre::Result<()> {
     *SERVICE_CANCELLATION_TOKEN
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation_token);
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation_scope);
     let config = load_machine_config()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let mut service_name = crate::machine::security::encode_wide(&config.service_name);
@@ -1985,7 +2001,7 @@ fn set_service_status(
 fn run_daemon_runtime(
     config: MachineConfig,
     console_pid: Option<u32>,
-    cancellation_token: CancellationToken,
+    cancellation_scope: CancellationScope,
 ) -> eyre::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2007,7 +2023,7 @@ fn run_daemon_runtime(
         );
         debug!("Machine cache protection check completed");
         let service =
-            MachineDaemonService::new(config.clone(), console_pid, cancellation_token.clone());
+            MachineDaemonService::new(config.clone(), console_pid, cancellation_scope.clone());
         let last_activity = Arc::new(StdMutex::new(Instant::now()));
         let active_connections = Arc::new(AtomicUsize::new(0));
         let idle_timeout = Duration::from_secs(config.idle_timeout_secs);
@@ -2022,7 +2038,7 @@ fn run_daemon_runtime(
         );
 
         loop {
-            if cancellation_token.is_cancelled() {
+            if cancellation_scope.is_cancelled() {
                 break;
             }
             if active_connections.load(Ordering::Relaxed) == 0
@@ -2107,7 +2123,7 @@ pub fn sync_machine_cache(
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
     console_pid: Option<u32>,
-    cancel: &CancellationToken,
+    cancel: &CancellationScope,
 ) -> eyre::Result<MachineCacheSyncResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -2126,7 +2142,7 @@ async fn sync_machine_cache_async(
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
     console_pid: Option<u32>,
-    cancel: &CancellationToken,
+    cancel: &CancellationScope,
 ) -> eyre::Result<MachineCacheSyncResult> {
     crate::windows_utils::elevation::ensure_elevated(console_pid)?;
     std::fs::create_dir_all(sync_dir)?;
@@ -2252,70 +2268,77 @@ mod tests {
     // dwrk[verify sync.skip.preserves-snapshot-state]
     #[tokio::test]
     async fn skipped_snapshots_preserve_sidecars_and_cached_mft() -> eyre::Result<()> {
-        for (mft_exists, index_exists) in [(true, true), (false, true), (true, false)] {
-            let temp = tempfile::tempdir()?;
-            let paths = published_drive_paths(temp.path(), 'C');
-            // A cached stream containing one unused record builds an empty base index.
-            let mut mft = vec![0; 1024];
-            mft[0x1c..0x20].copy_from_slice(&1024u32.to_le_bytes());
-            if mft_exists {
-                std::fs::write(&paths.mft_path, &mft)?;
-            }
-            if index_exists {
-                std::fs::write(&paths.base_index_path, b"retained base index")?;
-            }
-            SearchIndexBytesMut::from_rows(
-                SearchIndexHeader::new('C', 1024, 1),
-                &[SearchIndexPathRow {
-                    path: String::from(r"C:\added.txt").into(),
-                    has_deleted_entries: false,
-                }],
-            )?
-            .write_to_path(&paths.overlay_index_path)?;
-            let checkpoint = PublishedCheckpoint {
-                journal_id: Some(7),
-                snapshot_usn: Some(100),
-                last_usn: Some(150),
-                overlay_row_count: 1,
-                ..PublishedCheckpoint::empty('C', crate::search_index::format::SEARCH_INDEX_VERSION)
-            };
-            save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
-            let overlay_bytes = std::fs::read(&paths.overlay_index_path)?;
-            let checkpoint_bytes = std::fs::read(&paths.checkpoint_path)?;
-            let infos = resolve_drive_infos_in_dir_for_letters(temp.path(), ['C'])?;
-            let work = SyncWork::prepare(infos, &IfExistsOutputBehaviour::Skip)?;
-            assert!(work.mft_drives.is_empty());
-            assert_eq!(work.index_drives.len(), usize::from(!index_exists));
-            let fresh_snapshots = work.mft_drives.clone();
-            execute_sync(work, None, &CancellationToken::new()).await?;
-            let cursors = FxHashMap::from_iter([(
-                'C',
-                JournalCursor {
-                    journal_id: 7,
-                    first_usn: 0,
-                    next_usn: 999,
-                    lowest_valid_usn: 0,
-                    max_usn: u64::MAX,
-                },
-            )]);
-            publish_machine_snapshots(temp.path(), fresh_snapshots, &cursors)?;
-            assert_eq!(std::fs::read(&paths.overlay_index_path)?, overlay_bytes);
-            assert_eq!(std::fs::read(&paths.checkpoint_path)?, checkpoint_bytes);
-            if mft_exists {
-                assert_eq!(std::fs::read(&paths.mft_path)?, mft);
-            } else {
-                assert!(!paths.mft_path.exists());
-            }
-            if index_exists {
-                assert_eq!(
-                    std::fs::read(&paths.base_index_path)?,
-                    b"retained base index"
-                );
-            } else {
-                assert!(paths.base_index_path.exists());
-            }
-        }
-        Ok(())
+        CancellationToken::new()
+            .with_async_scope(|scope| async move {
+                for (mft_exists, index_exists) in [(true, true), (false, true), (true, false)] {
+                    let temp = tempfile::tempdir()?;
+                    let paths = published_drive_paths(temp.path(), 'C');
+                    // A cached stream containing one unused record builds an empty base index.
+                    let mut mft = vec![0; 1024];
+                    mft[0x1c..0x20].copy_from_slice(&1024u32.to_le_bytes());
+                    if mft_exists {
+                        std::fs::write(&paths.mft_path, &mft)?;
+                    }
+                    if index_exists {
+                        std::fs::write(&paths.base_index_path, b"retained base index")?;
+                    }
+                    SearchIndexBytesMut::from_rows(
+                        SearchIndexHeader::new('C', 1024, 1),
+                        &[SearchIndexPathRow {
+                            path: String::from(r"C:\added.txt").into(),
+                            has_deleted_entries: false,
+                        }],
+                    )?
+                    .write_to_path(&paths.overlay_index_path)?;
+                    let checkpoint = PublishedCheckpoint {
+                        journal_id: Some(7),
+                        snapshot_usn: Some(100),
+                        last_usn: Some(150),
+                        overlay_row_count: 1,
+                        ..PublishedCheckpoint::empty(
+                            'C',
+                            crate::search_index::format::SEARCH_INDEX_VERSION,
+                        )
+                    };
+                    save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
+                    let overlay_bytes = std::fs::read(&paths.overlay_index_path)?;
+                    let checkpoint_bytes = std::fs::read(&paths.checkpoint_path)?;
+                    let infos = resolve_drive_infos_in_dir_for_letters(temp.path(), ['C'])?;
+                    let work = SyncWork::prepare(infos, &IfExistsOutputBehaviour::Skip)?;
+                    assert!(work.mft_drives.is_empty());
+                    assert_eq!(work.index_drives.len(), usize::from(!index_exists));
+                    let fresh_snapshots = work.mft_drives.clone();
+                    execute_sync(work, None, &scope).await?;
+                    let cursors = FxHashMap::from_iter([(
+                        'C',
+                        JournalCursor {
+                            journal_id: 7,
+                            first_usn: 0,
+                            next_usn: 999,
+                            lowest_valid_usn: 0,
+                            max_usn: u64::MAX,
+                        },
+                    )]);
+                    publish_machine_snapshots(temp.path(), fresh_snapshots, &cursors)?;
+                    assert_eq!(std::fs::read(&paths.overlay_index_path)?, overlay_bytes);
+                    assert_eq!(std::fs::read(&paths.checkpoint_path)?, checkpoint_bytes);
+                    if mft_exists {
+                        assert_eq!(std::fs::read(&paths.mft_path)?, mft);
+                    } else {
+                        assert!(!paths.mft_path.exists());
+                    }
+                    if index_exists {
+                        assert_eq!(
+                            std::fs::read(&paths.base_index_path)?,
+                            b"retained base index"
+                        );
+                    } else {
+                        assert!(paths.base_index_path.exists());
+                    }
+                }
+                Ok(())
+            })
+            .await
     }
 
     #[test]
@@ -2443,142 +2466,154 @@ mod tests {
 
     #[test]
     fn cancelled_drive_query_does_not_mark_drive_snapshot_only() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let cancel = CancellationToken::new();
-        cancel.request_cancel("test cancellation");
-        let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let cancel = scope.clone();
+            cancel.request_cancel("test cancellation");
+            let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
 
-        let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
+            let result = state.query_with_cancel(&QueryPlan::new("music"), &cancel)?;
 
-        assert!(result.rows.is_empty());
-        assert!(result.degraded.is_none());
-        assert!(state.snapshot_only.is_none());
-        assert!(state.degraded.is_none());
-        Ok(())
+            assert!(result.rows.is_empty());
+            assert!(result.degraded.is_none());
+            assert!(state.snapshot_only.is_none());
+            assert!(state.degraded.is_none());
+            Ok(())
+        })
     }
 
     #[test]
     fn drive_query_load_failure_without_cancel_reports_degraded() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let cancel = CancellationToken::new();
-        let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let cancel = scope.clone();
+            let mut state = state(&temp_dir, 'Z', DriveWorkerRuntimeMode::LiveObserved);
 
-        let error = state
-            .query_with_cancel(&QueryPlan::new("music"), &cancel)
-            .expect_err("missing published files should degrade when not cancelled");
+            let error = state
+                .query_with_cancel(&QueryPlan::new("music"), &cancel)
+                .expect_err("missing published files should degrade when not cancelled");
 
-        assert!(
-            error
-                .message
-                .contains("Drive Z has no published MFT snapshot")
-        );
-        assert!(!cancel.is_cancelled());
-        Ok(())
+            assert!(
+                error
+                    .message
+                    .contains("Drive Z has no published MFT snapshot")
+            );
+            assert!(!cancel.is_cancelled());
+            Ok(())
+        })
     }
 
     #[test]
     fn published_index_only_mode_queries_base_index_without_live_state() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let paths = published_drive_paths(temp_dir.path(), 'C');
-        SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, 1),
-            &[SearchIndexPathRow {
-                path: String::from(r"C:\music\track.flac").into(),
-                has_deleted_entries: false,
-            }],
-        )?
-        .write_to_path(&paths.base_index_path)?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let paths = published_drive_paths(temp_dir.path(), 'C');
+            SearchIndexBytesMut::from_rows(
+                SearchIndexHeader::new('C', 123, 1),
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\music\track.flac").into(),
+                    has_deleted_entries: false,
+                }],
+            )?
+            .write_to_path(&paths.base_index_path)?;
 
-        let cancel = CancellationToken::new();
-        let mut state = state(&temp_dir, 'C', DriveWorkerRuntimeMode::PublishedIndexOnly);
+            let cancel = scope.clone();
+            let mut state = state(&temp_dir, 'C', DriveWorkerRuntimeMode::PublishedIndexOnly);
 
-        let result = state.query_with_cancel(&QueryPlan::new("track"), &cancel)?;
+            let result = state.query_with_cancel(&QueryPlan::new("track"), &cancel)?;
 
-        assert_eq!(result.rows.len(), 1);
-        assert_eq!(result.rows[0].path.as_str(), r"C:\music\track.flac");
-        assert!(result.degraded.is_none());
-        assert!(state.state.is_none());
-        assert!(state.snapshot_only.is_none());
-        assert!(state.degraded.is_none());
-        Ok(())
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0].path.as_str(), r"C:\music\track.flac");
+            assert!(result.degraded.is_none());
+            assert!(state.state.is_none());
+            assert!(state.snapshot_only.is_none());
+            assert!(state.degraded.is_none());
+            Ok(())
+        })
     }
 
     #[test]
     fn published_index_only_worker_ignores_warm_requests() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let worker = DriveWorker::start(
-            'C',
-            temp_dir.path().to_path_buf(),
-            DriveWorkerRuntimeMode::PublishedIndexOnly,
-            &CancellationToken::new(),
-        );
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let worker = DriveWorker::start(
+                'C',
+                temp_dir.path().to_path_buf(),
+                DriveWorkerRuntimeMode::PublishedIndexOnly,
+                &scope,
+            );
 
-        worker.warm();
-        let snapshot = wait_for_drive_worker_snapshot(&worker, |snapshot| !snapshot.loading);
-        worker.stop();
+            worker.warm();
+            let snapshot = wait_for_drive_worker_snapshot(&worker, |snapshot| !snapshot.loading);
+            worker.stop();
+            scope.bail_if_cancelled()?;
 
-        assert!(!snapshot.loaded);
-        assert!(!snapshot.loading);
-        assert!(snapshot.snapshot_only.is_none());
-        assert!(snapshot.degraded.is_none());
-        assert_eq!(snapshot.active_jobs, 0);
-        Ok(())
+            assert!(!snapshot.loaded);
+            assert!(!snapshot.loading);
+            assert!(snapshot.snapshot_only.is_none());
+            assert!(snapshot.degraded.is_none());
+            assert_eq!(snapshot.active_jobs, 0);
+            Ok(())
+        })
     }
 
     #[test]
     fn warm_next_drive_worker_creates_live_observed_worker_with_snapshot_fallback()
     -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let paths = published_drive_paths(temp_dir.path(), 'C');
-        std::fs::create_dir_all(
-            paths
-                .base_index_path
-                .parent()
-                .expect("published index path should have a parent"),
-        )?;
-        std::fs::write(&paths.mft_path, b"not a real mft snapshot")?;
-        SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, 1),
-            &[SearchIndexPathRow {
-                path: String::from(r"C:\music\track.flac").into(),
-                has_deleted_entries: false,
-            }],
-        )?
-        .write_to_path(&paths.base_index_path)?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let paths = published_drive_paths(temp_dir.path(), 'C');
+            std::fs::create_dir_all(
+                paths
+                    .base_index_path
+                    .parent()
+                    .expect("published index path should have a parent"),
+            )?;
+            std::fs::write(&paths.mft_path, b"not a real mft snapshot")?;
+            SearchIndexBytesMut::from_rows(
+                SearchIndexHeader::new('C', 123, 1),
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\music\track.flac").into(),
+                    has_deleted_entries: false,
+                }],
+            )?
+            .write_to_path(&paths.base_index_path)?;
 
-        let mut state = DaemonRuntimeState {
-            owner_sid: String::new(),
-            sync_dir: temp_dir.path().to_path_buf(),
-            console_pid: None,
-            drives: FxHashMap::default(),
-            degraded: FxHashMap::default(),
-            loading: FxHashMap::default(),
-            active_jobs: 0,
-            warm_drive_letters: vec!['C'],
-            next_warm_drive_index: 0,
-            warm_not_before: Instant::now()
-                .checked_sub(Duration::from_secs(1))
-                .expect("instant subtraction within one second should succeed"),
-        };
-        let drive_workers = StdMutex::new(FxHashMap::default());
+            let mut state = DaemonRuntimeState {
+                owner_sid: String::new(),
+                sync_dir: temp_dir.path().to_path_buf(),
+                console_pid: None,
+                drives: FxHashMap::default(),
+                degraded: FxHashMap::default(),
+                loading: FxHashMap::default(),
+                active_jobs: 0,
+                warm_drive_letters: vec!['C'],
+                next_warm_drive_index: 0,
+                warm_not_before: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("instant subtraction within one second should succeed"),
+            };
+            let drive_workers = StdMutex::new(FxHashMap::default());
 
-        let cancellation_token = CancellationToken::new();
-        warm_next_drive_worker(&mut state, &drive_workers, &cancellation_token);
+            let cancellation_token = scope.clone();
+            warm_next_drive_worker(&mut state, &drive_workers, &cancellation_token);
 
-        let worker = drive_workers
-            .lock()
-            .expect("drive worker registry poisoned")
-            .get(&'C')
-            .expect("warmup should create a drive worker")
-            .clone();
-        let snapshot =
-            wait_for_drive_worker_snapshot(&worker, |snapshot| snapshot.snapshot_only.is_some());
-        worker.stop();
+            let worker = drive_workers
+                .lock()
+                .expect("drive worker registry poisoned")
+                .get(&'C')
+                .expect("warmup should create a drive worker")
+                .clone();
+            let snapshot = wait_for_drive_worker_snapshot(&worker, |snapshot| {
+                snapshot.snapshot_only.is_some()
+            });
+            worker.stop();
 
-        assert!(!snapshot.loaded);
-        assert!(!snapshot.loading);
-        assert!(snapshot.snapshot_only.is_some());
-        assert!(snapshot.degraded.is_none());
-        Ok(())
+            assert!(!snapshot.loaded);
+            assert!(!snapshot.loading);
+            assert!(snapshot.snapshot_only.is_some());
+            assert!(snapshot.degraded.is_none());
+            Ok(())
+        })
     }
 }

@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::presentation::ResultListPresentation;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -10,6 +9,7 @@ use figue::{self as args};
 use std::io::IsTerminal;
 use std::io::Write;
 use std::ops::ControlFlow;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::instrument;
 
@@ -57,7 +57,7 @@ impl QueryArgs {
     /// drive letters cannot be resolved, the query scope cannot be canonicalized,
     /// or if reading/parsing index files fails.
     #[instrument(level = "info", skip_all, fields(query = ?self.plan.query, query_scope = ?self.plan.r#in, profile = ?self.plan.profile, limit = ?self.plan.limit, include_deleted = self.plan.include_deleted, only_deleted = self.plan.only_deleted, show_filtered = self.plan.show_filtered, only_filtered = self.plan.only_filtered, density = ?self.density))]
-    pub fn invoke_and_print(self, cancellation_token: &CancellationToken) -> eyre::Result<()> {
+    pub fn invoke_and_print(self, cancellation_scope: &CancellationScope) -> eyre::Result<()> {
         let stdout_is_terminal = std::io::stdout().is_terminal();
         let colorize = stdout_is_terminal
             && (self.plan.include_deleted
@@ -73,7 +73,7 @@ impl QueryArgs {
 
         if !use_columns {
             let mut stdout = std::io::stdout().lock();
-            self.visit_rows(cancellation_token, |row| {
+            self.visit_rows(cancellation_scope, |row| {
                 row.render_path(&mut stdout, colorize)?;
                 writeln!(&mut stdout)?;
                 Ok(ControlFlow::Continue(()))
@@ -82,7 +82,7 @@ impl QueryArgs {
         }
 
         let mut results = Vec::new();
-        self.visit_rows(cancellation_token, |row| {
+        self.visit_rows(cancellation_scope, |row| {
             results.push(row);
             Ok(ControlFlow::Continue(()))
         })?;
@@ -141,11 +141,11 @@ impl QueryArgs {
     /// be canonicalized, or if daemon/disk-backed index reads fail.
     pub fn visit_rows(
         &self,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
         visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
         self.prepare_runtime()?
-            .visit_rows(self.plan.clone(), cancellation_token, visit)
+            .visit_rows(self.plan.clone(), cancellation_scope, visit)
     }
 
     fn runtime(&self) -> QueryRuntime {
@@ -222,21 +222,26 @@ mod tests {
 
     #[test]
     fn conflicting_daemon_flags_fail_before_visit_runtime_access() {
-        let args = QueryArgs {
-            daemon: true,
-            no_daemon: true,
-            ..QueryArgs::new("Cargo.toml")
-        };
+        CancellationToken::new()
+            .with_scope(|scope| {
+                let args = QueryArgs {
+                    daemon: true,
+                    no_daemon: true,
+                    ..QueryArgs::new("Cargo.toml")
+                };
 
-        let error = args
-            .visit_rows(&CancellationToken::new(), |_| Ok(ControlFlow::Continue(())))
-            .expect_err("conflicting daemon flags should fail early");
+                let error = args
+                    .visit_rows(&scope, |_| Ok(ControlFlow::Continue(())))
+                    .expect_err("conflicting daemon flags should fail early");
 
-        assert!(
-            error
-                .to_string()
-                .contains("`--daemon` and `--no-daemon` cannot be used together")
-        );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("`--daemon` and `--no-daemon` cannot be used together")
+                );
+                eyre::Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

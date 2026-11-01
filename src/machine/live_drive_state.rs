@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::machine::config::OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::PublishedDrivePaths;
@@ -33,6 +32,7 @@ use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
@@ -109,7 +109,7 @@ impl LiveDriveState {
     pub fn load(
         sync_dir: &Path,
         paths: PublishedDrivePaths,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?.wrap_err_with(|| {
             format!(
@@ -199,7 +199,7 @@ impl LiveDriveState {
     pub fn load_for_observation_with_cancel(
         sync_dir: &Path,
         paths: PublishedDrivePaths,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?;
         let journal = VolumeUsnJournalHandle::open(paths.drive_letter)?;
@@ -290,7 +290,7 @@ impl LiveDriveState {
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
     pub fn observe_usn_events_with_cancel(
         &mut self,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<Vec<ObservedUsnEvent>> {
         let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
         let cursor = journal.query_cursor()?;
@@ -351,7 +351,7 @@ impl LiveDriveState {
     ///
     /// Returns an error if reading additional journal records fails or cancellation is requested.
     #[instrument(level = "debug", skip_all, fields(drive = %self.drive_letter, current_next_usn = self.current_next_usn))]
-    pub fn refresh(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+    pub fn refresh(&mut self, cancel: &CancellationScope) -> eyre::Result<()> {
         let journal = VolumeUsnJournalHandle::open(self.drive_letter)?;
         let cursor = journal.query_cursor()?;
         validate_active_cursor(
@@ -371,7 +371,7 @@ impl LiveDriveState {
     pub fn query(
         &mut self,
         request: &QueryPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
         if cancel.is_cancelled() {
             return Ok(Vec::new());
@@ -393,7 +393,7 @@ impl LiveDriveState {
     ///
     /// Returns an error if the overlay index or checkpoint cannot be written.
     #[instrument(level = "info", skip_all, fields(drive = %self.drive_letter, published_last_usn = self.published_last_usn, current_next_usn = self.current_next_usn))]
-    pub fn flush_published(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+    pub fn flush_published(&mut self, cancel: &CancellationScope) -> eyre::Result<()> {
         self.ensure_full_query_cache(cancel)?;
         let overlay_rows = self
             .overlay_rows_cache
@@ -430,7 +430,7 @@ impl LiveDriveState {
     fn refresh_from_journal_with_cancel(
         &mut self,
         journal: &VolumeUsnJournalHandle,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<()> {
         let batch = journal.read_available_since(self.current_next_usn, self.journal_id, cancel)?;
         if batch.next_usn == self.current_next_usn {
@@ -472,7 +472,7 @@ impl LiveDriveState {
         Ok(())
     }
 
-    fn ensure_current_query_cache(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+    fn ensure_current_query_cache(&mut self, cancel: &CancellationScope) -> eyre::Result<()> {
         if !self.query_cache_dirty
             && self.current_rows_cache.is_some()
             && self.current_index_bytes_cache.is_some()
@@ -517,7 +517,7 @@ impl LiveDriveState {
         Ok(())
     }
 
-    fn ensure_full_query_cache(&mut self, cancel: &CancellationToken) -> eyre::Result<()> {
+    fn ensure_full_query_cache(&mut self, cancel: &CancellationScope) -> eyre::Result<()> {
         self.ensure_current_query_cache(cancel)?;
         if self.overlay_rows_cache.is_some() && self.overlay_index_bytes_cache.is_some() {
             return Ok(());
@@ -560,7 +560,7 @@ impl LiveDriveState {
         &mut self,
         request: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> Result<Vec<QueryResultRow>, MachineError> {
         self.ensure_current_query_cache(cancel)
             .map_err(|error| MachineError::degraded(format!("{error:#}")))?;
@@ -611,7 +611,7 @@ impl LiveDriveGraph {
     fn from_mft_with_cancel(
         drive_letter: char,
         mft_file: &MftFile,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
         let file_names = fast_entry::collect_filenames(mft_file);
         let records = mft_file.iter_records().collect::<Vec<_>>();
@@ -733,7 +733,7 @@ impl LiveDriveGraph {
         }
     }
 
-    fn project_rows(&self, cancel: &CancellationToken) -> eyre::Result<Vec<SearchIndexPathRow>> {
+    fn project_rows(&self, cancel: &CancellationScope) -> eyre::Result<Vec<SearchIndexPathRow>> {
         self.projected_rows(cancel).map(|rows| {
             rows.into_iter()
                 .map(|projected| SearchIndexPathRow {
@@ -744,7 +744,7 @@ impl LiveDriveGraph {
         })
     }
 
-    fn projected_rows(&self, cancel: &CancellationToken) -> eyre::Result<Vec<ProjectedPath>> {
+    fn projected_rows(&self, cancel: &CancellationScope) -> eyre::Result<Vec<ProjectedPath>> {
         let mut memo = FxHashMap::<u64, Vec<ProjectedPath>>::default();
         let mut visiting = FxHashSet::<u64>::default();
         let mut path_states = BTreeMap::<Pathlike, bool>::new();
@@ -1194,35 +1194,40 @@ mod tests {
 
     #[test]
     fn rename_events_project_old_path_deleted_and_new_path_live() {
-        let mut graph = base_graph();
-        graph.apply_event(&UsnEvent {
-            frn: 10,
-            parent_frn: 5,
-            usn: 11,
-            reason: crate::machine::usn::USN_REASON_RENAME_OLD_NAME,
-            file_attributes: 0,
-            name: String::from("alpha.txt"),
-        });
-        graph.apply_event(&UsnEvent {
-            frn: 10,
-            parent_frn: 5,
-            usn: 12,
-            reason: crate::machine::usn::USN_REASON_RENAME_NEW_NAME,
-            file_attributes: 0,
-            name: String::from("beta.txt"),
-        });
+        CancellationToken::new()
+            .with_scope(|scope| {
+                let mut graph = base_graph();
+                graph.apply_event(&UsnEvent {
+                    frn: 10,
+                    parent_frn: 5,
+                    usn: 11,
+                    reason: crate::machine::usn::USN_REASON_RENAME_OLD_NAME,
+                    file_attributes: 0,
+                    name: String::from("alpha.txt"),
+                });
+                graph.apply_event(&UsnEvent {
+                    frn: 10,
+                    parent_frn: 5,
+                    usn: 12,
+                    reason: crate::machine::usn::USN_REASON_RENAME_NEW_NAME,
+                    file_attributes: 0,
+                    name: String::from("beta.txt"),
+                });
 
-        let rows = graph
-            .project_rows(&CancellationToken::new())
-            .expect("projecting test graph should succeed");
-        assert!(
-            rows.iter()
-                .any(|row| row.path == r"C:\beta.txt" && !row.has_deleted_entries)
-        );
-        assert!(
-            rows.iter()
-                .any(|row| row.path == r"C:\alpha.txt" && row.has_deleted_entries)
-        );
+                let rows = graph
+                    .project_rows(&scope)
+                    .expect("projecting test graph should succeed");
+                assert!(
+                    rows.iter()
+                        .any(|row| row.path == r"C:\beta.txt" && !row.has_deleted_entries)
+                );
+                assert!(
+                    rows.iter()
+                        .any(|row| row.path == r"C:\alpha.txt" && row.has_deleted_entries)
+                );
+                eyre::Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1251,344 +1256,367 @@ mod tests {
 
     #[test]
     fn live_query_filters_projected_paths_by_query_text() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let mut graph = base_graph();
-        graph.nodes.insert(
-            11,
-            LiveNode {
-                is_directory: false,
-                links: vec![LiveNodeLink {
-                    parent_frn: 5,
-                    name: String::from("music.flac"),
-                    is_deleted: false,
-                }],
-            },
-        );
-        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
-        let cancel = CancellationToken::new();
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let mut graph = base_graph();
+            graph.nodes.insert(
+                11,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn: 5,
+                        name: String::from("music.flac"),
+                        is_deleted: false,
+                    }],
+                },
+            );
+            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let cancel = scope.clone();
 
-        let rows = state
-            .query(&QueryPlan::new("music"), &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&QueryPlan::new("music"), &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), r"C:\music.flac");
-        assert!(state.current_index_bytes_cache.is_some());
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.as_str(), r"C:\music.flac");
+            assert!(state.current_index_bytes_cache.is_some());
+            Ok(())
+        })
     }
 
     #[test]
     fn live_query_cancelled_before_index_query_returns_no_rows() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let mut state = state_from_graph(cache_dir.path(), 'C', base_graph());
-        let cancel = CancellationToken::new();
-        cancel.request_cancel("test cancellation");
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let mut state = state_from_graph(cache_dir.path(), 'C', base_graph());
+            let cancel = scope.clone();
+            cancel.request_cancel("test cancellation");
 
-        let rows = state
-            .query(&QueryPlan::new("alpha"), &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&QueryPlan::new("alpha"), &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert!(rows.is_empty());
-        assert!(state.current_index_bytes_cache.is_none());
-        Ok(())
+            assert!(rows.is_empty());
+            assert!(state.current_index_bytes_cache.is_none());
+            Ok(())
+        })
     }
 
     #[test]
     fn live_query_limit_applies_after_deleted_filtering() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let mut graph = base_graph();
-        graph
-            .nodes
-            .get_mut(&10)
-            .expect("alpha node should exist")
-            .links[0]
-            .is_deleted = true;
-        graph.nodes.insert(
-            11,
-            LiveNode {
-                is_directory: false,
-                links: vec![LiveNodeLink {
-                    parent_frn: 5,
-                    name: String::from("beta.txt"),
-                    is_deleted: false,
-                }],
-            },
-        );
-        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
-        let request = QueryPlan {
-            limit: QueryLimit::from(1),
-            ..QueryPlan::new(".txt>")
-        };
-        let cancel = CancellationToken::new();
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let mut graph = base_graph();
+            graph
+                .nodes
+                .get_mut(&10)
+                .expect("alpha node should exist")
+                .links[0]
+                .is_deleted = true;
+            graph.nodes.insert(
+                11,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn: 5,
+                        name: String::from("beta.txt"),
+                        is_deleted: false,
+                    }],
+                },
+            );
+            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let request = QueryPlan {
+                limit: QueryLimit::from(1),
+                ..QueryPlan::new(".txt>")
+            };
+            let cancel = scope.clone();
 
-        let rows = state
-            .query(&request, &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&request, &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), r"C:\beta.txt");
-        assert!(!rows[0].has_deleted_entries);
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.as_str(), r"C:\beta.txt");
+            assert!(!rows[0].has_deleted_entries);
+            Ok(())
+        })
     }
 
     #[test]
     fn live_query_only_deleted_preserves_deleted_state_filtering() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let mut graph = base_graph();
-        graph
-            .nodes
-            .get_mut(&10)
-            .expect("alpha node should exist")
-            .links[0]
-            .is_deleted = true;
-        graph.nodes.insert(
-            11,
-            LiveNode {
-                is_directory: false,
-                links: vec![LiveNodeLink {
-                    parent_frn: 5,
-                    name: String::from("beta.txt"),
-                    is_deleted: false,
-                }],
-            },
-        );
-        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
-        let request = QueryPlan {
-            only_deleted: true,
-            ..QueryPlan::new(".txt>")
-        };
-        let cancel = CancellationToken::new();
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let mut graph = base_graph();
+            graph
+                .nodes
+                .get_mut(&10)
+                .expect("alpha node should exist")
+                .links[0]
+                .is_deleted = true;
+            graph.nodes.insert(
+                11,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn: 5,
+                        name: String::from("beta.txt"),
+                        is_deleted: false,
+                    }],
+                },
+            );
+            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let request = QueryPlan {
+                only_deleted: true,
+                ..QueryPlan::new(".txt>")
+            };
+            let cancel = scope.clone();
 
-        let rows = state
-            .query(&request, &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&request, &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), r"C:\alpha.txt");
-        assert!(rows[0].has_deleted_entries);
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.as_str(), r"C:\alpha.txt");
+            assert!(rows[0].has_deleted_entries);
+            Ok(())
+        })
     }
 
     #[cfg(windows)]
     #[test]
     fn live_query_returns_request_invalid_for_unresolvable_scope() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let drive_letter = drive_letter_from_path(cache_dir.path());
-        let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
-        let missing_scope = cache_dir.path().join("missing-scope-dir");
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let drive_letter = drive_letter_from_path(cache_dir.path());
+            let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
+            let missing_scope = cache_dir.path().join("missing-scope-dir");
 
-        let error = state
-            .query(
-                &QueryPlan {
-                    r#in: vec![missing_scope.to_string_lossy().into_owned()],
-                    ..QueryPlan::new("alpha")
-                },
-                &CancellationToken::new(),
-            )
-            .expect_err("missing scope should be rejected");
+            let error = state
+                .query(
+                    &QueryPlan {
+                        r#in: vec![missing_scope.to_string_lossy().into_owned()],
+                        ..QueryPlan::new("alpha")
+                    },
+                    &scope,
+                )
+                .expect_err("missing scope should be rejected");
 
-        assert_eq!(error.kind, MachineErrorKind::RequestInvalid);
-        assert!(error.message.contains("Failed resolving query scope"));
-        Ok(())
+            assert_eq!(error.kind, MachineErrorKind::RequestInvalid);
+            assert!(error.message.contains("Failed resolving query scope"));
+            Ok(())
+        })
     }
 
     #[cfg(windows)]
     #[test]
     fn live_query_returns_degraded_for_invalid_discovered_rule_file() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let drive_letter = drive_letter_from_path(cache_dir.path());
-        let bad_rules_path = cache_dir.path().join("broken.teamy_mft_rules");
-        std::fs::write(&bad_rules_path, "THIS IS NOT A VALID RULE\n")?;
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let drive_letter = drive_letter_from_path(cache_dir.path());
+            let bad_rules_path = cache_dir.path().join("broken.teamy_mft_rules");
+            std::fs::write(&bad_rules_path, "THIS IS NOT A VALID RULE\n")?;
 
-        let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
-        write_rule_discovery_index(&state.paths, &[bad_rules_path.as_path()])?;
+            let mut state = state_from_graph(cache_dir.path(), drive_letter, base_graph());
+            write_rule_discovery_index(&state.paths, &[bad_rules_path.as_path()])?;
 
-        let error = state
-            .query(&QueryPlan::new("alpha"), &CancellationToken::new())
-            .expect_err("invalid discovered rules should degrade live query");
+            let error = state
+                .query(&QueryPlan::new("alpha"), &scope)
+                .expect_err("invalid discovered rules should degrade live query");
 
-        assert_eq!(error.kind, MachineErrorKind::Degraded);
-        assert!(
-            error.message.contains("unsupported rule syntax"),
-            "unexpected degraded message: {}",
-            error.message
-        );
-        Ok(())
+            assert_eq!(error.kind, MachineErrorKind::Degraded);
+            assert!(
+                error.message.contains("unsupported rule syntax"),
+                "unexpected degraded message: {}",
+                error.message
+            );
+            Ok(())
+        })
     }
 
     #[cfg(windows)]
     #[test]
     fn live_query_preserves_directory_scope_filtering_against_canonical_paths() -> eyre::Result<()>
     {
-        let fixture_dir = tempfile::tempdir()?;
-        let cache_dir = tempfile::tempdir()?;
-        let scope_dir = fixture_dir.path().join("repo");
-        let nested_file = scope_dir.join("music").join("song.mp3");
-        let sibling_file = fixture_dir.path().join("repo2").join("song.mp3");
+        CancellationToken::new().with_scope(|scope| {
+            let fixture_dir = tempfile::tempdir()?;
+            let cache_dir = tempfile::tempdir()?;
+            let scope_dir = fixture_dir.path().join("repo");
+            let nested_file = scope_dir.join("music").join("song.mp3");
+            let sibling_file = fixture_dir.path().join("repo2").join("song.mp3");
 
-        std::fs::create_dir_all(
-            nested_file
-                .parent()
-                .expect("nested file should have a parent directory"),
-        )?;
-        std::fs::create_dir_all(
-            sibling_file
-                .parent()
-                .expect("sibling file should have a parent directory"),
-        )?;
-        std::fs::write(&nested_file, [])?;
-        std::fs::write(&sibling_file, [])?;
+            std::fs::create_dir_all(
+                nested_file
+                    .parent()
+                    .expect("nested file should have a parent directory"),
+            )?;
+            std::fs::create_dir_all(
+                sibling_file
+                    .parent()
+                    .expect("sibling file should have a parent directory"),
+            )?;
+            std::fs::write(&nested_file, [])?;
+            std::fs::write(&sibling_file, [])?;
 
-        let scope_dir = dunce::canonicalize(&scope_dir)?;
-        let nested_file = dunce::canonicalize(&nested_file)?;
-        let sibling_file = dunce::canonicalize(&sibling_file)?;
-        let drive_letter = drive_letter_from_path(&scope_dir);
-        let graph = graph_from_file_paths(&[nested_file.as_path(), sibling_file.as_path()]);
-        let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
-        let request = QueryPlan {
-            r#in: vec![scope_dir.to_string_lossy().into_owned()],
-            ..QueryPlan::new(".mp3>")
-        };
-        let cancel = CancellationToken::new();
+            let scope_dir = dunce::canonicalize(&scope_dir)?;
+            let nested_file = dunce::canonicalize(&nested_file)?;
+            let sibling_file = dunce::canonicalize(&sibling_file)?;
+            let drive_letter = drive_letter_from_path(&scope_dir);
+            let graph = graph_from_file_paths(&[nested_file.as_path(), sibling_file.as_path()]);
+            let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
+            let request = QueryPlan {
+                r#in: vec![scope_dir.to_string_lossy().into_owned()],
+                ..QueryPlan::new(".mp3>")
+            };
+            let cancel = scope.clone();
 
-        let rows = state
-            .query(&request, &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&request, &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), nested_file.to_string_lossy());
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.as_str(), nested_file.to_string_lossy());
+            Ok(())
+        })
     }
 
     #[cfg(windows)]
     #[test]
     fn live_query_preserves_exact_file_scope_filtering_against_canonical_paths() -> eyre::Result<()>
     {
-        let fixture_dir = tempfile::tempdir()?;
-        let cache_dir = tempfile::tempdir()?;
-        let scope_file = fixture_dir.path().join("track.flac");
-        let other_file = fixture_dir.path().join("track.flac.bak");
+        CancellationToken::new().with_scope(|scope| {
+            let fixture_dir = tempfile::tempdir()?;
+            let cache_dir = tempfile::tempdir()?;
+            let scope_file = fixture_dir.path().join("track.flac");
+            let other_file = fixture_dir.path().join("track.flac.bak");
 
-        std::fs::write(&scope_file, [])?;
-        std::fs::write(&other_file, [])?;
+            std::fs::write(&scope_file, [])?;
+            std::fs::write(&other_file, [])?;
 
-        let scope_file = dunce::canonicalize(&scope_file)?;
-        let other_file = dunce::canonicalize(&other_file)?;
-        let drive_letter = drive_letter_from_path(&scope_file);
-        let graph = graph_from_file_paths(&[scope_file.as_path(), other_file.as_path()]);
-        let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
-        let request = QueryPlan {
-            r#in: vec![scope_file.to_string_lossy().into_owned()],
-            ..QueryPlan::new("track")
-        };
-        let cancel = CancellationToken::new();
+            let scope_file = dunce::canonicalize(&scope_file)?;
+            let other_file = dunce::canonicalize(&other_file)?;
+            let drive_letter = drive_letter_from_path(&scope_file);
+            let graph = graph_from_file_paths(&[scope_file.as_path(), other_file.as_path()]);
+            let mut state = state_from_graph(cache_dir.path(), drive_letter, graph);
+            let request = QueryPlan {
+                r#in: vec![scope_file.to_string_lossy().into_owned()],
+                ..QueryPlan::new("track")
+            };
+            let cancel = scope.clone();
 
-        let rows = state
-            .query(&request, &cancel)
-            .map_err(|error| eyre::eyre!(error.message))?;
+            let rows = state
+                .query(&request, &cancel)
+                .map_err(|error| eyre::eyre!(error.message))?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.as_str(), scope_file.to_string_lossy());
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.as_str(), scope_file.to_string_lossy());
+            Ok(())
+        })
     }
 
     #[test]
     fn live_query_preserves_filtered_row_semantics() -> eyre::Result<()> {
-        let cache_dir = tempfile::tempdir()?;
-        let rules_path = cache_dir.path().join("sample.teamy_mft_rules");
-        std::fs::write(&rules_path, "EXCLUDE C:\\filtered_music.txt\n")?;
+        CancellationToken::new().with_scope(|scope| {
+            let cache_dir = tempfile::tempdir()?;
+            let rules_path = cache_dir.path().join("sample.teamy_mft_rules");
+            std::fs::write(&rules_path, "EXCLUDE C:\\filtered_music.txt\n")?;
 
-        let mut graph = base_graph();
-        graph.nodes.insert(
-            11,
-            LiveNode {
-                is_directory: false,
-                links: vec![LiveNodeLink {
-                    parent_frn: 5,
-                    name: String::from("filtered_music.txt"),
-                    is_deleted: false,
-                }],
-            },
-        );
-        graph.nodes.insert(
-            12,
-            LiveNode {
-                is_directory: false,
-                links: vec![LiveNodeLink {
-                    parent_frn: 5,
-                    name: String::from("visible_music.txt"),
-                    is_deleted: false,
-                }],
-            },
-        );
-
-        let mut state = state_from_graph(cache_dir.path(), 'C', graph);
-        write_rule_discovery_index(&state.paths, &[rules_path.as_path()])?;
-        let cancel = CancellationToken::new();
-
-        let default_rows = state
-            .query(&QueryPlan::new("music"), &cancel)
-            .map_err(|error| eyre::eyre!(error.message.clone()))?;
-        assert_eq!(
-            default_rows
-                .iter()
-                .map(|row| row.path.as_str())
-                .collect::<Vec<_>>(),
-            vec![r"C:\visible_music.txt"]
-        );
-        assert!(default_rows.iter().all(|row| !row.is_filtered));
-
-        let show_filtered_rows = state
-            .query(
-                &QueryPlan {
-                    show_filtered: true,
-                    ..QueryPlan::new("music")
+            let mut graph = base_graph();
+            graph.nodes.insert(
+                11,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn: 5,
+                        name: String::from("filtered_music.txt"),
+                        is_deleted: false,
+                    }],
                 },
-                &cancel,
-            )
-            .map_err(|error| eyre::eyre!(error.message.clone()))?;
-        assert_eq!(
-            show_filtered_rows
-                .iter()
-                .map(|row| (row.path.as_str(), row.is_filtered))
-                .collect::<Vec<_>>(),
-            vec![
-                (r"C:\filtered_music.txt", true),
-                (r"C:\visible_music.txt", false),
-            ]
-        );
-
-        let only_filtered_rows = state
-            .query(
-                &QueryPlan {
-                    only_filtered: true,
-                    ..QueryPlan::new("music")
+            );
+            graph.nodes.insert(
+                12,
+                LiveNode {
+                    is_directory: false,
+                    links: vec![LiveNodeLink {
+                        parent_frn: 5,
+                        name: String::from("visible_music.txt"),
+                        is_deleted: false,
+                    }],
                 },
-                &cancel,
-            )
-            .map_err(|error| eyre::eyre!(error.message.clone()))?;
-        assert_eq!(only_filtered_rows.len(), 1);
-        assert_eq!(
-            only_filtered_rows[0].path.as_str(),
-            r"C:\filtered_music.txt"
-        );
-        assert!(only_filtered_rows[0].is_filtered);
-        Ok(())
+            );
+
+            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            write_rule_discovery_index(&state.paths, &[rules_path.as_path()])?;
+            let cancel = scope.clone();
+
+            let default_rows = state
+                .query(&QueryPlan::new("music"), &cancel)
+                .map_err(|error| eyre::eyre!(error.message.clone()))?;
+            assert_eq!(
+                default_rows
+                    .iter()
+                    .map(|row| row.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec![r"C:\visible_music.txt"]
+            );
+            assert!(default_rows.iter().all(|row| !row.is_filtered));
+
+            let show_filtered_rows = state
+                .query(
+                    &QueryPlan {
+                        show_filtered: true,
+                        ..QueryPlan::new("music")
+                    },
+                    &cancel,
+                )
+                .map_err(|error| eyre::eyre!(error.message.clone()))?;
+            assert_eq!(
+                show_filtered_rows
+                    .iter()
+                    .map(|row| (row.path.as_str(), row.is_filtered))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (r"C:\filtered_music.txt", true),
+                    (r"C:\visible_music.txt", false),
+                ]
+            );
+
+            let only_filtered_rows = state
+                .query(
+                    &QueryPlan {
+                        only_filtered: true,
+                        ..QueryPlan::new("music")
+                    },
+                    &cancel,
+                )
+                .map_err(|error| eyre::eyre!(error.message.clone()))?;
+            assert_eq!(only_filtered_rows.len(), 1);
+            assert_eq!(
+                only_filtered_rows[0].path.as_str(),
+                r"C:\filtered_music.txt"
+            );
+            assert!(only_filtered_rows[0].is_filtered);
+            Ok(())
+        })
     }
 
     #[test]
     fn live_query_reports_degraded_error_for_invalid_cached_index_bytes() {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let mut state = state_from_graph(temp_dir.path(), 'C', base_graph());
-        state.current_rows_cache = Some(Vec::new());
-        state.current_index_bytes_cache = Some(vec![1, 2, 3]);
-        state.query_cache_dirty = false;
+        CancellationToken::new()
+            .with_scope(|scope| {
+                let temp_dir = tempfile::tempdir().expect("temp dir");
+                let mut state = state_from_graph(temp_dir.path(), 'C', base_graph());
+                state.current_rows_cache = Some(Vec::new());
+                state.current_index_bytes_cache = Some(vec![1, 2, 3]);
+                state.query_cache_dirty = false;
 
-        let error = state
-            .query(&QueryPlan::new("alpha"), &CancellationToken::new())
-            .expect_err("invalid cache bytes should degrade");
+                let error = state
+                    .query(&QueryPlan::new("alpha"), &scope)
+                    .expect_err("invalid cache bytes should degrade");
 
-        assert_eq!(error.kind, MachineErrorKind::Degraded);
+                assert_eq!(error.kind, MachineErrorKind::Degraded);
+                eyre::Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1614,60 +1642,62 @@ mod tests {
     #[test]
     #[ignore = "requires NTFS journal access, elevation, and a full-drive MFT sync"]
     fn live_refresh_observes_new_file_after_base_sync() -> eyre::Result<()> {
-        let scope_dir = tempfile::tempdir()?;
-        let cache_dir = tempfile::tempdir()?;
-        let drive_letter = scope_dir
-            .path()
-            .to_string_lossy()
-            .chars()
-            .next()
-            .wrap_err("failed extracting drive letter from temp dir")?;
-        let needle = format!("__teamy_mft_live_refresh_{}__", current_unix_ms());
-        let created_path = scope_dir.path().join(format!("{needle}.txt"));
-        let cancel = CancellationToken::new();
+        CancellationToken::new().with_scope(|scope| {
+            let scope_dir = tempfile::tempdir()?;
+            let cache_dir = tempfile::tempdir()?;
+            let drive_letter = scope_dir
+                .path()
+                .to_string_lossy()
+                .chars()
+                .next()
+                .wrap_err("failed extracting drive letter from temp dir")?;
+            let needle = format!("__teamy_mft_live_refresh_{}__", current_unix_ms());
+            let created_path = scope_dir.path().join(format!("{needle}.txt"));
+            let cancel = scope.clone();
 
-        sync_machine_cache(
-            cache_dir.path(),
-            &[drive_letter],
-            IfExistsOutputBehaviour::Overwrite,
-            None,
-            &cancel,
-        )?;
+            sync_machine_cache(
+                cache_dir.path(),
+                &[drive_letter],
+                IfExistsOutputBehaviour::Overwrite,
+                None,
+                &cancel,
+            )?;
 
-        let mut state = LiveDriveState::load(
-            cache_dir.path(),
-            published_drive_paths(cache_dir.path(), drive_letter),
-            &cancel,
-        )?;
-        let base_request = QueryPlan {
-            r#in: vec![scope_dir.path().to_string_lossy().into_owned()],
-            include_deleted: true,
-            show_filtered: true,
-            ..QueryPlan::new(needle.clone())
-        };
-        assert!(
-            state
+            let mut state = LiveDriveState::load(
+                cache_dir.path(),
+                published_drive_paths(cache_dir.path(), drive_letter),
+                &cancel,
+            )?;
+            let base_request = QueryPlan {
+                r#in: vec![scope_dir.path().to_string_lossy().into_owned()],
+                include_deleted: true,
+                show_filtered: true,
+                ..QueryPlan::new(needle.clone())
+            };
+            assert!(
+                state
+                    .query(&base_request, &cancel)
+                    .map_err(|error| eyre::eyre!(error.message.clone()))?
+                    .is_empty()
+            );
+
+            std::fs::write(&created_path, b"hello from live refresh")?;
+            std::thread::sleep(Duration::from_millis(250));
+            state.refresh(&cancel)?;
+            let rows = state
                 .query(&base_request, &cancel)
-                .map_err(|error| eyre::eyre!(error.message.clone()))?
-                .is_empty()
-        );
+                .map_err(|error| eyre::eyre!(error.message.clone()))?;
+            assert!(
+                rows.iter().any(|row| row
+                    .path
+                    .as_str()
+                    .eq_ignore_ascii_case(&created_path.to_string_lossy())),
+                "expected query to include {}, rows were {:?}",
+                created_path.display(),
+                rows
+            );
 
-        std::fs::write(&created_path, b"hello from live refresh")?;
-        std::thread::sleep(Duration::from_millis(250));
-        state.refresh(&cancel)?;
-        let rows = state
-            .query(&base_request, &cancel)
-            .map_err(|error| eyre::eyre!(error.message.clone()))?;
-        assert!(
-            rows.iter().any(|row| row
-                .path
-                .as_str()
-                .eq_ignore_ascii_case(&created_path.to_string_lossy())),
-            "expected query to include {}, rows were {:?}",
-            created_path.display(),
-            rows
-        );
-
-        Ok(())
+            Ok(())
+        })
     }
 }

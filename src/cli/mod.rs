@@ -1,12 +1,12 @@
 pub mod command;
 pub mod global_args;
-use crate::cancellation::CancellationToken;
 use crate::cli::command::Command;
 use crate::cli::global_args::GlobalArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::FigueBuiltins;
 use figue::{self as args};
+use teamy_cancellation::CancellationScope;
 
 /// Teamy MFT command-line interface.
 #[derive(Facet, Arbitrary, Debug, Default)]
@@ -35,9 +35,9 @@ impl Cli {
     /// # Errors
     ///
     /// Returns an error if the command execution fails.
-    pub fn invoke(self, cancellation_token: CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(self, cancellation_scope: CancellationScope) -> eyre::Result<()> {
         self.command
-            .invoke(self.global_args.console_pid, cancellation_token)
+            .invoke(self.global_args.console_pid, cancellation_scope)
     }
 }
 

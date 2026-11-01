@@ -8,9 +8,9 @@
     reason = "Windows USN journal IOCTL interop requires raw pointer and integer conversion boilerplate"
 )]
 
-use crate::cancellation::CancellationToken;
 use crate::windows_utils::string::EasyPCWSTR;
 use eyre::Context;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
@@ -280,7 +280,7 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
         &self,
         start_usn: u64,
         journal_id: u64,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<UsnReadBatch> {
         let mut next_usn = start_usn;
         let mut events = Vec::new();
@@ -458,7 +458,7 @@ pub fn reason_names(reason: u32) -> Vec<&'static str> {
 fn parse_records_with_cancel(
     bytes: &[u8],
     events: &mut Vec<UsnEvent>,
-    cancel: &CancellationToken,
+    cancel: &CancellationScope,
 ) -> eyre::Result<()> {
     let mut offset = 0usize;
     while offset + size_of::<u32>() + size_of::<u16>() * 2 <= bytes.len() {

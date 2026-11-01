@@ -1,5 +1,4 @@
 use super::query_runtime::QueryRowVisitor;
-use crate::cancellation::CancellationToken;
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
 use crate::query::Pathlike;
@@ -22,6 +21,7 @@ use eyre::ensure;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
+use teamy_cancellation::CancellationScope;
 use tracing::info_span;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -81,7 +81,7 @@ impl QuerySession {
     pub fn visit_rows(
         &mut self,
         query_plan: QueryPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
         visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let mut visit = visit;
@@ -91,7 +91,7 @@ impl QuerySession {
     pub(crate) fn visit_rows_dyn(
         &mut self,
         query_plan: QueryPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
@@ -135,7 +135,7 @@ impl QuerySession {
     fn visit_published_index_rows(
         &mut self,
         query_plan: &QueryPlan,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_published_index_rows").entered();
@@ -225,7 +225,7 @@ impl CachedPublishedDriveQuery {
         &self,
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<ControlFlow<()>> {
         let _guard = info_span!("visit_rows", drive = %self.drive).entered();
@@ -325,7 +325,7 @@ impl CachedPublishedDriveQuery {
         mapped: &MappedSearchIndex,
         query_plan: &QueryPlan,
         filter: &QueryRowFilter,
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<ControlFlow<()>> {
         let parsed_index = SearchIndexBytes::new(mapped.bytes()).parse_trusted_for_query()?;
@@ -352,7 +352,7 @@ impl CachedPublishedDriveQuery {
         parsed_index: &'a ParsedSearchIndex<'a>,
         query_plan: &QueryPlan,
         scopes: &[QueryScope],
-        cancel: &CancellationToken,
+        cancel: &CancellationScope,
     ) -> eyre::Result<Vec<MatchingRowRef>> {
         let mut rows = Vec::new();
         let (_loaded_rows, _control_flow) = visit_matching_parsed_row_indices(
@@ -411,13 +411,15 @@ mod tests {
         session: &mut QuerySession,
         query_plan: QueryPlan,
     ) -> eyre::Result<Vec<String>> {
-        let mut rows = Vec::new();
-        let cancel = CancellationToken::new();
-        session.visit_rows(query_plan, &cancel, |row| {
-            rows.push(row.path.to_string());
-            Ok(ControlFlow::Continue(()))
-        })?;
-        Ok(rows)
+        CancellationToken::new().with_scope(|scope| {
+            let mut rows = Vec::new();
+            let cancel = scope.clone();
+            session.visit_rows(query_plan, &cancel, |row| {
+                rows.push(row.path.to_string());
+                Ok(ControlFlow::Continue(()))
+            })?;
+            Ok(rows)
+        })
     }
 
     fn write_drive_index(
@@ -504,125 +506,131 @@ mod tests {
 
     #[test]
     fn published_session_returns_no_rows_when_cancelled_before_query() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        write_drive_index(
-            &temp_dir,
-            'C',
-            &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
-                has_deleted_entries: false,
-            }],
-        )?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            write_drive_index(
+                &temp_dir,
+                'C',
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                    has_deleted_entries: false,
+                }],
+            )?;
 
-        let mut session = QuerySession {
-            backend: super::QuerySessionBackend::Local,
-            sync_dir: temp_dir.path().to_path_buf(),
-            published_index_cache: std::collections::HashMap::new(),
-        };
-        let cancel = CancellationToken::new();
-        cancel.request_cancel("test cancellation");
-        let mut visited = 0_usize;
+            let mut session = QuerySession {
+                backend: super::QuerySessionBackend::Local,
+                sync_dir: temp_dir.path().to_path_buf(),
+                published_index_cache: std::collections::HashMap::new(),
+            };
+            let cancel = scope.clone();
+            cancel.request_cancel("test cancellation");
+            let mut visited = 0_usize;
 
-        session.visit_rows(
-            fixture_drive_plan("Cargo.toml"),
-            &cancel,
-            |_row| -> eyre::Result<ControlFlow<()>> {
-                visited += 1;
-                Ok(ControlFlow::Continue(()))
-            },
-        )?;
+            session.visit_rows(
+                fixture_drive_plan("Cargo.toml"),
+                &cancel,
+                |_row| -> eyre::Result<ControlFlow<()>> {
+                    visited += 1;
+                    Ok(ControlFlow::Continue(()))
+                },
+            )?;
 
-        assert_eq!(visited, 0);
-        Ok(())
+            assert_eq!(visited, 0);
+            Ok(())
+        })
     }
 
     #[test]
     fn published_session_count_rows_matches_visited_rows() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        write_drive_index(
-            &temp_dir,
-            'C',
-            &[
-                SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
-                    has_deleted_entries: false,
-                },
-                SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\package.json").into(),
-                    has_deleted_entries: false,
-                },
-            ],
-        )?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            write_drive_index(
+                &temp_dir,
+                'C',
+                &[
+                    SearchIndexPathRow {
+                        path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                        has_deleted_entries: false,
+                    },
+                    SearchIndexPathRow {
+                        path: String::from(r"C:\Repos\app\package.json").into(),
+                        has_deleted_entries: false,
+                    },
+                ],
+            )?;
 
-        let mut session = QuerySession {
-            backend: super::QuerySessionBackend::Local,
-            sync_dir: temp_dir.path().to_path_buf(),
-            published_index_cache: std::collections::HashMap::new(),
-        };
-        let mut visited = Vec::new();
-        let cancel = CancellationToken::new();
-        session.visit_rows(
-            fixture_drive_plan("Repos"),
-            &cancel,
-            |row| -> eyre::Result<ControlFlow<()>> {
-                visited.push(row.path.to_string());
-                Ok(ControlFlow::Continue(()))
-            },
-        )?;
-
-        let count = {
-            let mut count = 0_usize;
+            let mut session = QuerySession {
+                backend: super::QuerySessionBackend::Local,
+                sync_dir: temp_dir.path().to_path_buf(),
+                published_index_cache: std::collections::HashMap::new(),
+            };
+            let mut visited = Vec::new();
+            let cancel = scope.clone();
             session.visit_rows(
                 fixture_drive_plan("Repos"),
                 &cancel,
-                |_row| -> eyre::Result<ControlFlow<()>> {
-                    count += 1;
+                |row| -> eyre::Result<ControlFlow<()>> {
+                    visited.push(row.path.to_string());
                     Ok(ControlFlow::Continue(()))
                 },
             )?;
-            eyre::Ok(count)
-        }?;
 
-        assert_eq!(count, visited.len());
-        assert_eq!(count, 2);
-        Ok(())
+            let count = {
+                let mut count = 0_usize;
+                session.visit_rows(
+                    fixture_drive_plan("Repos"),
+                    &cancel,
+                    |_row| -> eyre::Result<ControlFlow<()>> {
+                        count += 1;
+                        Ok(ControlFlow::Continue(()))
+                    },
+                )?;
+                eyre::Ok(count)
+            }?;
+
+            assert_eq!(count, visited.len());
+            assert_eq!(count, 2);
+            Ok(())
+        })
     }
 
     #[test]
     fn published_session_visit_rows_respects_query_limit() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        write_drive_index(
-            &temp_dir,
-            'C',
-            &[
-                SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
-                    has_deleted_entries: false,
-                },
-                SearchIndexPathRow {
-                    path: String::from(r"C:\Repos\app\package.json").into(),
-                    has_deleted_entries: false,
-                },
-            ],
-        )?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            write_drive_index(
+                &temp_dir,
+                'C',
+                &[
+                    SearchIndexPathRow {
+                        path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                        has_deleted_entries: false,
+                    },
+                    SearchIndexPathRow {
+                        path: String::from(r"C:\Repos\app\package.json").into(),
+                        has_deleted_entries: false,
+                    },
+                ],
+            )?;
 
-        let mut session = QuerySession {
-            backend: super::QuerySessionBackend::Local,
-            sync_dir: temp_dir.path().to_path_buf(),
-            published_index_cache: std::collections::HashMap::new(),
-        };
-        let mut plan = fixture_drive_plan("Repos");
-        plan.limit = 1_usize.into();
-        let mut visited = 0_usize;
-        let cancel = CancellationToken::new();
+            let mut session = QuerySession {
+                backend: super::QuerySessionBackend::Local,
+                sync_dir: temp_dir.path().to_path_buf(),
+                published_index_cache: std::collections::HashMap::new(),
+            };
+            let mut plan = fixture_drive_plan("Repos");
+            plan.limit = 1_usize.into();
+            let mut visited = 0_usize;
+            let cancel = scope.clone();
 
-        session.visit_rows(plan, &cancel, |_row| -> eyre::Result<ControlFlow<()>> {
-            visited += 1;
-            Ok(ControlFlow::Continue(()))
-        })?;
+            session.visit_rows(plan, &cancel, |_row| -> eyre::Result<ControlFlow<()>> {
+                visited += 1;
+                Ok(ControlFlow::Continue(()))
+            })?;
 
-        assert_eq!(visited, 1);
-        Ok(())
+            assert_eq!(visited, 1);
+            Ok(())
+        })
     }
 
     #[test]
@@ -651,42 +659,44 @@ mod tests {
 
     #[test]
     fn published_session_overlay_rows_override_cached_base_rows() -> eyre::Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        write_drive_index(
-            &temp_dir,
-            'C',
-            &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
-                has_deleted_entries: false,
-            }],
-        )?;
-        write_overlay_drive_index(
-            &temp_dir,
-            'C',
-            &[SearchIndexPathRow {
-                path: String::from(r"C:\Repos\app\Cargo.toml").into(),
-                has_deleted_entries: true,
-            }],
-        )?;
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            write_drive_index(
+                &temp_dir,
+                'C',
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                    has_deleted_entries: false,
+                }],
+            )?;
+            write_overlay_drive_index(
+                &temp_dir,
+                'C',
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\Repos\app\Cargo.toml").into(),
+                    has_deleted_entries: true,
+                }],
+            )?;
 
-        let mut session = QuerySession {
-            backend: super::QuerySessionBackend::Local,
-            sync_dir: temp_dir.path().to_path_buf(),
-            published_index_cache: std::collections::HashMap::new(),
-        };
-        let mut plan = fixture_drive_plan("Cargo.toml");
-        plan.include_deleted = true;
-        let mut rows = Vec::new();
-        let cancel = CancellationToken::new();
+            let mut session = QuerySession {
+                backend: super::QuerySessionBackend::Local,
+                sync_dir: temp_dir.path().to_path_buf(),
+                published_index_cache: std::collections::HashMap::new(),
+            };
+            let mut plan = fixture_drive_plan("Cargo.toml");
+            plan.include_deleted = true;
+            let mut rows = Vec::new();
+            let cancel = scope.clone();
 
-        session.visit_rows(plan, &cancel, |row| {
-            rows.push(row);
-            Ok(ControlFlow::Continue(()))
-        })?;
+            session.visit_rows(plan, &cancel, |row| {
+                rows.push(row);
+                Ok(ControlFlow::Continue(()))
+            })?;
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].path.to_string(), r"C:\Repos\app\Cargo.toml");
-        assert!(rows[0].has_deleted_entries);
-        Ok(())
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path.to_string(), r"C:\Repos\app\Cargo.toml");
+            assert!(rows[0].has_deleted_entries);
+            Ok(())
+        })
     }
 }

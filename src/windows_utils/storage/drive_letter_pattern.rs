@@ -14,7 +14,7 @@ use windows::Win32::System::WindowsProgramming::DRIVE_REMOTE;
 /// - "CD" -> C and D
 /// - "C,D;E F" -> C, D, E, F (separators: space/comma/semicolon)
 #[derive(Clone, PartialEq, Eq, Debug, Facet, Arbitrary)]
-#[facet(transparent, proxy = String)]
+#[facet(transparent)]
 pub struct DriveLetterPattern(pub String);
 impl Default for DriveLetterPattern {
     fn default() -> Self {
@@ -110,18 +110,6 @@ impl FromStr for DriveLetterPattern {
         let s = s.trim();
         ensure!(!s.is_empty(), "empty drive letter pattern");
         Ok(DriveLetterPattern(s.to_string()))
-    }
-}
-
-impl From<String> for DriveLetterPattern {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&DriveLetterPattern> for String {
-    fn from(value: &DriveLetterPattern) -> Self {
-        value.0.clone()
     }
 }
 

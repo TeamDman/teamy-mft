@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::machine::ipc::CorrelationId;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -11,6 +10,7 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::info_span;
 
@@ -29,7 +29,7 @@ pub enum QueryRuntime {
 }
 
 struct LocalQueryVisitor {
-    cancel: CancellationToken,
+    cancel: CancellationScope,
     query_session: QuerySession,
     query_plan: QueryPlan,
 }
@@ -42,7 +42,6 @@ struct DaemonQueryVisitor {
 struct DaemonQueryCleanup {
     response_join: JoinHandle<eyre::Result<CorrelationId>>,
     log_drain: crate::machine::daemon_log::DaemonLogDrain,
-    cancel: CancellationToken,
     cancel_tx: Arc<Mutex<Option<vox::Tx<u8>>>>,
     cancel_watch_stop: mpsc::Sender<()>,
     cancel_watch_join: JoinHandle<eyre::Result<()>>,
@@ -71,25 +70,25 @@ impl QueryRuntime {
     pub fn visit_rows(
         self,
         query_plan: QueryPlan,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
         mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
     ) -> eyre::Result<()> {
-        self.visit_rows_dyn(query_plan, cancellation_token, &mut visit)
+        self.visit_rows_dyn(query_plan, cancellation_scope, &mut visit)
     }
 
     pub(crate) fn visit_rows_dyn(
         self,
         query_plan: QueryPlan,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
         visit: &mut QueryRowVisitor<'_>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_rows_dyn").entered();
         match self {
             Self::Local => {
-                LocalQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
+                LocalQueryVisitor::prepare(query_plan, cancellation_scope)?.visit_rows(visit)
             }
             Self::DaemonRpc => {
-                DaemonQueryVisitor::prepare(query_plan, cancellation_token)?.visit_rows(visit)
+                DaemonQueryVisitor::prepare(query_plan, cancellation_scope)?.visit_rows(visit)
             }
         }
     }
@@ -119,10 +118,10 @@ impl QueryRuntime {
 impl LocalQueryVisitor {
     fn prepare(
         query_plan: QueryPlan,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
     ) -> eyre::Result<Self> {
         Ok(Self {
-            cancel: cancellation_token.clone(),
+            cancel: cancellation_scope.clone(),
             query_session: QuerySession::local()?,
             query_plan,
         })
@@ -138,9 +137,9 @@ impl LocalQueryVisitor {
 impl DaemonQueryVisitor {
     fn prepare(
         query_plan: QueryPlan,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
     ) -> eyre::Result<Self> {
-        let request_cancel = cancellation_token.child_token();
+        let request_cancel = cancellation_scope.clone();
         let config = crate::machine::ipc::load_machine_daemon_client_config()?;
         crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
@@ -174,7 +173,6 @@ impl DaemonQueryVisitor {
             cleanup: DaemonQueryCleanup {
                 response_join,
                 log_drain: crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx),
-                cancel: request_cancel,
                 cancel_tx,
                 cancel_watch_stop,
                 cancel_watch_join,
@@ -187,7 +185,7 @@ impl DaemonQueryVisitor {
         let visit_result = QueryRuntime::visit_daemon_rows_from_channel(self.rows_rx, visit);
         let cleanup = self.cleanup;
         if matches!(visit_result, Ok(ControlFlow::Break(()))) {
-            cleanup.request_cancel("Daemon query stream cancelled by visitor")?;
+            send_daemon_cancel(&cleanup.cancel_tx)?;
         }
         let cleanup_result = cleanup.finish();
         match (visit_result, cleanup_result) {
@@ -202,11 +200,6 @@ impl DaemonQueryVisitor {
 }
 
 impl DaemonQueryCleanup {
-    fn request_cancel(&self, reason: impl Into<String>) -> eyre::Result<()> {
-        self.cancel.request_cancel(reason);
-        send_daemon_cancel(&self.cancel_tx)
-    }
-
     fn finish(self) -> eyre::Result<()> {
         let _ = self.cancel_watch_stop.send(());
         self.cancel_watch_join.join().map_err(|join_error| {

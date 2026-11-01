@@ -19,9 +19,9 @@ bytes = "1.10.1"
 directories = "5"
 dunce = "1"
 eyre = "0.6.12"
-facet = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "facet", features = ["uuid"] }
-facet_json = { package = "facet-json", git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0" }
-figue = { package = "figue", git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", features = ["arbitrary"] }
+facet = { package = "teamy-facet", version = "=0.50.0-rc.7", features = ["uuid"] }
+facet_json = { package = "teamy-facet-json", version = "=0.50.0-rc.9" }
+figue = { package = "teamy-figue", version = "=6.0.0-rc.5", features = ["arbitrary"] }
 tracing = "0.1.43"
 tracing-error = "0.2.1"
 tracing-subscriber = { version = "0.3.19", default-features = false, features = [
@@ -84,10 +84,10 @@ ignore = "0.4.24"
 globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
-teamy-cancellation = { git = "https://github.com/TeamDman/teamy-cancellation.git", rev = "7c77848", version = "0.3.1" }
-vox = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox", features = ["transport-local"] }
-vox-types = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox-types" }
-vox-stream = { git = "https://github.com/TeamDman/facet.git", rev = "23ad4dcd0", package = "vox-stream" }
+teamy-cancellation = { package = "teamy-cancellation", version = "=0.7.1", features = ["async"] }
+vox = { package = "teamy-vox", version = "=0.10.0-rc.9", features = ["transport-local"] }
+vox-types = { package = "teamy-vox-types", version = "=0.10.0-rc.9" }
+vox-stream = { package = "teamy-vox-stream", version = "=0.10.0-rc.9" }
 
 [features]
 default = []
@@ -96,7 +96,7 @@ extended_observability = ["tracy"]
 extended_observability_per_record = ["extended_observability"]
 
 [build-dependencies]
-embed-resource = "3.0.3"
+embed-resource = { package = "teamy-embed-resource", version = "=0.1.0", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.20"
@@ -164,11 +164,3 @@ unused_result_ok = "warn"
 
 # May cause issues with structured logging otherwise.
 literal_string_with_formatting_args = "allow"
-
-# Define custom opt outs here
-# ...
-
-
-
-
-

@@ -1,7 +1,7 @@
-use crate::cancellation::CancellationToken;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use teamy_cancellation::CancellationScope;
 
 #[derive(Facet, Arbitrary, PartialEq, Debug, Default)]
 pub struct ServiceRunArgs {
@@ -17,10 +17,10 @@ impl ServiceRunArgs {
     pub fn invoke(
         self,
         console_pid: Option<u32>,
-        cancellation_token: CancellationToken,
+        cancellation_scope: CancellationScope,
     ) -> eyre::Result<()> {
         // Handle relaunch here, before worker errors are converted into RPC messages.
         crate::windows_utils::elevation::ensure_elevated(console_pid)?;
-        crate::machine::daemon::run_daemon(self.service, console_pid, cancellation_token)
+        crate::machine::daemon::run_daemon(self.service, console_pid, cancellation_scope)
     }
 }

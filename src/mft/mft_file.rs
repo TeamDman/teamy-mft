@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::mft::fast_fixup::apply_fixups_parallel;
 use crate::mft::mft_record_iter::MftRecordIter;
 use crate::mft::mft_record_size::MftRecordSize;
@@ -12,6 +11,7 @@ use std::io::Read;
 use std::ops::Deref;
 use std::path::Path;
 use std::time::Instant;
+use teamy_cancellation::CancellationScope;
 use teamy_uom_extensions::HumanInformationExt;
 use thousands::Separable;
 use tracing::debug;
@@ -121,7 +121,7 @@ impl MftFile {
     ///
     /// Returns an error if the file cannot be opened, read, parsed, or if cancellation is requested.
     #[instrument(level = "debug")]
-    pub fn from_path(mft_file_path: &Path, cancel: &CancellationToken) -> eyre::Result<Self> {
+    pub fn from_path(mft_file_path: &Path, cancel: &CancellationScope) -> eyre::Result<Self> {
         let file = {
             let _span = debug_span!("open_file", path = %mft_file_path.display()).entered();
             std::fs::File::open(mft_file_path)

@@ -17,9 +17,16 @@ fn fuzz_cli_args_consistency() {
 #[test]
 // cli[verify parser.roundtrip]
 fn fuzz_cli_args_roundtrip() {
-    if let Err(e) = figue::assert_to_args_roundtrip::<Cli>(figue::TestToArgsRoundTrip::default()) {
-        panic!("CLI argument roundtrip check failed:\n{e}")
-    };
+    // Retain the seed that exposed missing reflected equality for the opaque limit.
+    for root_seed in [Some(12_793_442_261_061_576_120), None] {
+        let config = figue::TestToArgsRoundTrip {
+            root_seed,
+            ..Default::default()
+        };
+        if let Err(e) = figue::assert_to_args_roundtrip::<Cli>(config) {
+            panic!("CLI argument roundtrip check failed:\n{e}")
+        }
+    }
 }
 
 #[test]

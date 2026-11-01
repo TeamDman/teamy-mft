@@ -23,17 +23,21 @@ fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let cancel = install_ctrlc_handler()?;
 
-    let query = QueryArgs {
-        plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(".git"))),
-        ..Default::default()
-    };
-    query.visit_rows(&cancel, |row| {
-        // path is the .git dir; print its parent (the repo root)
-        if let Some(repo_root) = row.parent() {
-            println!("{}", repo_root.display());
-        }
-        Ok(ControlFlow::Continue(()))
-    })?;
+    cancel.with_scope(|cancel| {
+        let query = QueryArgs {
+            plan: QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(
+                ".git",
+            ))),
+            ..Default::default()
+        };
+        query.visit_rows(&cancel, |row| {
+            // path is the .git dir; print its parent (the repo root)
+            if let Some(repo_root) = row.parent() {
+                println!("{}", repo_root.display());
+            }
+            Ok(ControlFlow::Continue(()))
+        })?;
 
-    Ok(())
+        Ok(())
+    })
 }

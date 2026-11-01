@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collection;
 use crate::mft::mft_file::MftFile;
 use crate::search_index::format::SearchIndexHeader;
@@ -10,6 +9,7 @@ use eyre::Context;
 use eyre::bail;
 use itertools::Itertools;
 use std::time::Instant;
+use teamy_cancellation::CancellationScope;
 use tracing::debug;
 use tracing::info;
 use tracing::info_span;
@@ -61,7 +61,7 @@ impl SyncIndex {
     ///
     /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
     /// resolved, or index files cannot be read, built, or written.
-    pub fn invoke(drive_infos: Vec<DriveSyncInfo>, cancel: &CancellationToken) -> eyre::Result<()> {
+    pub fn invoke(drive_infos: Vec<DriveSyncInfo>, cancel: &CancellationScope) -> eyre::Result<()> {
         info!(
             "Building search indexes for drives: {}",
             drive_infos.iter().map(|info| info.drive_letter).join(", ")
@@ -129,7 +129,7 @@ impl SyncIndex {
         })
     }
 
-    fn invoke_for_mft_path(info: &DriveSyncInfo, cancel: &CancellationToken) -> eyre::Result<()> {
+    fn invoke_for_mft_path(info: &DriveSyncInfo, cancel: &CancellationScope) -> eyre::Result<()> {
         if !info.mft_output_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",

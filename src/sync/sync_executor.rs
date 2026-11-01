@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::sync::DriveSyncInfo;
 use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncIndex;
@@ -6,6 +5,7 @@ use crate::sync::SyncMft;
 use futures::TryStreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use teamy_cancellation::CancellationScope;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::info_span;
@@ -49,7 +49,7 @@ impl SyncWork {
 pub async fn execute_sync(
     work: SyncWork,
     console_pid: Option<u32>,
-    cancel: &CancellationToken,
+    cancel: &CancellationScope,
 ) -> eyre::Result<()> {
     let SyncWork {
         mft_drives: mft_drive_infos,

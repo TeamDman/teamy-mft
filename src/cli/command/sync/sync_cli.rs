@@ -1,8 +1,8 @@
-use crate::cancellation::CancellationToken;
 use crate::sync::SyncPlan;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use teamy_cancellation::CancellationScope;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 pub struct SyncArgs {
@@ -28,7 +28,7 @@ impl SyncArgs {
     pub fn invoke(
         self,
         console_pid: Option<u32>,
-        cancellation_token: &CancellationToken,
+        cancellation_scope: &CancellationScope,
     ) -> eyre::Result<()> {
         let plan = self.plan;
         eyre::ensure!(
@@ -71,7 +71,7 @@ impl SyncArgs {
                     &drive_letters,
                     plan.if_exists,
                     console_pid,
-                    cancellation_token,
+                    cancellation_scope,
                 )?;
             }
         }
@@ -88,20 +88,25 @@ mod tests {
 
     #[test]
     fn recursive_sync_requires_target_path() {
-        let error = SyncArgs {
-            plan: SyncPlan {
-                recursive: true,
-                ..SyncPlan::default()
-            },
-            ..SyncArgs::default()
-        }
-        .invoke(None, &CancellationToken::new())
-        .expect_err("recursive sync without a path should fail before execution");
+        CancellationToken::new()
+            .with_scope(|scope| {
+                let error = SyncArgs {
+                    plan: SyncPlan {
+                        recursive: true,
+                        ..SyncPlan::default()
+                    },
+                    ..SyncArgs::default()
+                }
+                .invoke(None, &scope)
+                .expect_err("recursive sync without a path should fail before execution");
 
-        assert!(
-            error
-                .to_string()
-                .contains("`--recursive` requires a target path")
-        );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("`--recursive` requires a target path")
+                );
+                eyre::Ok(())
+            })
+            .unwrap();
     }
 }

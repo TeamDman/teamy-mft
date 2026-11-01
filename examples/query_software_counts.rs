@@ -32,24 +32,26 @@ fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     let cancel = install_ctrlc_handler()?;
 
-    // Reuse one explicit published-index session so repeated queries can keep
-    // drive cache state warm in-process.
-    let mut session = QuerySession::local()?;
+    cancel.with_scope(|cancel| {
+        // Reuse one explicit published-index session so repeated queries can keep
+        // drive cache state warm in-process.
+        let mut session = QuerySession::local()?;
 
-    println!("{:<20} count", "name");
-    for segment in SOFTWARE_TERMINAL_SEGMENTS {
-        let mut count = 0_usize;
-        session.visit_rows(
-            QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
-            &cancel,
-            |_row| {
-                count += 1;
-                Ok(ControlFlow::Continue(()))
-            },
-        )?;
-        cancel.bail_if_cancelled()?;
-        println!("{:<20} {}", segment, count);
-    }
+        println!("{:<20} count", "name");
+        for segment in SOFTWARE_TERMINAL_SEGMENTS {
+            let mut count = 0_usize;
+            session.visit_rows(
+                QueryPlan::single_rule(QueryRule::EqualsCaseInsensitive(QueryNeedle::new(segment))),
+                &cancel,
+                |_row| {
+                    count += 1;
+                    Ok(ControlFlow::Continue(()))
+                },
+            )?;
+            cancel.bail_if_cancelled()?;
+            println!("{:<20} {}", segment, count);
+        }
 
-    Ok(())
+        Ok(())
+    })
 }

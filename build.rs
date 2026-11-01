@@ -15,7 +15,7 @@ fn main() {
 fn add_exe_resources() {
     println!("cargo:rerun-if-changed=resources");
 
-    embed_resource::compile("resources/app.rc", embed_resource::NONE)
+    embed_resource::compile_for_everything("resources/app.rc", embed_resource::NONE)
         .manifest_required()
         .expect("failed to embed resources");
 }

@@ -1,4 +1,3 @@
-use crate::cancellation::CancellationToken;
 use crate::cli::command::fsutil::FsutilArgs;
 use crate::cli::command::install::InstallArgs;
 use crate::cli::command::list_paths::ListPathsArgs;
@@ -15,6 +14,7 @@ use crate::cli::command::uninstall::UninstallArgs;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
+use teamy_cancellation::CancellationScope;
 
 /// Teamy MFT commands
 // cli[impl command.surface.core]
@@ -69,21 +69,21 @@ impl Command {
     pub fn invoke(
         self,
         console_pid: Option<u32>,
-        cancellation_token: CancellationToken,
+        cancellation_scope: CancellationScope,
     ) -> eyre::Result<()> {
         match self {
-            Command::Service(args) => args.invoke(console_pid, cancellation_token),
-            Command::Sync(args) => args.invoke(console_pid, &cancellation_token),
+            Command::Service(args) => args.invoke(console_pid, cancellation_scope),
+            Command::Sync(args) => args.invoke(console_pid, &cancellation_scope),
             Command::Install(args) => args.invoke(console_pid),
             Command::Uninstall(args) => args.invoke(console_pid),
-            Command::ListPaths(args) => args.invoke(&cancellation_token),
+            Command::ListPaths(args) => args.invoke(&cancellation_scope),
             Command::Move(args) => args.invoke(),
             Command::Rule(args) => args.invoke(),
             Command::Profile(args) => args.invoke(),
             Command::Protection(args) => args.invoke(console_pid),
             Command::Fsutil(args) => args.invoke(console_pid),
             Command::Status(args) => args.invoke(),
-            Command::Query(args) => args.invoke_and_print(&cancellation_token),
+            Command::Query(args) => args.invoke_and_print(&cancellation_scope),
             Command::Tray(args) => args.invoke(),
         }
     }

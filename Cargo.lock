@@ -453,8 +453,9 @@ checksum = "980c2afde4af43d6a05c5be738f9eae595cff86dce1f38f88b95058a98c027f3"
 
 [[package]]
 name = "copypatch"
-version = "0.2.0-rc.4"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
+version = "0.2.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffef70feaa3f41c7b1d2f80d628dd08e501e858b9957fba201dab4d88c812b9d"
 dependencies = [
  "libc",
  "object 0.39.1",
@@ -729,20 +730,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
-name = "embed-resource"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbfdaacccebec3b28e4866b8973543c7647797db5ada1bdab552e48fe665fbbd"
-dependencies = [
- "cc",
- "memchr",
- "rustc_version",
- "toml",
- "vswhom",
- "winreg",
-]
-
-[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -848,205 +835,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "facet"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "autocfg",
- "facet-core",
- "facet-macros",
-]
-
-[[package]]
-name = "facet-core"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "autocfg",
- "camino",
- "const-fnv1a-hash",
- "iddqd",
- "impls",
- "indexmap",
- "taxon",
- "uuid",
-]
-
-[[package]]
-name = "facet-dessert"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-reflect",
-]
-
-[[package]]
-name = "facet-error"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
-]
-
-[[package]]
-name = "facet-format"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-dessert",
- "facet-path",
- "facet-reflect",
- "facet-solver",
-]
-
-[[package]]
-name = "facet-json"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "copypatch",
- "facet",
- "facet-core",
- "facet-format",
- "facet-reflect",
- "weavy",
-]
-
-[[package]]
-name = "facet-macro-parse"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-macro-types",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
-name = "facet-macro-types"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "proc-macro2",
- "quote",
- "unsynn",
-]
-
-[[package]]
-name = "facet-macros"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-macros-impl",
-]
-
-[[package]]
-name = "facet-macros-impl"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-macro-parse",
- "facet-macro-types",
- "proc-macro2",
- "quote",
- "strsim",
- "unsynn",
-]
-
-[[package]]
-name = "facet-path"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
-]
-
-[[package]]
-name = "facet-pretty"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-reflect",
- "owo-colors",
- "terminal-light",
-]
-
-[[package]]
-name = "facet-reflect"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-path",
- "hashbrown 0.17.1",
- "smallvec 2.0.0-alpha.12",
-]
-
-[[package]]
-name = "facet-solver"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-reflect",
- "strsim",
-]
-
-[[package]]
-name = "facet-value"
-version = "0.50.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-core",
- "facet-format",
- "facet-reflect",
- "indexmap",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
-
-[[package]]
-name = "figue"
-version = "5.0.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "arbitrary",
- "ariadne",
- "camino",
- "facet",
- "facet-core",
- "facet-error",
- "facet-format",
- "facet-json",
- "facet-pretty",
- "facet-reflect",
- "figue-attrs",
- "heck",
- "indexmap",
- "owo-colors",
- "rand 0.9.4",
- "rand_chacha 0.9.0",
- "strip-ansi-escapes",
- "strsim",
- "supports-color 3.0.2",
- "tracing",
- "unicode-width",
-]
-
-[[package]]
-name = "figue-attrs"
-version = "5.0.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
-]
 
 [[package]]
 name = "find-msvc-tools"
@@ -1792,60 +1584,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phon"
-version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
- "facet-value",
- "phon-engine",
- "phon-ir",
- "phon-jit",
- "phon-schema",
-]
-
-[[package]]
-name = "phon-engine"
-version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet-value",
- "phon-ir",
- "phon-schema",
- "weavy",
-]
-
-[[package]]
-name = "phon-ir"
-version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "phon-schema",
- "weavy",
-]
-
-[[package]]
-name = "phon-jit"
-version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "copypatch",
- "phon-ir",
- "phon-schema",
- "weavy",
-]
-
-[[package]]
-name = "phon-schema"
-version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "blake3",
- "facet-value",
- "taxon",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2153,15 +1891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_spanned"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2381,20 +2110,246 @@ dependencies = [
 [[package]]
 name = "taxon"
 version = "0.2.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3acccfbd01e7cf4c7ea384b46df6ba3afb934ad88abd247f92998249854de968"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
 name = "teamy-cancellation"
-version = "0.3.1"
-source = "git+https://github.com/TeamDman/teamy-cancellation.git?rev=7c77848#7c77848e759079e21f2039b25b147d780807725b"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f767f7a3145dea811e5a2a2c94995b915ded823b29df5cc383a024a8fa46935"
 dependencies = [
  "ctrlc",
  "eyre",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "teamy-embed-resource"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00a0ff62b041b56a40af11d64fd6f0517690639ab6a6efc11e5fc3ad417a20a9"
+dependencies = [
+ "cc",
+ "memchr",
+ "rustc_version",
+ "vswhom",
+ "winreg",
+]
+
+[[package]]
+name = "teamy-facet"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b77b05f407ae8c1c5ce23ffbc88bd8fbf77cb1c9025a39e91512f71d4408dd8"
+dependencies = [
+ "autocfg",
+ "teamy-facet-core",
+ "teamy-facet-macros",
+ "teamy-facet-reflect",
+]
+
+[[package]]
+name = "teamy-facet-core"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0df3759dc87fbf4d322b6f12bb4c819ea1d4781da32e4f225c5ea48b0b784194"
+dependencies = [
+ "autocfg",
+ "camino",
+ "const-fnv1a-hash",
+ "iddqd",
+ "impls",
+ "indexmap",
+ "taxon",
+ "uuid",
+]
+
+[[package]]
+name = "teamy-facet-dessert"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca1375e0d76af3d8edd140c38482cdbbc0473372b50bf022f2f99c8f1bf8c23f"
+dependencies = [
+ "teamy-facet-core",
+ "teamy-facet-reflect",
+]
+
+[[package]]
+name = "teamy-facet-error"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a27f27d532348a70d74038d6cbd1d957313e62b22eb8fb8dbc90fcc8b84cff3"
+dependencies = [
+ "teamy-facet",
+]
+
+[[package]]
+name = "teamy-facet-format"
+version = "0.50.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13f35f7c7ecbdcdd755b5a94b717413f08a9b02a3c422fc6390b1e7a580c2bff"
+dependencies = [
+ "teamy-facet-core",
+ "teamy-facet-dessert",
+ "teamy-facet-path",
+ "teamy-facet-reflect",
+ "teamy-facet-solver",
+]
+
+[[package]]
+name = "teamy-facet-json"
+version = "0.50.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c48c074268e3d3a9cb1036d7365462b2a68f99bd31889d288b7227ab342334"
+dependencies = [
+ "teamy-facet",
+ "teamy-facet-core",
+ "teamy-facet-format",
+ "teamy-facet-reflect",
+]
+
+[[package]]
+name = "teamy-facet-macro-parse"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a92becb9f78c906b705dd0ba787164b430081940e03d00f2e342ad5f2add8cb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "teamy-facet-macro-types",
+]
+
+[[package]]
+name = "teamy-facet-macro-types"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af5ff81f096ed7b13e6f02c1d2eaa40bc415fdcc001ed6048b0bafcabe56654"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unsynn",
+]
+
+[[package]]
+name = "teamy-facet-macros"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40b7c526e93b67c8e7bdaf02003d94e3fd8a780d3da831baeda914e111edc6b6"
+dependencies = [
+ "teamy-facet-macros-impl",
+]
+
+[[package]]
+name = "teamy-facet-macros-impl"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df2c4c0edd5513ea947d9c68a28f023ebaef2aac5ba4308e54b734c809ddca1a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "teamy-facet-macro-parse",
+ "teamy-facet-macro-types",
+ "unsynn",
+]
+
+[[package]]
+name = "teamy-facet-path"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "738aec7346839f1f5e7aba18aeae703d9e86358c05d04fcdc03169abc295685a"
+dependencies = [
+ "teamy-facet-core",
+]
+
+[[package]]
+name = "teamy-facet-pretty"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2ffcf8bfebc3ac449d9dfc005f0bd840aafb3cf471020a958e888bc7aa14403"
+dependencies = [
+ "owo-colors",
+ "teamy-facet-core",
+ "teamy-facet-reflect",
+ "terminal-light",
+]
+
+[[package]]
+name = "teamy-facet-reflect"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0142aacf8402fa4f16ace15c74f0686ace285c9878d19afa17c1adc8af9ab821"
+dependencies = [
+ "hashbrown 0.17.1",
+ "smallvec 2.0.0-alpha.12",
+ "teamy-facet-core",
+ "teamy-facet-path",
+]
+
+[[package]]
+name = "teamy-facet-solver"
+version = "0.50.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c56dafdabe4eab1cb05cd6e5a597ffbbe21ce99fd120b535836e9bf74451c8e"
+dependencies = [
+ "strsim",
+ "teamy-facet-core",
+ "teamy-facet-reflect",
+]
+
+[[package]]
+name = "teamy-facet-value"
+version = "0.50.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f891a42f433d92485fcc95bc86169b22fb63dfd049ad63450df8a36dcf6a507b"
+dependencies = [
+ "indexmap",
+ "teamy-facet-core",
+ "teamy-facet-format",
+ "teamy-facet-reflect",
+]
+
+[[package]]
+name = "teamy-figue"
+version = "6.0.0-rc.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "848f5cdd412c9e0d79cfb38d52eed0a253518811a6768a469299b578543617b0"
+dependencies = [
+ "arbitrary",
+ "ariadne",
+ "camino",
+ "heck",
+ "indexmap",
+ "owo-colors",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
+ "strip-ansi-escapes",
+ "strsim",
+ "supports-color 3.0.2",
+ "teamy-facet",
+ "teamy-facet-core",
+ "teamy-facet-error",
+ "teamy-facet-format",
+ "teamy-facet-json",
+ "teamy-facet-pretty",
+ "teamy-facet-reflect",
+ "teamy-figue-attrs",
+ "tracing",
+ "unicode-width",
+]
+
+[[package]]
+name = "teamy-figue-attrs"
+version = "6.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe95c52ca4b344b83f7ef9a6e216a2c7f8fc12671e6037d4376fbda9352548b1"
+dependencies = [
+ "teamy-facet",
 ]
 
 [[package]]
@@ -2410,11 +2365,7 @@ dependencies = [
  "crossbeam-channel",
  "directories",
  "dunce",
- "embed-resource",
  "eyre",
- "facet",
- "facet-json",
- "figue",
  "futures",
  "globset",
  "humansize",
@@ -2429,7 +2380,14 @@ dependencies = [
  "semver",
  "strum",
  "teamy-cancellation",
+ "teamy-embed-resource",
+ "teamy-facet",
+ "teamy-facet-json",
+ "teamy-figue",
  "teamy-uom-extensions",
+ "teamy-vox",
+ "teamy-vox-stream",
+ "teamy-vox-types",
  "tempfile",
  "thousands",
  "tokio",
@@ -2440,13 +2398,69 @@ dependencies = [
  "tracing-tracy",
  "uom",
  "uuid",
- "vox",
- "vox-stream",
- "vox-types",
  "widestring",
  "windows",
  "winstructs",
  "zerotrie",
+]
+
+[[package]]
+name = "teamy-phon"
+version = "0.2.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "542684f75fd7ecb3aa15d7bb1f13b809ea8078bce374d5516f30dd5f28369143"
+dependencies = [
+ "teamy-facet",
+ "teamy-facet-value",
+ "teamy-phon-engine",
+ "teamy-phon-ir",
+ "teamy-phon-jit",
+ "teamy-phon-schema",
+]
+
+[[package]]
+name = "teamy-phon-engine"
+version = "0.2.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "004f219488864651290288bf7b3eee718e2cd6f5ffc477c08149d5a9b8251c1e"
+dependencies = [
+ "teamy-facet-value",
+ "teamy-phon-ir",
+ "teamy-phon-schema",
+ "teamy-weavy",
+]
+
+[[package]]
+name = "teamy-phon-ir"
+version = "0.2.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3babb15a2585540c8d81a94c4c44fda0e7e1709d91748429edd8a1a406141652"
+dependencies = [
+ "teamy-phon-schema",
+ "teamy-weavy",
+]
+
+[[package]]
+name = "teamy-phon-jit"
+version = "0.2.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82e05408a66b030b8f31de41fea1be49fb2afe30909509b1554ffde6641788dd"
+dependencies = [
+ "copypatch",
+ "teamy-phon-ir",
+ "teamy-phon-schema",
+ "teamy-weavy",
+]
+
+[[package]]
+name = "teamy-phon-schema"
+version = "0.2.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a657f79442bec3a66c6700430a3b91759d06b2f53dff7986d1874a4aeb4b624"
+dependencies = [
+ "blake3",
+ "taxon",
+ "teamy-facet-value",
 ]
 
 [[package]]
@@ -2458,6 +2472,198 @@ dependencies = [
  "humansize",
  "humantime",
  "uom",
+]
+
+[[package]]
+name = "teamy-vox"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94fdb60ca51e4711ecc07c14170b3d19fb0ea1628f2944bc37e7b162eb11af26"
+dependencies = [
+ "teamy-facet",
+ "teamy-facet-pretty",
+ "teamy-facet-reflect",
+ "teamy-vox-core",
+ "teamy-vox-phon",
+ "teamy-vox-rt",
+ "teamy-vox-service-macros",
+ "teamy-vox-stream",
+ "teamy-vox-types",
+ "teamy-vox-websocket",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "teamy-vox-core"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0368ffedbbeb7f3b7f7fc5a1927a82b7324f5c7f9bb3383ae00a6ce5f13d5081"
+dependencies = [
+ "futures-util",
+ "teamy-facet",
+ "teamy-facet-core",
+ "teamy-vox-phon",
+ "teamy-vox-rt",
+ "teamy-vox-types",
+ "tokio",
+ "tracing",
+ "wasm-bindgen-futures",
+ "zerocopy",
+]
+
+[[package]]
+name = "teamy-vox-fdpass"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "531833d68ce6b9200a56693b69932ea814a450b1ba3500de3ccfc316ead77bfc"
+dependencies = [
+ "libc",
+ "passfd",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "teamy-vox-macros-core"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19ef5d6e953494b9e2a61d53f4ce09ce1bdf338c32990fcd454e60b4a0133604"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "teamy-vox-macros-parse",
+]
+
+[[package]]
+name = "teamy-vox-macros-parse"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "affed896c9130a5be53c28f8bf674c569c8542fb5aae7fb938949ecc2cbffe72"
+dependencies = [
+ "proc-macro2",
+ "unsynn",
+]
+
+[[package]]
+name = "teamy-vox-phon"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e600e339e73bde703ef72ba045c6a2192dd1d46167df5707f621698247644330"
+dependencies = [
+ "teamy-facet",
+ "teamy-phon",
+ "teamy-phon-engine",
+ "teamy-phon-ir",
+ "teamy-phon-jit",
+ "teamy-phon-schema",
+ "teamy-vox-rt",
+]
+
+[[package]]
+name = "teamy-vox-rt"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dec40af57290626db4d63c84ef22ef684afdb04c396b6c37f4514ba28f2cdeda"
+dependencies = [
+ "futures-channel",
+ "futures-util",
+ "parking_lot",
+ "teamy-vox-rt-macros",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasmtimer",
+ "web-sys",
+]
+
+[[package]]
+name = "teamy-vox-rt-macros"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8117d2dd9290f91cc4f4b21ab3432bb20ec6e0d2a6b626dbaa34b342d69a6f16"
+
+[[package]]
+name = "teamy-vox-schema"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39e67da69ecd0f1852e5d31a8899492ce66307fdeddd30f987f164ac56138795"
+dependencies = [
+ "blake3",
+ "teamy-facet",
+ "teamy-facet-core",
+]
+
+[[package]]
+name = "teamy-vox-service-macros"
+version = "0.10.0-rc.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "982ed67b0e12fdd07e4a307dfd8f4a1911bb3b6f6cb57fbe459ecb5e9f23c280"
+dependencies = [
+ "proc-macro2",
+ "teamy-vox-macros-core",
+]
+
+[[package]]
+name = "teamy-vox-stream"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb1e3ec032d0940406496baa9c71bcc12f0da9162b1035b07997caece48fc30"
+dependencies = [
+ "libc",
+ "teamy-vox-core",
+ "teamy-vox-fdpass",
+ "teamy-vox-rt",
+ "teamy-vox-types",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "teamy-vox-types"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d0912cf8b3e560b5c4ba7975a248dcf869bb23af7bdb1700afd0403609e90fb"
+dependencies = [
+ "blake3",
+ "heck",
+ "indexmap",
+ "structstruck",
+ "teamy-facet",
+ "teamy-facet-core",
+ "teamy-facet-reflect",
+ "teamy-facet-value",
+ "teamy-vox-phon",
+ "teamy-vox-rt",
+ "teamy-vox-schema",
+ "tokio",
+]
+
+[[package]]
+name = "teamy-vox-websocket"
+version = "0.10.0-rc.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33ce642b7e523871161e84f887b0c6757050ca80ea06f24e2bd71b1b81786e1e"
+dependencies = [
+ "futures-channel",
+ "futures-util",
+ "js-sys",
+ "teamy-vox-core",
+ "teamy-vox-types",
+ "tokio",
+ "tokio-tungstenite",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "teamy-weavy"
+version = "0.2.3-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "100edc0c0568851536431de63b0bdfa22ef0013e778240b6fd6dd06b298c837c"
+dependencies = [
+ "copypatch",
 ]
 
 [[package]]
@@ -2633,45 +2839,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml"
-version = "1.1.2+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
-dependencies = [
- "indexmap",
- "serde_core",
- "serde_spanned",
- "toml_datetime",
- "toml_parser",
- "toml_writer",
- "winnow",
-]
-
-[[package]]
-name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
-dependencies = [
- "serde_core",
-]
-
-[[package]]
-name = "toml_parser"
-version = "1.1.2+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
-dependencies = [
- "winnow",
-]
-
-[[package]]
-name = "toml_writer"
-version = "1.1.1+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
-
-[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2784,7 +2951,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c5f7c95348f20c1c913d72157b3c6dee6ea3e30b3d19502c5a7f6d3f160dacbf"
 dependencies = [
  "cc",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -2899,176 +3066,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vox"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
- "facet-pretty",
- "facet-reflect",
- "tokio",
- "tracing",
- "vox-core",
- "vox-phon",
- "vox-rt",
- "vox-service-macros",
- "vox-stream",
- "vox-types",
- "vox-websocket",
-]
-
-[[package]]
-name = "vox-core"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
- "facet-core",
- "futures-util",
- "tokio",
- "tracing",
- "vox-phon",
- "vox-rt",
- "vox-types",
- "wasm-bindgen-futures",
- "zerocopy",
-]
-
-[[package]]
-name = "vox-fdpass"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "libc",
- "passfd",
- "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "vox-macros-core"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "vox-macros-parse",
-]
-
-[[package]]
-name = "vox-macros-parse"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "proc-macro2",
- "unsynn",
-]
-
-[[package]]
-name = "vox-phon"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "facet",
- "phon",
- "phon-engine",
- "phon-ir",
- "phon-jit",
- "phon-schema",
- "vox-rt",
-]
-
-[[package]]
-name = "vox-rt"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "futures-channel",
- "futures-util",
- "parking_lot",
- "tokio",
- "vox-rt-macros",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasmtimer",
- "web-sys",
-]
-
-[[package]]
-name = "vox-rt-macros"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-
-[[package]]
-name = "vox-schema"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "blake3",
- "facet",
- "facet-core",
-]
-
-[[package]]
-name = "vox-service-macros"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "proc-macro2",
- "vox-macros-core",
-]
-
-[[package]]
-name = "vox-stream"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "libc",
- "tokio",
- "tracing",
- "vox-core",
- "vox-fdpass",
- "vox-rt",
- "vox-types",
-]
-
-[[package]]
-name = "vox-types"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "blake3",
- "facet",
- "facet-core",
- "facet-reflect",
- "facet-value",
- "heck",
- "indexmap",
- "structstruck",
- "tokio",
- "vox-phon",
- "vox-rt",
- "vox-schema",
-]
-
-[[package]]
-name = "vox-websocket"
-version = "0.10.0-rc.5"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "futures-channel",
- "futures-util",
- "js-sys",
- "tokio",
- "tokio-tungstenite",
- "vox-core",
- "vox-types",
- "wasm-bindgen",
- "web-sys",
-]
 
 [[package]]
 name = "vswhom"
@@ -3190,14 +3187,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "weavy"
-version = "0.2.2"
-source = "git+https://github.com/TeamDman/facet.git?rev=23ad4dcd0#23ad4dcd034d123f0c38943305ffb077519040ce"
-dependencies = [
- "copypatch",
-]
-
-[[package]]
 name = "web-sys"
 version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3235,7 +3224,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3503,19 +3492,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
-name = "winnow"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
-
-[[package]]
 name = "winreg"
-version = "0.55.0"
+version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

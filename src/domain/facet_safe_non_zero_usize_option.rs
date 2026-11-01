@@ -101,10 +101,13 @@ const FACET_SAFE_NON_ZERO_USIZE_OPTION_PROXY: facet::ProxyDef = facet::ProxyDef 
 // preserves all positive `usize` values and maps only `0` to `None`.
 unsafe impl Facet<'_> for FacetSafeNonZeroUsizeOption {
     const SHAPE: &'static facet::Shape = &const {
+        const VTABLE: facet::VTableDirect =
+            facet::vtable_direct!(FacetSafeNonZeroUsizeOption => PartialEq,);
         facet::ShapeBuilder::for_sized::<FacetSafeNonZeroUsizeOption>("FacetSafeNonZeroUsizeOption")
             .module_path("teamy_mft::domain")
             .ty(facet::Type::User(facet::UserType::Opaque))
             .def(facet::Def::Scalar)
+            .vtable_direct(&VTABLE)
             .proxy(&FACET_SAFE_NON_ZERO_USIZE_OPTION_PROXY)
             .build()
     };

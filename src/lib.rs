@@ -37,7 +37,7 @@ use tracing::info_span;
 pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
 pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
 pub const APP_BUILD_UNIX_MS: &str = env!("BUILD_UNIX_MS");
-pub const DAEMON_RPC_COMPAT_VERSION: u32 = 8;
+pub const DAEMON_RPC_COMPAT_VERSION: u32 = 9;
 
 fn version() -> String {
     let built_at = APP_BUILD_UNIX_MS
@@ -123,7 +123,10 @@ pub fn main() -> eyre::Result<()> {
     logging_init::init_logging(&cli.global_args, log_source, cancellation_token.clone())?;
 
     tracy_capture_padding("before_cli_invoke");
-    let command_result = cli.invoke(cancellation_token.clone());
+    let command_result = cancellation_token.with_scope(|scope| {
+        cli.invoke(scope)
+    });
+    
     tracy_capture_padding("after_cli_invoke");
 
     debug!("Goodbye!");
@@ -132,5 +135,5 @@ pub fn main() -> eyre::Result<()> {
         "Tracy may take a while to finish sending the profile, during this time the clock will stop in tracy-capture."
     );
     command_result?;
-    cancellation_token.bail_if_cancelled()
+    Ok(())
 }
