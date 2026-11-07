@@ -385,7 +385,6 @@ impl LiveDriveState {
         let filter = QueryRowFilter::new(request, Some(filter_rules))
             .map_err(|error| MachineError::request_invalid(format!("{error:#}")))?;
 
-        // dwrk[impl worker.live.queries-use-index-cache]
         self.query_indexed_with_cancel(request, &filter, cancel)
     }
 
@@ -1659,6 +1658,7 @@ mod tests {
                 cache_dir.path(),
                 &[drive_letter],
                 IfExistsOutputBehaviour::Overwrite,
+                1,
                 None,
                 &cancel,
             )?;
