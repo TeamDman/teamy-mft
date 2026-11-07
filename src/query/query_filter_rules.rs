@@ -359,7 +359,7 @@ impl QueryFilterRules {
 
     #[must_use]
     pub fn is_filtered_path(&self, path: &Path) -> bool {
-        let normalized_path = normalize_candidate_path(path);
+        let normalized_path = normalize_path_like(path);
         let mut include = match self.default_behavior {
             DefaultRuleBehavior::Include => true,
             DefaultRuleBehavior::Exclude => false,
@@ -376,7 +376,7 @@ impl QueryFilterRules {
 
     #[must_use]
     pub fn matching_files_for_path(&self, path: &Path) -> Vec<&DiscoveredRuleFile> {
-        let normalized_path = normalize_candidate_path(path);
+        let normalized_path = normalize_path_like(path);
         self.files
             .iter()
             .filter(|file| {
@@ -671,10 +671,6 @@ fn contains_glob_metacharacters(pattern: &str) -> bool {
     pattern
         .chars()
         .any(|ch| matches!(ch, '*' | '?' | '[' | ']' | '{' | '}'))
-}
-
-fn normalize_candidate_path(path: &Path) -> String {
-    normalize_path_like(path)
 }
 
 fn normalize_path_like(path: &Path) -> String {

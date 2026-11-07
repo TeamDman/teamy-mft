@@ -47,6 +47,7 @@ impl SyncWork {
 /// Work must be selected with `SyncWork::prepare` before execution.
 pub async fn execute_sync(
     work: SyncWork,
+    parallel: usize,
     console_pid: Option<u32>,
     cancel: &CancellationScope,
 ) -> eyre::Result<()> {

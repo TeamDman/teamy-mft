@@ -4,8 +4,12 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 
-#[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Clone)]
 pub struct SyncPlan {
+    /// Maximum concurrent index builds and shared indexing CPU workers (0: Rayon automatic). Drive reads remain parallel.
+    #[facet(args::named, default = 1)]
+    pub parallel: usize,
+
     /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D"). Compatibility alias: `--drive`.
     #[facet(args::named, args::alias = "drive", default)]
     pub drive_letter_pattern: DriveLetterPattern,
@@ -21,4 +25,16 @@ pub struct SyncPlan {
     /// Optional path to reflect into the published overlay index without rebuilding a full drive index
     #[facet(args::positional, default)]
     pub path: Option<String>,
+}
+
+impl Default for SyncPlan {
+    fn default() -> Self {
+        Self {
+            parallel: 1,
+            drive_letter_pattern: DriveLetterPattern::default(),
+            if_exists: IfExistsOutputBehaviour::default(),
+            recursive: false,
+            path: None,
+        }
+    }
 }

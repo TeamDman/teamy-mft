@@ -70,6 +70,7 @@ impl SyncArgs {
                     &sync_dir,
                     &drive_letters,
                     plan.if_exists,
+                    plan.parallel,
                     console_pid,
                     cancellation_scope,
                 )?;
