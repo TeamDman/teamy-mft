@@ -17,7 +17,6 @@ fn should_include_indexed_row(
     only_deleted: bool,
     has_deleted_entries: bool,
 ) -> bool {
-    // cli[impl command.query.deleted-filter]
     if only_deleted {
         return has_deleted_entries;
     }

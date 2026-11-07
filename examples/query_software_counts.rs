@@ -1,8 +1,6 @@
 //! Count a small set of software marker files using one reused published-index
 //! query session.
 //!
-//! repo[impl examples.rs-files]
-//!
 //! This mirrors the repeated-query pattern used by Cloud Terrastodon's
 //! `software list` flow: create one `QuerySession::in_current_process()` and
 //! reuse it across multiple count queries instead of reopening the published

@@ -17,8 +17,6 @@ use figue::{self as args};
 use teamy_cancellation::CancellationScope;
 
 /// Teamy MFT commands
-// cli[impl command.surface.core]
-// tool[impl cli.help.describes-behavior]
 #[derive(Facet, Arbitrary, PartialEq, Debug)]
 #[repr(u8)]
 pub enum Command {

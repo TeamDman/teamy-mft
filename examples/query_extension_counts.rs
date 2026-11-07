@@ -1,7 +1,5 @@
 //! Count file extensions for all indexed files under a directory.
 //!
-//! repo[impl examples.rs-files]
-//!
 //! Uses the zero-argument `<>` match-all rule together with `--in`-style scope
 //! filtering so the query enumerates every indexed path below one directory.
 //! The example then filters out directories locally because Teamy MFT indexes

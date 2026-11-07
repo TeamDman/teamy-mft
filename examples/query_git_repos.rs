@@ -1,6 +1,5 @@
 //! Find all git repositories visible in the MFT search index.
 //!
-// repo[impl examples.rs-files]
 //! Uses `<.git>` (exact terminal-segment match) so it returns exact `.git`
 //! directories without matching `.gitignore`, `.github`, `project.git`, etc.
 //!

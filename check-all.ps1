@@ -18,7 +18,3 @@ $features = $pkg.features.PSObject.Properties.Name | Where-Object { $_ -notin @(
 $featuresArg = if ($features) { @("--features", ($features -join ",")) } else { @() }
 cargo test @featuresArg --quiet
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host -ForegroundColor Yellow "Running tracey validation..."
-tracey query validate --deny warnings
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

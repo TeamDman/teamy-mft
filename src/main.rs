@@ -8,7 +8,6 @@ fn main() -> eyre::Result<()> {
     handle_elevation_completion(teamy_mft::main())
 }
 
-// cli[impl elevation.completion]
 fn handle_elevation_completion(result: eyre::Result<()>) -> eyre::Result<()> {
     if let Err(error) = &result
         && let Some(completed) = error.downcast_ref::<ElevationCompleted>()
@@ -55,7 +54,6 @@ mod tests {
         std::process::exit(if exit_code == ExitCode::SUCCESS { 0 } else { 1 });
     }
 
-    // cli[verify elevation.completion]
     #[test]
     fn entrypoint_reports_only_real_errors_and_preserves_exit_codes() {
         for (case, expected_code, expect_report) in [

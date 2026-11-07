@@ -31,13 +31,11 @@ use tracing::debug;
 #[cfg(feature = "tracy")]
 use tracing::info_span;
 
-// tool[impl cli.version.includes-semver]
-// tool[impl cli.version.includes-git-revision]
 /// Version string combining package version and git revision.
 pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
 pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
 pub const APP_BUILD_UNIX_MS: &str = env!("BUILD_UNIX_MS");
-pub const DAEMON_RPC_COMPAT_VERSION: u32 = 9;
+pub const DAEMON_RPC_COMPAT_VERSION: u32 = 10;
 
 fn version() -> String {
     let built_at = APP_BUILD_UNIX_MS
@@ -78,7 +76,6 @@ fn tracy_capture_padding(_phase: &'static str) {}
 /// # Panics
 ///
 /// Panics if the CLI schema is invalid (should never happen with correct code).
-// tool[impl cli.help.position-independent]
 pub fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
@@ -90,8 +87,6 @@ pub fn main() -> eyre::Result<()> {
         crate::windows_utils::string::warn_if_utf8_not_enabled();
     };
 
-    // cli[impl parser.args-consistent]
-    // cli[impl parser.roundtrip]
     let version = version();
     let cancellation_token = crate::cancellation::install_ctrlc_handler()?;
     let cli: Cli = figue::Driver::new(
@@ -123,10 +118,8 @@ pub fn main() -> eyre::Result<()> {
     logging_init::init_logging(&cli.global_args, log_source, cancellation_token.clone())?;
 
     tracy_capture_padding("before_cli_invoke");
-    let command_result = cancellation_token.with_scope(|scope| {
-        cli.invoke(scope)
-    });
-    
+    let command_result = cancellation_token.with_scope(|scope| cli.invoke(scope));
+
     tracy_capture_padding("after_cli_invoke");
 
     debug!("Goodbye!");

@@ -10,7 +10,6 @@ use teamy_cancellation::CancellationScope;
 
 /// Teamy MFT command-line interface.
 #[derive(Facet, Arbitrary, Debug, Default)]
-// tool[impl cli.help.describes-environment]
 pub struct Cli {
     #[facet(flatten)]
     pub global_args: GlobalArgs,

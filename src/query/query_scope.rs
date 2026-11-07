@@ -79,7 +79,6 @@ fn path_matches_scope(path: &Path, scope: &QueryScope) -> bool {
 
 #[cfg(test)]
 fn should_include_scope(path: &str, scope: Option<&QueryScope>) -> bool {
-    // cli[impl command.query.scope-filter]
     let Some(scope) = scope else {
         return true;
     };

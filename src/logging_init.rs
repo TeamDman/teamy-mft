@@ -397,9 +397,6 @@ fn tracy_log_filter() -> eyre::Result<EnvFilter> {
         .map_err(Into::into)
 }
 
-// tool[impl logging.stderr-output]
-// tool[impl logging.file-path-option]
-// tool[impl logging.file-structured-ndjson]
 /// Initialize logging with an explicit source for local events.
 /// Forwarded service events retain their service prefix.
 ///

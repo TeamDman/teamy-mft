@@ -129,7 +129,6 @@ pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
     feature = "extended_observability_per_record",
     instrument(level = "debug", skip_all)
 )]
-// mftf[impl file-name-attributes.resident-x30]
 pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
     entry_bytes: &'a [u8],
     entry_id: u32,

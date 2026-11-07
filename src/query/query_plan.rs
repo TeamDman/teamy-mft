@@ -10,7 +10,6 @@ use figue::{self as args};
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default, Clone)]
 #[facet(rename_all = "kebab-case")]
-// cli[impl command.query.drive-pattern-selection]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "CLI flags map directly to independent query toggles"

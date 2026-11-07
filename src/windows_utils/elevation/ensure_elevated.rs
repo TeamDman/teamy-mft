@@ -11,7 +11,6 @@ use tracing::warn;
 ///
 /// Returns `ElevationCompleted` after the child exits, or an ordinary error if launching
 /// or waiting fails. Callers must propagate the report without converting it to a string.
-// cli[impl elevation.completion]
 pub fn ensure_elevated(console_pid: Option<u32>) -> eyre::Result<()> {
     if is_elevated() {
         return Ok(());

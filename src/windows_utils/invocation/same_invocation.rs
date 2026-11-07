@@ -22,7 +22,6 @@ impl Invocable for SameInvocation {
     }
 }
 
-// cli[impl elevation.raw-arguments]
 fn command_line_parameters(command_line: &[u16]) -> &[u16] {
     const QUOTE: u16 = b'"' as u16;
     const SPACE: u16 = b' ' as u16;
@@ -55,7 +54,6 @@ fn command_line_parameters(command_line: &[u16]) -> &[u16] {
 mod tests {
     use super::command_line_parameters;
 
-    // cli[verify elevation.raw-arguments]
     #[test]
     fn skips_only_the_executable_and_its_separator() {
         for (command_line, expected) in [

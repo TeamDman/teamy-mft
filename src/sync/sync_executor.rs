@@ -22,7 +22,6 @@ impl SyncWork {
     /// # Errors
     ///
     /// Returns an error when `Abort` encounters an existing MFT or base index.
-    // dwrk[impl sync.skip.preserves-snapshot-state]
     pub fn prepare(
         drive_infos: Vec<DriveSyncInfo>,
         if_exists: &IfExistsOutputBehaviour,

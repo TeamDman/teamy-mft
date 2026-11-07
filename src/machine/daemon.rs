@@ -157,9 +157,7 @@ struct DriveWorkerStatusSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DriveWorkerRuntimeMode {
-    // dwrk[impl worker.mode.live-observed]
     LiveObserved,
-    // dwrk[impl worker.mode.published-index-only]
     PublishedIndexOnly,
 }
 
@@ -318,7 +316,6 @@ impl DriveWorkerState {
         request: &QueryPlan,
         cancel: &CancellationScope,
     ) -> Result<DaemonDriveQueryRows, MachineError> {
-        // dwrk[impl worker.query.cancelled-without-degrading]
         if cancel.is_cancelled() {
             return Ok(DaemonDriveQueryRows {
                 rows: Vec::new(),
@@ -340,7 +337,6 @@ impl DriveWorkerState {
                     degraded: None,
                 });
             }
-            // dwrk[impl worker.live.falls-back-to-published-cache]
             return match query_published_drive(self.drive, &self.sync_dir, request) {
                 Ok(rows) => {
                     let message = format!(
@@ -456,7 +452,6 @@ impl DriveWorkerState {
     clippy::too_many_lines,
     reason = "drive worker command handling is intentionally kept in one loop so state transitions stay visible"
 )]
-// dwrk[impl worker.query.serialized-per-drive]
 fn run_drive_worker(
     state: &mut DriveWorkerState,
     rx: &Receiver<DriveWorkerCommand>,
@@ -562,7 +557,6 @@ fn run_drive_worker(
                 break;
             }
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                // dwrk[impl worker.refresh.timeout-driven]
                 if state.state.is_none() || state.degraded.is_some() {
                     publish_drive_worker_status(state, status);
                     continue;
@@ -909,7 +903,6 @@ fn warm_next_drive_worker(
     drive_workers: &StdMutex<FxHashMap<char, DriveWorker>>,
     cancellation_scope: &CancellationScope,
 ) {
-    // dwrk[impl worker.warmup.gradual-per-drive]
     if state.warm_drive_letters.is_empty() {
         return;
     }
@@ -1130,6 +1123,7 @@ impl DaemonRuntimeState {
                 &self.sync_dir,
                 &drive_letters,
                 request.if_exists,
+                request.parallel,
                 self.console_pid,
                 cancel,
             )
@@ -2122,6 +2116,7 @@ pub fn sync_machine_cache(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
+    parallel: usize,
     console_pid: Option<u32>,
     cancel: &CancellationScope,
 ) -> eyre::Result<MachineCacheSyncResult> {
@@ -2132,6 +2127,7 @@ pub fn sync_machine_cache(
         sync_dir,
         drive_letters,
         if_exists,
+        parallel,
         console_pid,
         cancel,
     ))
@@ -2141,11 +2137,13 @@ async fn sync_machine_cache_async(
     sync_dir: &std::path::Path,
     drive_letters: &[char],
     if_exists: IfExistsOutputBehaviour,
+    parallel: usize,
     console_pid: Option<u32>,
     cancel: &CancellationScope,
 ) -> eyre::Result<MachineCacheSyncResult> {
     crate::windows_utils::elevation::ensure_elevated(console_pid)?;
     std::fs::create_dir_all(sync_dir)?;
+    let _directory_guard = DirectoryExclusivityGuard::acquire(sync_dir)?;
     let drive_infos =
         resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
     let work = SyncWork::prepare(drive_infos, &if_exists)?;
@@ -2166,7 +2164,7 @@ async fn sync_machine_cache_async(
             skipped_drives.push((drive, String::from("Existing base index retained")));
         }
     }
-    execute_sync(work, console_pid, cancel).await?;
+    execute_sync(work, parallel, console_pid, cancel).await?;
     publish_machine_snapshots(sync_dir, fresh_snapshots, &snapshot_cursors)?;
 
     Ok(MachineCacheSyncResult {
@@ -2176,7 +2174,6 @@ async fn sync_machine_cache_async(
     })
 }
 
-// dwrk[impl sync.skip.preserves-snapshot-state]
 fn publish_machine_snapshots(
     sync_dir: &std::path::Path,
     fresh_snapshots: Vec<crate::sync::DriveSyncInfo>,
@@ -2265,7 +2262,6 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
 
-    // dwrk[verify sync.skip.preserves-snapshot-state]
     #[tokio::test]
     async fn skipped_snapshots_preserve_sidecars_and_cached_mft() -> eyre::Result<()> {
         CancellationToken::new()
@@ -2308,7 +2304,7 @@ mod tests {
                     assert!(work.mft_drives.is_empty());
                     assert_eq!(work.index_drives.len(), usize::from(!index_exists));
                     let fresh_snapshots = work.mft_drives.clone();
-                    execute_sync(work, None, &scope).await?;
+                    execute_sync(work, 1, None, &scope).await?;
                     let cursors = FxHashMap::from_iter([(
                         'C',
                         JournalCursor {

@@ -1,22 +1,16 @@
 # Teamy MFT
 
-<!-- repo[impl readme.explanation] -->
-<!-- repo[impl readme.package-page-badges] -->
-
 [![crates.io](https://img.shields.io/crates/v/teamy-mft.svg)](https://crates.io/crates/teamy-mft)
 
 Command-line toolkit for interacting with the NTFS Master File Table on Windows.
 
 ## Installation
 
-<!-- repo[impl readme.code-example] -->
 ```bash
 cargo install --path .
 ```
 
 ## Demo
-
-<!-- repo[impl readme.media-demo] -->
 
 [YouTube demo](https://youtu.be/bCeMz1AZw-E)
 
@@ -47,8 +41,6 @@ teamy-mft profile list
 ```
 
 ## Library Usage
-
-<!-- repo[impl examples.readme-snippet] -->
 
 ```rust
 use teamy_mft::cli::command::query::QueryArgs;

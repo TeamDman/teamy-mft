@@ -24,7 +24,6 @@ impl Invocable for SameInvocationSameConsole {
     }
 }
 
-// cli[impl elevation.console-pid]
 fn console_parameters(raw_parameters: &OsStr, console_pid: Option<u32>, pid: u32) -> OsString {
     let mut parameters = if console_pid.is_some() {
         OsString::new()
@@ -44,7 +43,6 @@ mod tests {
     use std::os::windows::ffi::OsStrExt;
     use std::os::windows::ffi::OsStringExt;
 
-    // cli[verify elevation.console-pid]
     #[test]
     fn prepends_console_pid_without_rewriting_the_original_text() {
         for (raw, expected) in [
