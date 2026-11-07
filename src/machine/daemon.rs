@@ -1,4 +1,5 @@
 use crate::cancellation::CancellationToken;
+use crate::domain::DirectoryExclusivityGuard;
 use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::current_unix_ms;
