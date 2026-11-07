@@ -35,7 +35,7 @@ impl PartialOrd for PhysicalReadResultEntry {
 
 #[derive(Debug)]
 pub struct PhysicalReadResults {
-    pub entries: BTreeSet<PhysicalReadResultEntry>, // TODO: replace with masstree
+    pub entries: BTreeSet<PhysicalReadResultEntry>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
