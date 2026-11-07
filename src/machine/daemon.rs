@@ -34,7 +34,6 @@ use crate::search_index::format::SEARCH_INDEX_VERSION;
 use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncPlan;
 use crate::sync::SyncWork;
-use crate::sync::execute_sync;
 use crate::sync::resolve_drive_infos_in_dir_for_letters;
 use crate::windows_utils::string::EasyPCWSTR;
 use crossbeam_channel::Receiver;
@@ -2157,7 +2156,7 @@ async fn sync_machine_cache_async(
             skipped_drives.push((drive, String::from("Existing base index retained")));
         }
     }
-    execute_sync(work, parallel, console_pid, cancel).await?;
+    work.execute(parallel, console_pid, cancel).await?;
     publish_machine_snapshots(sync_dir, fresh_snapshots, &snapshot_cursors)?;
 
     Ok(MachineCacheSyncResult {
@@ -2255,7 +2254,6 @@ mod tests {
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use crate::sync::IfExistsOutputBehaviour;
     use crate::sync::SyncWork;
-    use crate::sync::execute_sync;
     use crate::sync::resolve_drive_infos_in_dir_for_letters;
     use rustc_hash::FxHashMap;
     use std::sync::Mutex as StdMutex;
@@ -2307,7 +2305,7 @@ mod tests {
                     assert!(work.mft_drives.is_empty());
                     assert_eq!(work.index_drives.len(), usize::from(!index_exists));
                     let fresh_snapshots = work.mft_drives.clone();
-                    execute_sync(work, 1.into(), None, &scope).await?;
+                    work.execute(1.into(), None, &scope).await?;
                     let cursors = FxHashMap::from_iter([(
                         DriveLetter::C,
                         JournalCursor {

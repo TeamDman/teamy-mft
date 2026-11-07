@@ -24,7 +24,7 @@ use uom::si::information::byte;
 use uom::si::ratio::ratio;
 use uom::si::time::second;
 
-/// Overall high-level processing of an MFT file: mmap -> copy -> fixups -> extract names -> resolve paths.
+/// Extract filenames from fixed-up MFT records and resolve their paths in parallel.
 /// Resolved paths include the drive prefix (e.g., `C:\`) so callers can inject or display them directly.
 ///
 /// # Errors

@@ -2,7 +2,7 @@
 //!
 //! These functions operate directly on raw entry byte slices without constructing
 //! higher level structs. They are intended for the high-performance pipeline
-//! (mmap -> copy -> parallel fixups -> attribute scan).
+//! (mutable bytes -> parallel fixups -> attribute scan).
 //!
 //! Design goals:
 //! - Minimal branching in the hot path.
