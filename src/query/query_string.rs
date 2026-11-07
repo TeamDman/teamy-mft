@@ -209,11 +209,14 @@ fn is_query_boundary(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::QueryString;
+    use crate::domain::DriveLetter;
     use crate::query::MatchingRowIndices;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     #[test]
     fn query_string_intersects_contains_and_suffix_candidates() -> eyre::Result<()> {
@@ -232,7 +235,11 @@ mod tests {
             },
         ];
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;

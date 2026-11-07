@@ -1,4 +1,5 @@
 use super::query_runtime::QueryRowVisitor;
+use crate::domain::DriveLetter;
 use crate::machine::config::load_sync_dir_from_config;
 use crate::machine::config::published_drive_paths;
 use crate::query::Pathlike;
@@ -40,12 +41,12 @@ pub enum QuerySessionBackend {
 pub struct QuerySession {
     backend: QuerySessionBackend,
     sync_dir: PathBuf,
-    published_index_cache: HashMap<char, CachedPublishedDriveQuery>,
+    published_index_cache: HashMap<DriveLetter, CachedPublishedDriveQuery>,
 }
 
 #[derive(Debug)]
 struct CachedPublishedDriveQuery {
-    drive: char,
+    drive: DriveLetter,
     base_index: MappedSearchIndex,
     overlay_index: Option<MappedSearchIndex>,
 }
@@ -136,13 +137,51 @@ impl QuerySession {
         &mut self,
         query_plan: &QueryPlan,
         cancel: &CancellationScope,
-        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+        visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
     ) -> eyre::Result<()> {
         let _guard = info_span!("visit_published_index_rows").entered();
         let scopes = resolve_query_scopes(&query_plan.r#in)?;
         let drive_letters = query_plan
             .drive_letter_pattern
             .into_drive_letters_for_scope_roots(scopes.iter().map(|scope| scope.root.as_path()))?;
+        self.visit_selected_published_index_rows(query_plan, cancel, drive_letters, visit)
+    }
+
+    // Keep OS drive enumeration separate so selection policy can be exercised
+    // with tiny cached fixtures, independently of the machine's mounted drives.
+    fn visit_selected_published_index_rows(
+        &mut self,
+        query_plan: &QueryPlan,
+        cancel: &CancellationScope,
+        drive_letters: Vec<DriveLetter>,
+        mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<()>>,
+    ) -> eyre::Result<()> {
+        let skip_missing =
+            query_plan.drive_letter_pattern.as_ref().trim() == "*" && query_plan.r#in.is_empty();
+        let mut selected_drives = Vec::with_capacity(drive_letters.len());
+        for drive in drive_letters {
+            if skip_missing && !self.published_index_cache.contains_key(&drive) {
+                let path = published_drive_paths(&self.sync_dir, drive).base_index_path;
+                match std::fs::metadata(&path) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::warn!(drive = %drive, index_path = %path.display(),
+                            "Skipping drive without a search index for wildcard query");
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(error).wrap_err_with(|| {
+                            format!(
+                                "Failed inspecting search index for drive {drive} at {}",
+                                path.display()
+                            )
+                        });
+                    }
+                    Ok(_) => {}
+                }
+            }
+            selected_drives.push(drive);
+        }
+        let drive_letters = selected_drives;
         let filter_rules = QueryFilterRules::discover_for_drive_letters(
             &drive_letters,
             &self.sync_dir,
@@ -170,7 +209,7 @@ impl QuerySession {
         Ok(())
     }
 
-    fn cached_drive(&mut self, drive: char) -> eyre::Result<&CachedPublishedDriveQuery> {
+    fn cached_drive(&mut self, drive: DriveLetter) -> eyre::Result<&CachedPublishedDriveQuery> {
         if !self.published_index_cache.contains_key(&drive) {
             let cache = CachedPublishedDriveQuery::load(drive, &self.sync_dir)?;
             self.published_index_cache.insert(drive, cache);
@@ -183,7 +222,7 @@ impl QuerySession {
 }
 
 impl CachedPublishedDriveQuery {
-    fn load(drive: char, sync_dir: &std::path::Path) -> eyre::Result<Self> {
+    fn load(drive: DriveLetter, sync_dir: &std::path::Path) -> eyre::Result<Self> {
         let paths = published_drive_paths(sync_dir, drive);
         ensure!(
             paths.base_index_path.is_file(),
@@ -398,6 +437,7 @@ struct MatchingRowRef {
 mod tests {
     use super::QuerySession;
     use crate::cancellation::CancellationToken;
+    use crate::domain::DriveLetter;
     use crate::machine::config::published_drive_paths;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
@@ -406,6 +446,8 @@ mod tests {
     use crate::windows_utils::storage::DriveLetterPattern;
     use std::ops::ControlFlow;
     use tempfile::TempDir;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     fn collect_visited_paths(
         session: &mut QuerySession,
@@ -424,7 +466,7 @@ mod tests {
 
     fn write_drive_index(
         temp_dir: &TempDir,
-        drive: char,
+        drive: DriveLetter,
         rows: &[SearchIndexPathRow],
     ) -> eyre::Result<()> {
         let paths = published_drive_paths(temp_dir.path(), drive);
@@ -435,7 +477,7 @@ mod tests {
                 .expect("published index path should have a parent"),
         )?;
         SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(drive, 123, rows.len() as u64),
+            SearchIndexHeader::new(drive, Information::new::<byte>(123), rows.len() as u64),
             rows,
         )?
         .write_to_path(&paths.base_index_path)?;
@@ -444,7 +486,7 @@ mod tests {
 
     fn write_overlay_drive_index(
         temp_dir: &TempDir,
-        drive: char,
+        drive: DriveLetter,
         rows: &[SearchIndexPathRow],
     ) -> eyre::Result<()> {
         let paths = published_drive_paths(temp_dir.path(), drive);
@@ -455,7 +497,7 @@ mod tests {
                 .expect("published overlay index path should have a parent"),
         )?;
         SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(drive, 123, rows.len() as u64),
+            SearchIndexHeader::new(drive, Information::new::<byte>(123), rows.len() as u64),
             rows,
         )?
         .write_to_path(&paths.overlay_index_path)?;
@@ -474,7 +516,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         write_drive_index(
             &temp_dir,
-            'C',
+            DriveLetter::C,
             &[SearchIndexPathRow {
                 path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                 has_deleted_entries: false,
@@ -510,7 +552,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             write_drive_index(
                 &temp_dir,
-                'C',
+                DriveLetter::C,
                 &[SearchIndexPathRow {
                     path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                     has_deleted_entries: false,
@@ -546,7 +588,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             write_drive_index(
                 &temp_dir,
-                'C',
+                DriveLetter::C,
                 &[
                     SearchIndexPathRow {
                         path: String::from(r"C:\Repos\app\Cargo.toml").into(),
@@ -600,7 +642,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             write_drive_index(
                 &temp_dir,
-                'C',
+                DriveLetter::C,
                 &[
                     SearchIndexPathRow {
                         path: String::from(r"C:\Repos\app\Cargo.toml").into(),
@@ -638,7 +680,7 @@ mod tests {
         let temp_dir = tempfile::tempdir()?;
         write_drive_index(
             &temp_dir,
-            'C',
+            DriveLetter::C,
             &[SearchIndexPathRow {
                 path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                 has_deleted_entries: false,
@@ -663,7 +705,7 @@ mod tests {
             let temp_dir = tempfile::tempdir()?;
             write_drive_index(
                 &temp_dir,
-                'C',
+                DriveLetter::C,
                 &[SearchIndexPathRow {
                     path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                     has_deleted_entries: false,
@@ -671,7 +713,7 @@ mod tests {
             )?;
             write_overlay_drive_index(
                 &temp_dir,
-                'C',
+                DriveLetter::C,
                 &[SearchIndexPathRow {
                     path: String::from(r"C:\Repos\app\Cargo.toml").into(),
                     has_deleted_entries: true,
@@ -698,5 +740,182 @@ mod tests {
             assert!(rows[0].has_deleted_entries);
             Ok(())
         })
+    }
+
+    fn collect_selected_fixture_paths(
+        temp_dir: &TempDir,
+        plan: &QueryPlan,
+        drives: Vec<DriveLetter>,
+    ) -> eyre::Result<Vec<String>> {
+        CancellationToken::new().with_scope(|scope| {
+            let mut session = QuerySession {
+                backend: super::QuerySessionBackend::Local,
+                sync_dir: temp_dir.path().to_owned(),
+                published_index_cache: std::collections::HashMap::new(),
+            };
+            let mut rows = Vec::new();
+            session.visit_selected_published_index_rows(plan, &scope, drives, |row| {
+                rows.push(row.path.to_string());
+                Ok(ControlFlow::Continue(()))
+            })?;
+            Ok(rows)
+        })
+    }
+
+    struct QueryWarningCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryWarningCounter {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if *event.metadata().level() == tracing::Level::WARN
+                && event.metadata().target() == "teamy_mft::query::query_session"
+            {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[test]
+    fn wildcard_query_warns_for_missing_drive_and_returns_indexed_rows() -> eyre::Result<()> {
+        use tracing_subscriber::layer::SubscriberExt;
+        let temp = tempfile::tempdir()?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[SearchIndexPathRow {
+                path: r"C:\Repos\Cargo.toml".into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry()
+            .with(QueryWarningCounter(std::sync::Arc::clone(&warnings)));
+        let rows = tracing::subscriber::with_default(subscriber, || {
+            collect_selected_fixture_paths(
+                &temp,
+                &QueryPlan::new("Cargo.toml"),
+                vec![DriveLetter::L, DriveLetter::C],
+            )
+        })?;
+        assert_eq!(rows, [r"C:\Repos\Cargo.toml"]);
+        assert_eq!(warnings.load(std::sync::atomic::Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_drives_require_every_selected_index() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[SearchIndexPathRow {
+                path: r"C:\Repos\Cargo.toml".into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        for pattern in ["L", "CL"] {
+            let plan = QueryPlan {
+                drive_letter_pattern: DriveLetterPattern(pattern.into()),
+                ..QueryPlan::new("Cargo.toml")
+            };
+            let error = collect_selected_fixture_paths(
+                &temp,
+                &plan,
+                plan.drive_letter_pattern.into_drive_letters()?,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("Fast query requires"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wildcard_query_with_all_indexes_missing_warns_and_returns_no_rows() -> eyre::Result<()> {
+        use tracing_subscriber::layer::SubscriberExt;
+        let temp = tempfile::tempdir()?;
+        let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry()
+            .with(QueryWarningCounter(std::sync::Arc::clone(&warnings)));
+        let rows = tracing::subscriber::with_default(subscriber, || {
+            collect_selected_fixture_paths(
+                &temp,
+                &QueryPlan::new("Cargo.toml"),
+                vec![DriveLetter::L, DriveLetter::M],
+            )
+        })?;
+        assert!(rows.is_empty());
+        assert_eq!(warnings.load(std::sync::atomic::Ordering::Relaxed), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_wildcard_query_keeps_missing_index_error() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let plan = QueryPlan {
+            r#in: vec![temp.path().to_string_lossy().into_owned()],
+            ..QueryPlan::new("Cargo.toml")
+        };
+        let drives = plan
+            .drive_letter_pattern
+            .into_drive_letters_for_scope_roots([temp.path()])?;
+        let error = collect_selected_fixture_paths(&temp, &plan, drives).unwrap_err();
+        assert!(error.to_string().contains("Fast query requires"));
+        Ok(())
+    }
+
+    #[test]
+    fn wildcard_query_does_not_skip_corrupt_or_nonfile_indexes() -> eyre::Result<()> {
+        for directory in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let path = published_drive_paths(temp.path(), DriveLetter::L).base_index_path;
+            if directory {
+                std::fs::create_dir(&path)?;
+            } else {
+                std::fs::write(&path, b"corrupt index")?;
+            }
+            assert!(
+                collect_selected_fixture_paths(
+                    &temp,
+                    &QueryPlan::new("Cargo.toml"),
+                    vec![DriveLetter::L]
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wildcard_query_does_not_hide_corrupt_overlay_or_invalid_profile() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[SearchIndexPathRow {
+                path: r"C:\Repos\Cargo.toml".into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        std::fs::write(
+            published_drive_paths(temp.path(), DriveLetter::C).overlay_index_path,
+            b"corrupt overlay",
+        )?;
+        assert!(
+            collect_selected_fixture_paths(
+                &temp,
+                &QueryPlan::new("Cargo.toml"),
+                vec![DriveLetter::L, DriveLetter::C]
+            )
+            .is_err()
+        );
+        let plan = QueryPlan {
+            profile: Some("undiscovered-profile".into()),
+            ..QueryPlan::new("Cargo.toml")
+        };
+        assert!(collect_selected_fixture_paths(&temp, &plan, vec![DriveLetter::L]).is_err());
+        Ok(())
     }
 }

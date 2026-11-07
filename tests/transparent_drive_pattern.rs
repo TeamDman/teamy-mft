@@ -1,4 +1,5 @@
 use facet::Facet;
+use teamy_mft::domain::DriveLetter;
 use teamy_mft::windows_utils::storage::DriveLetterPattern;
 
 #[derive(Debug, Facet, PartialEq)]
@@ -30,7 +31,12 @@ fn drive_patterns_roundtrip_through_optional_and_repeated_cli_arguments() {
     assert_eq!(actual, expected);
     assert_eq!(
         actual.drives.into_drive_letters().unwrap(),
-        vec!['C', 'D', 'E', 'F']
+        vec![
+            DriveLetter::C,
+            DriveLetter::D,
+            DriveLetter::E,
+            DriveLetter::F
+        ]
     );
 }
 

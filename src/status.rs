@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::published_drive_paths;
 use crate::windows_utils::storage::DriveLetterPattern;
 use std::path::Path;
@@ -8,7 +9,7 @@ use std::time::SystemTime;
 /// Cached status for a single drive's `.mft` and `.mft_search_index` files.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DriveCacheStatus {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub mft_path: PathBuf,
     pub mft_modified_at: Option<SystemTime>,
     pub index_path: PathBuf,
@@ -69,7 +70,7 @@ impl TeamyMftStatus {
     /// Returns an error if cached file metadata cannot be read.
     pub fn from_sync_dir_and_drive_letters(
         sync_dir: &Path,
-        drive_letters: impl IntoIterator<Item = char>,
+        drive_letters: impl IntoIterator<Item = DriveLetter>,
     ) -> eyre::Result<Self> {
         let mut drives = drive_letters
             .into_iter()
@@ -160,7 +161,10 @@ impl TeamyMftStatus {
         if !missing_query_ready.is_empty() {
             eyre::bail!(
                 "teamy-mft query cache is incomplete for drives: {}",
-                missing_query_ready.iter().collect::<String>()
+                missing_query_ready
+                    .iter()
+                    .map(char::from)
+                    .collect::<String>()
             );
         }
 
@@ -195,6 +199,7 @@ impl TeamyMftStatus {
 mod tests {
     use super::DriveCacheStatus;
     use super::TeamyMftStatus;
+    use crate::domain::DriveLetter;
     use std::path::Path;
     use std::time::Duration;
     use std::time::SystemTime;
@@ -205,7 +210,7 @@ mod tests {
         let older = now - Duration::from_secs(20);
         let newer = now - Duration::from_secs(10);
         let drive = DriveCacheStatus {
-            drive_letter: 'C',
+            drive_letter: DriveLetter::C,
             mft_path: Path::new("C.mft").to_path_buf(),
             mft_modified_at: Some(newer),
             index_path: Path::new("C.mft_search_index").to_path_buf(),
@@ -220,7 +225,7 @@ mod tests {
         let status = TeamyMftStatus {
             sync_dir: Path::new("G:/sync-root").to_path_buf(),
             drives: vec![DriveCacheStatus {
-                drive_letter: 'C',
+                drive_letter: DriveLetter::C,
                 mft_path: Path::new("C.mft").to_path_buf(),
                 mft_modified_at: Some(SystemTime::now()),
                 index_path: Path::new("C.mft_search_index").to_path_buf(),
@@ -245,8 +250,9 @@ mod tests {
         std::fs::write(temp_dir.path().join("C.mft_search_index"), b"index")
             .expect("index file should be written");
 
-        let status = TeamyMftStatus::from_sync_dir_and_drive_letters(temp_dir.path(), ['C'])
-            .expect("status should load");
+        let status =
+            TeamyMftStatus::from_sync_dir_and_drive_letters(temp_dir.path(), [DriveLetter::C])
+                .expect("status should load");
 
         assert_eq!(status.drives.len(), 1);
         assert!(status.drives[0].mft_modified_at.is_some());

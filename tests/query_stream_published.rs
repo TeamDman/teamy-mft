@@ -1,5 +1,8 @@
 //! Regression for the published Phon explicit-proxy schema and RPC path.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "The actual RPC module is included to exercise its generated schema and dispatch surface"
+)]
 
 pub use teamy_mft::daemon;
 pub use teamy_mft::query;
@@ -17,6 +20,7 @@ mod tests {
     use query::QueryPlan;
     use query::QueryResultRow;
     use std::time::Duration;
+    use teamy_mft::domain::DriveLetter;
 
     #[test]
     fn actual_query_stream_schema_supports_numeric_proxies() {
@@ -26,7 +30,7 @@ mod tests {
             .iter()
             .find(|m| m.method_name == "query_stream")
             .unwrap();
-        assert_eq!(method.id, vox_types::MethodId(6665204681412186470));
+        assert_eq!(method.id, vox_types::MethodId(6_665_204_681_412_186_470));
         let plan = vox_types::SchemaSendTracker::plan_for_method_args(method).unwrap();
         println!(
             "query_stream method_id={:?}, schema payload={} bytes",
@@ -46,8 +50,44 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct Service;
+    #[test]
+    fn drive_letter_dtos_keep_character_serialization_and_validated_schemas() -> eyre::Result<()> {
+        for shape in [
+            DriveLetter::SHAPE,
+            StatusRequest::SHAPE,
+            StatusResponse::SHAPE,
+            UsnJournalRequest::SHAPE,
+            UsnJournalStatus::SHAPE,
+        ] {
+            assert!(
+                !vox_types::SchemaSendTracker::plan_for_shape(shape)?
+                    .to_payload()
+                    .0
+                    .is_empty()
+            );
+        }
+
+        let request = UsnJournalRequest {
+            drive_letter: DriveLetter::C,
+        };
+        assert_eq!(facet_json::to_string(&request)?, r#"{"drive_letter":"C"}"#);
+        assert_eq!(
+            facet_json::from_str::<UsnJournalRequest>(r#"{"drive_letter":"c"}"#)?,
+            request
+        );
+        let status: StatusRequest = facet_json::from_str(r#"{"drive_letters":["c","D"]}"#)?;
+        assert_eq!(status.drive_letters, [DriveLetter::C, DriveLetter::D]);
+        for invalid in ["?", "1", "é", "CC"] {
+            let json = format!(r#"{{"drive_letter":"{invalid}"}}"#);
+            assert!(facet_json::from_str::<UsnJournalRequest>(&json).is_err());
+        }
+        Ok(())
+    }
+
+    #[derive(Clone, Default)]
+    struct Service {
+        expected_sync_parallel: usize,
+    }
 
     impl MachineDaemonRpc for Service {
         async fn ping(&self, _: vox::Tx<DaemonLogWireEvent>) -> Result<PingResponse, MachineError> {
@@ -65,10 +105,13 @@ mod tests {
         }
         async fn sync(
             &self,
-            _: sync::SyncPlan,
-            _: vox::Tx<DaemonLogWireEvent>,
+            sync_plan: sync::SyncPlan,
+            logs: vox::Tx<DaemonLogWireEvent>,
         ) -> Result<(), MachineError> {
-            unreachable!()
+            assert_eq!(usize::from(sync_plan.parallel), self.expected_sync_parallel);
+            assert_eq!(sync_plan.drive_letter_pattern.as_ref(), "CD");
+            logs.close(Vec::new().into()).await.unwrap();
+            Ok(())
         }
         async fn status(
             &self,
@@ -79,10 +122,21 @@ mod tests {
         }
         async fn query_usn_journal(
             &self,
-            _: UsnJournalRequest,
-            _: vox::Tx<DaemonLogWireEvent>,
+            request: UsnJournalRequest,
+            logs: vox::Tx<DaemonLogWireEvent>,
         ) -> Result<UsnJournalStatus, MachineError> {
-            unreachable!()
+            assert_eq!(request.drive_letter, DriveLetter::C);
+            logs.close(Vec::new().into()).await.unwrap();
+            Ok(UsnJournalStatus {
+                drive_letter: request.drive_letter,
+                active: true,
+                journal_id: Some(123),
+                first_usn: Some(1),
+                next_usn: Some(2),
+                lowest_valid_usn: Some(1),
+                max_usn: Some(9),
+                inactive_reason: None,
+            })
         }
         async fn stream_logs(
             &self,
@@ -95,12 +149,12 @@ mod tests {
 
         async fn query_stream(
             &self,
-            plan: QueryPlan,
+            query_plan: QueryPlan,
             rows: vox::Tx<QueryResultRow>,
             logs: vox::Tx<DaemonLogWireEvent>,
             mut cancel: vox::Rx<u8>,
         ) -> Result<CorrelationId, MachineError> {
-            assert_eq!(plan, sample_plan());
+            assert_eq!(query_plan, sample_plan());
             rows.send(sample_row()).await.unwrap();
             rows.close(Vec::new().into()).await.unwrap();
             logs.send(sample_log()).await.unwrap();
@@ -152,7 +206,7 @@ mod tests {
             let (client_link, server_link) = vox::memory_link_pair(16);
             let server = tokio::spawn(async move {
                 vox::acceptor_on(server_link)
-                    .on_lane(MachineDaemonRpcDispatcher::new(Service))
+                    .on_lane(MachineDaemonRpcDispatcher::new(Service::default()))
                     .establish_connection()
                     .await
                     .unwrap()
@@ -189,5 +243,90 @@ mod tests {
         })
         .await
         .expect("query_stream should complete without daemon/index access");
+    }
+    #[tokio::test]
+    async fn actual_sync_rpc_roundtrips_parallel_limit() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let descriptor = actual_rpc::machine_daemon_rpc_service_descriptor();
+            let method = descriptor
+                .methods
+                .iter()
+                .find(|method| method.method_name == "sync")
+                .unwrap();
+            assert!(
+                !vox_types::SchemaSendTracker::plan_for_method_args(method)
+                    .unwrap()
+                    .to_payload()
+                    .0
+                    .is_empty()
+            );
+            for parallel in [0, 3] {
+                let (client_link, server_link) = vox::memory_link_pair(16);
+                let server = tokio::spawn(async move {
+                    vox::acceptor_on(server_link)
+                        .on_lane(MachineDaemonRpcDispatcher::new(Service {
+                            expected_sync_parallel: parallel,
+                        }))
+                        .establish_connection()
+                        .await
+                        .unwrap()
+                });
+                let client = vox::initiator_on(client_link)
+                    .establish::<MachineDaemonRpcClient>()
+                    .await
+                    .unwrap();
+                let _guard = server.await.unwrap();
+                let (logs_tx, mut logs_rx) = vox::channel::<DaemonLogWireEvent>();
+                let logs = tokio::spawn(async move {
+                    assert!(logs_rx.recv().await.unwrap().is_none());
+                });
+                let plan = sync::SyncPlan {
+                    parallel: parallel.into(),
+                    drive_letter_pattern: "CD".parse().unwrap(),
+                    ..Default::default()
+                };
+                client.sync(plan, logs_tx).await.unwrap();
+                logs.await.unwrap();
+            }
+        })
+        .await
+        .expect("sync RPC must complete without a daemon service or drive access");
+    }
+
+    #[tokio::test]
+    async fn actual_usn_journal_rpc_roundtrips_drive_letters() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (client_link, server_link) = vox::memory_link_pair(16);
+            let server = tokio::spawn(async move {
+                vox::acceptor_on(server_link)
+                    .on_lane(MachineDaemonRpcDispatcher::new(Service::default()))
+                    .establish_connection()
+                    .await
+                    .unwrap()
+            });
+            let client = vox::initiator_on(client_link)
+                .establish::<MachineDaemonRpcClient>()
+                .await
+                .unwrap();
+            let _guard = server.await.unwrap();
+            let (logs_tx, mut logs_rx) = vox::channel::<DaemonLogWireEvent>();
+            let logs = tokio::spawn(async move {
+                assert!(logs_rx.recv().await.unwrap().is_none());
+            });
+            let result = client
+                .query_usn_journal(
+                    UsnJournalRequest {
+                        drive_letter: DriveLetter::C,
+                    },
+                    logs_tx,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.drive_letter, DriveLetter::C);
+            assert_eq!(result.journal_id, Some(123));
+            logs.await.unwrap();
+        })
+        .await
+        .expect("USN journal RPC must complete without drive access");
     }
 }

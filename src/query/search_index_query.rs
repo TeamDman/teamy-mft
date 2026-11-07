@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::published_drive_paths;
 use crate::query::MatchingRowIndices;
 use crate::query::Pathlike;
@@ -377,7 +378,7 @@ fn materialize_row(
 }
 
 pub(crate) fn visit_drive_search_index_rows(
-    drive_letter: char,
+    drive_letter: DriveLetter,
     sync_dir: &Path,
     query_plan: &QueryPlan,
     scopes: &[QueryScope],
@@ -497,6 +498,7 @@ struct MatchingRowRef {
 #[cfg(test)]
 mod tests {
     use super::visit_matching_parsed_row_indices;
+    use crate::domain::DriveLetter;
     use crate::query::QueryPlan;
     use crate::query::resolve_query_scopes;
     use crate::search_index::format::SearchIndexHeader;
@@ -505,10 +507,16 @@ mod tests {
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use std::ops::ControlFlow;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     fn parse_index(rows: &[SearchIndexPathRow]) -> eyre::Result<ParsedSearchIndex<'static>> {
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             rows,
         )?
         .into_inner()?;

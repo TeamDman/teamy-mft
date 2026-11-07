@@ -443,7 +443,7 @@ pub fn query_path_protection_status(
 }
 
 struct PathSecurity {
-    _descriptor: SecurityDescriptorGuard,
+    descriptor: SecurityDescriptorGuard,
     dacl: Option<*const ACL>,
 }
 
@@ -515,6 +515,177 @@ impl AllowedAceView {
     }
 }
 
+/// Create staging with a protected DACL in the `CreateFileW` call itself.
+/// During acquisition and flush, a crash cannot expose data through inherited directory grants.
+///
+/// # Errors
+///
+/// Returns descriptor or file creation errors.
+pub(crate) fn create_private_snapshot(parent: &Path) -> eyre::Result<tempfile::NamedTempFile> {
+    use std::os::windows::io::FromRawHandle;
+    use windows::Win32::Storage::FileSystem::CREATE_NEW;
+    use windows::Win32::Storage::FileSystem::CreateFileW;
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+    let sid = current_user_sid_string()?;
+    let sddl = format!("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{sid})");
+    let wide_sddl = sddl.easy_pcwstr()?;
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide_sddl.as_ref(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )
+    }?;
+    let descriptor = SecurityDescriptorGuard(descriptor);
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())?,
+        lpSecurityDescriptor: descriptor.0.0,
+        bInheritHandle: false.into(),
+    };
+    Ok(tempfile::Builder::new()
+        .prefix(".mft-staging-")
+        .make_in(parent, |path| {
+            let wide = path.easy_pcwstr().map_err(std::io::Error::other)?;
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ref(),
+                    FILE_ALL_ACCESS.0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    Some(&attributes),
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL,
+                    None,
+                )
+            }
+            .map_err(|error| {
+                if error.code() == windows::Win32::Foundation::ERROR_FILE_EXISTS.into()
+                    || error.code() == windows::Win32::Foundation::ERROR_ALREADY_EXISTS.into()
+                {
+                    std::io::Error::from(std::io::ErrorKind::AlreadyExists)
+                } else {
+                    std::io::Error::other(error)
+                }
+            })?;
+            // Transfer the newly created handle exactly once to the owned file.
+            Ok(unsafe { std::fs::File::from_raw_handle(handle.0) })
+        })?)
+}
+
+// These descriptors use a different allocator from GetNamedSecurityInfo/SDDL.
+struct PrivateObjectSecurityGuard(PSECURITY_DESCRIPTOR);
+impl Drop for PrivateObjectSecurityGuard {
+    fn drop(&mut self) {
+        // The native contract is in/out, despite the binding using *const storage.
+        // SAFETY: Drop exclusively owns this initialized pointer slot and its descriptor.
+        let _ = unsafe { windows::Win32::Security::DestroyPrivateObjectSecurity(&raw mut self.0) };
+    }
+}
+
+/// Derive a new file's DACL with Windows non-container inheritance rules.
+/// Parent-only ACEs and the parent's protection flag must not become file grants.
+///
+/// # Errors
+///
+/// Returns token, inheritance calculation, descriptor, or DACL application errors.
+pub(crate) fn inherit_new_file_dacl(parent: &Path, replacement: &Path) -> eyre::Result<()> {
+    use windows::Win32::Security::CreatePrivateObjectSecurityEx;
+    use windows::Win32::Security::GENERIC_MAPPING;
+    use windows::Win32::Security::GetSecurityDescriptorDacl;
+    use windows::Win32::Security::SEF_DACL_AUTO_INHERIT;
+    use windows::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
+    use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+    let parent_security = read_path_security(parent)?;
+    let mut token = HANDLE::default();
+    // Match the effective creator used by `CreateFileW`, including an impersonating
+    // thread. Fall back to the process token only when no thread token exists.
+    match unsafe {
+        windows::Win32::System::Threading::OpenThreadToken(
+            windows::Win32::System::Threading::GetCurrentThread(),
+            TOKEN_QUERY,
+            true,
+            &mut token,
+        )
+    } {
+        Ok(()) => {}
+        Err(error) if error.code() == windows::Win32::Foundation::ERROR_NO_TOKEN.into() => {
+            unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let token = unsafe { Owned::new(token) };
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ.0,
+        GenericWrite: FILE_GENERIC_WRITE.0,
+        GenericExecute: FILE_GENERIC_EXECUTE.0,
+        GenericAll: FILE_ALL_ACCESS.0,
+    };
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    // No creator DACL is supplied: Windows selects inheritable parent ACEs, or
+    // the token's default DACL when required, and maps generic/creator rights.
+    unsafe {
+        CreatePrivateObjectSecurityEx(
+            Some(parent_security.descriptor.0),
+            None,
+            &mut descriptor,
+            None,
+            false,
+            SEF_DACL_AUTO_INHERIT,
+            Some(*token),
+            &mapping,
+        )
+    }?;
+    let descriptor = PrivateObjectSecurityGuard(descriptor);
+    let mut present = false.into();
+    let mut defaulted = false.into();
+    let mut dacl = std::ptr::null_mut();
+    unsafe { GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted) }?;
+    eyre::ensure!(
+        present.as_bool(),
+        "Windows did not derive a DACL for the new snapshot"
+    );
+    set_named_security_info(
+        replacement,
+        DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION,
+        None,
+        Some(dacl.cast_const()),
+    )
+}
+
+/// Preserve explicit access rules when atomically replacing an existing snapshot.
+///
+/// # Errors
+///
+/// Returns an error if either security descriptor cannot be read or applied.
+pub(crate) fn copy_path_dacl(source: &Path, replacement: &Path) -> eyre::Result<()> {
+    use windows::Win32::Security::GetSecurityDescriptorControl;
+    use windows::Win32::Security::SE_DACL_PROTECTED;
+    use windows::Win32::Security::SECURITY_DESCRIPTOR_CONTROL;
+    use windows::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
+    let source_security = read_path_security(source)?;
+    let mut control = SECURITY_DESCRIPTOR_CONTROL::default();
+    let mut revision = 0;
+    // The descriptor remains owned by source_security throughout this call.
+    unsafe {
+        GetSecurityDescriptorControl(source_security.descriptor.0, &mut control.0, &mut revision)
+    }?;
+    let inheritance = if control.contains(SE_DACL_PROTECTED) {
+        PROTECTED_DACL_SECURITY_INFORMATION
+    } else {
+        UNPROTECTED_DACL_SECURITY_INFORMATION
+    };
+    set_named_security_info(
+        replacement,
+        DACL_SECURITY_INFORMATION | inheritance,
+        None,
+        source_security.dacl,
+    )
+}
+
 fn read_path_security(path: &Path) -> eyre::Result<PathSecurity> {
     let wide_path = path.easy_pcwstr()?;
     let mut dacl = std::ptr::null_mut::<ACL>();
@@ -535,7 +706,7 @@ fn read_path_security(path: &Path) -> eyre::Result<PathSecurity> {
         "GetNamedSecurityInfoW",
     )?;
     Ok(PathSecurity {
-        _descriptor: SecurityDescriptorGuard(descriptor),
+        descriptor: SecurityDescriptorGuard(descriptor),
         dacl: (!dacl.is_null()).then_some(dacl.cast_const()),
     })
 }
@@ -656,4 +827,284 @@ pub fn named_pipe_security_attributes(owner_sid: &str) -> eyre::Result<OwnedSecu
 #[must_use]
 pub fn wide_pcwstr(buffer: &[u16]) -> PCWSTR {
     PCWSTR(buffer.as_ptr())
+}
+
+#[cfg(test)]
+mod snapshot_dacl_tests {
+    use super::*;
+    #[test]
+    fn replacement_preserves_explicit_protected_dacl() -> eyre::Result<()> {
+        let source = tempfile::NamedTempFile::new()?;
+        let replacement = tempfile::NamedTempFile::new()?;
+        let sid = current_user_sid_string()?;
+        // Only these owned temporary files are touched; no cache/service policy is changed.
+        apply_acl(
+            source.path(),
+            &[AclGrant::full_control(Principal::SidString(sid.clone()))],
+            None,
+            true,
+        )?;
+        let before = query_path_protection_status(source.path(), &sid)?;
+        copy_path_dacl(source.path(), replacement.path())?;
+        let after = query_path_protection_status(replacement.path(), &sid)?;
+        assert_eq!(after.raw_acl, before.raw_acl);
+        assert_eq!(after.inheritance_disabled, before.inheritance_disabled);
+        assert!(after.owner_sid_grant_present);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod private_staging_tests {
+    use super::*;
+    #[test]
+    fn staging_ignores_broad_parent_read_grants_from_creation() -> eyre::Result<()> {
+        let parent = tempfile::tempdir()?;
+        let sid = current_user_sid_string()?;
+        // Only a disposable owned directory receives this test access policy.
+        apply_acl(
+            parent.path(),
+            &[
+                AclGrant::full_control(Principal::SidString(sid.clone())),
+                AclGrant::read_execute(Principal::WellKnown(WinWorldSid)),
+            ],
+            None,
+            true,
+        )?;
+        assert!(query_path_protection_status(parent.path(), &sid)?.broad_read_grant_present);
+        let staging = create_private_snapshot(parent.path())?;
+        assert_eq!(staging.as_file().metadata()?.len(), 0);
+        let status = query_path_protection_status(staging.path(), &sid)?;
+        assert!(
+            status.protection_enabled(),
+            "initial DACL must exclude inherited broad grants"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod child_file_inheritance_tests {
+    use super::*;
+    use windows::Win32::Security::GetSecurityDescriptorControl;
+    use windows::Win32::Security::GetSecurityDescriptorDacl;
+    use windows::Win32::Security::SE_DACL_PROTECTED;
+    use windows::Win32::Security::SECURITY_DESCRIPTOR_CONTROL;
+    use windows::Win32::Security::UNPROTECTED_DACL_SECURITY_INFORMATION;
+
+    fn set_test_dacl(path: &Path, sddl: &str, protected: bool) -> eyre::Result<()> {
+        let wide = sddl.easy_pcwstr()?;
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide.as_ref(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }?;
+        let descriptor = SecurityDescriptorGuard(descriptor);
+        let mut present = false.into();
+        let mut defaulted = false.into();
+        let mut dacl = std::ptr::null_mut();
+        unsafe {
+            GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted)
+        }?;
+        let flags = if protected {
+            PROTECTED_DACL_SECURITY_INFORMATION
+        } else {
+            UNPROTECTED_DACL_SECURITY_INFORMATION
+        };
+        set_named_security_info(
+            path,
+            DACL_SECURITY_INFORMATION | flags,
+            None,
+            Some(dacl.cast_const()),
+        )
+    }
+
+    // Compare all allow/deny ACEs, flags, masks and SIDs, not merely the allow-only
+    // status summary. Protection is checked separately from bookkeeping flags.
+    fn dacl_policy(path: &Path) -> eyre::Result<(String, bool)> {
+        use windows::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+        let security = read_path_security(path)?;
+        let mut text = PWSTR::null();
+        unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                security.descriptor.0,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                None,
+            )
+        }?;
+        let value = unsafe { text.to_string() };
+        let _ = unsafe { LocalFree(Some(HLOCAL(text.0.cast()))) };
+        let value = value?;
+        let aces = value
+            .find('(')
+            .map_or_else(String::new, |offset| value[offset..].to_owned());
+        let mut control = SECURITY_DESCRIPTOR_CONTROL::default();
+        let mut revision = 0;
+        unsafe {
+            GetSecurityDescriptorControl(security.descriptor.0, &mut control.0, &mut revision)
+        }?;
+        Ok((aces, control.contains(SE_DACL_PROTECTED)))
+    }
+
+    #[test]
+    fn derived_file_policy_matches_native_creation_for_inheritance_and_deny_aces()
+    -> eyre::Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::READ_CONTROL;
+        let sid = current_user_sid_string()?;
+        for (name, extra, protected, expect_world) in [
+            ("folder_only", "(A;;FR;;;WD)", true, false),
+            ("container_only", "(A;CI;FR;;;WD)", true, false),
+            ("object_inherit", "(A;OI;FR;;;WD)", true, true),
+            ("inherit_only", "(A;OIIO;FR;;;WD)", true, true),
+            ("no_propagate", "(A;OINPIO;FR;;;WD)", true, true),
+            (
+                "deny_inherited",
+                "(D;OIIO;0x2;;;WD)(A;OIIO;FR;;;WD)",
+                true,
+                true,
+            ),
+            ("unprotected", "(A;OIIO;FR;;;WD)", false, true),
+            (
+                "deny_unprotected",
+                "(D;OIIO;0x2;;;WD)(A;OIIO;FR;;;WD)",
+                false,
+                true,
+            ),
+            ("creator_owner_generic", "(A;OIIO;GR;;;CO)", true, false),
+        ] {
+            let parent = tempfile::tempdir()?;
+            // Keep native child creation and descriptor reads possible even with a
+            // write-data deny. The reference handle requests only READ_CONTROL.
+            let deny = if extra.starts_with("(D;") {
+                extra
+                    .split_once(")(A;")
+                    .map(|(first, _)| format!("{first})"))
+                    .unwrap()
+            } else {
+                String::new()
+            };
+            let allow = if extra.starts_with("(D;") {
+                "(A;OIIO;FR;;;WD)"
+            } else {
+                extra
+            };
+            let sddl = format!(
+                "D:{}{deny}(A;OICI;FA;;;{sid}){allow}",
+                if protected { "P" } else { "" }
+            );
+            set_test_dacl(parent.path(), &sddl, protected)?;
+            let native_path = parent.path().join("native.bin");
+            let _native = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .access_mode(READ_CONTROL.0)
+                .open(&native_path)?;
+            let staged = create_private_snapshot(parent.path())?;
+            inherit_new_file_dacl(parent.path(), staged.path())?;
+            let expected = dacl_policy(&native_path)?;
+            let actual = dacl_policy(staged.path())?;
+            assert_eq!(
+                actual, expected,
+                "case {name}: must match Windows child-file creation"
+            );
+            assert!(
+                !actual.1,
+                "parent protection must not make the child protected: {name}"
+            );
+            assert_eq!(actual.0.contains(";;;WD)"), expect_world, "case {name}");
+            if name.starts_with("deny_") {
+                assert!(
+                    actual.0.contains("(D;ID;"),
+                    "deny ACE must survive and be inherited"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn inherited_parent_and_protected_parent_produce_native_child_policies() -> eyre::Result<()> {
+        let root = tempfile::tempdir()?;
+        let sid = current_user_sid_string()?;
+        set_test_dacl(
+            root.path(),
+            &format!("D:P(D;OIIO;0x2;;;WD)(A;OICI;FA;;;{sid})(A;OICI;FR;;;WD)"),
+            true,
+        )?;
+        for protected in [false, true] {
+            let parent = root
+                .path()
+                .join(if protected { "protected" } else { "inherited" });
+            std::fs::create_dir(&parent)?;
+            if protected {
+                set_test_dacl(
+                    &parent,
+                    &format!("D:P(A;OICI;FA;;;{sid})(A;;FR;;;WD)"),
+                    true,
+                )?;
+            }
+            let native = parent.join("native.bin");
+            use std::os::windows::fs::OpenOptionsExt;
+            let _native = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .access_mode(windows::Win32::Storage::FileSystem::READ_CONTROL.0)
+                .open(&native)?;
+            let staged = create_private_snapshot(&parent)?;
+            inherit_new_file_dacl(&parent, staged.path())?;
+            let expected = dacl_policy(&native)?;
+            assert_eq!(dacl_policy(staged.path())?, expected);
+            assert_eq!(expected.0.contains(";;;WD)"), !protected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn existing_file_copy_preserves_protection_and_deny_policy() -> eyre::Result<()> {
+        let parent = tempfile::tempdir()?;
+        let sid = current_user_sid_string()?;
+        for protected in [false, true] {
+            let source = tempfile::NamedTempFile::new_in(parent.path())?;
+            set_test_dacl(
+                source.path(),
+                &format!(
+                    "D:{}(D;;0x2;;;WD)(A;;FA;;;{sid})",
+                    if protected { "P" } else { "" }
+                ),
+                protected,
+            )?;
+            let replacement = create_private_snapshot(parent.path())?;
+            copy_path_dacl(source.path(), replacement.path())?;
+            let expected = dacl_policy(source.path())?;
+            assert_eq!(dacl_policy(replacement.path())?, expected);
+            assert!(expected.0.contains("(D;"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn noninheritable_parent_uses_native_token_default_policy() -> eyre::Result<()> {
+        let parent = tempfile::tempdir()?;
+        let sid = current_user_sid_string()?;
+        set_test_dacl(
+            parent.path(),
+            &format!("D:P(A;;FA;;;{sid})(A;;FR;;;WD)"),
+            true,
+        )?;
+        let native = parent.path().join("native.bin");
+        std::fs::write(&native, b"")?;
+        let staged = create_private_snapshot(parent.path())?;
+        inherit_new_file_dacl(parent.path(), staged.path())?;
+        assert_eq!(dacl_policy(staged.path())?, dacl_policy(&native)?);
+        Ok(())
+    }
 }

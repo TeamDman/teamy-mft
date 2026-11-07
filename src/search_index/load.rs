@@ -39,7 +39,7 @@ impl MappedSearchIndex {
         })?;
 
         if header.version != SEARCH_INDEX_VERSION {
-            let drive_letter = char::from(header.drive_letter);
+            let drive_letter = header.drive_letter;
             bail!(
                 "Unsupported search index version {} in {}. Run `teamy-mft sync index --drive-pattern {}` to rebuild the stale index for drive {}.",
                 header.version,
@@ -92,11 +92,14 @@ impl MappedSearchIndex {
 #[cfg(test)]
 mod tests {
     use super::MappedSearchIndex;
+    use crate::domain::DriveLetter;
     use crate::search_index::format::SEARCH_INDEX_MAGIC;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use std::fs;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     #[test]
     fn row_views_reads_paths_without_materializing_all_rows() -> eyre::Result<()> {
@@ -113,8 +116,15 @@ mod tests {
             },
         ];
 
-        SearchIndexBytesMut::from_rows(SearchIndexHeader::new('C', 123, rows.len() as u64), &rows)?
-            .write_to_path(&index_path)?;
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
+            &rows,
+        )?
+        .write_to_path(&index_path)?;
 
         let mapped = MappedSearchIndex::open(&index_path)?;
         let views = mapped.row_views()?.collect::<eyre::Result<Vec<_>>>()?;

@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::mft::fast_entry;
 use crate::mft::mft_file::MftFile;
 use crate::mft::path_resolve;
@@ -31,7 +32,7 @@ use uom::si::time::second;
 /// Returns an error if reading or parsing the cached MFT data fails.
 #[instrument(level = "debug")]
 pub fn convert_mft_file_to_path_collection(
-    drive_letter: &str,
+    drive_letter: DriveLetter,
     mft_file: &MftFile,
 ) -> Result<MftEntryPathCollection> {
     let _span = info_span!(
@@ -58,7 +59,7 @@ pub fn convert_mft_file_to_path_collection(
     let scan_elapsed = Time::new::<second>(scan_start.elapsed().as_secs_f64());
     let scan_rate = mft_file.size().over(scan_elapsed);
     trace!(
-        drive_letter = &drive_letter,
+        drive_letter = %drive_letter,
         "Took {} ({}) entries_with_names={}",
         scan_elapsed.format_human(),
         scan_rate.format_human(BINARY),
@@ -67,7 +68,7 @@ pub fn convert_mft_file_to_path_collection(
 
     // resolve paths (multi-parent default)
     trace!(
-        drive_letter = &drive_letter,
+        drive_letter = %drive_letter,
         "Resolving (multi-parent) paths for {} filename attributes",
         file_names.x30_count().separate_with_commas()
     );
@@ -85,7 +86,7 @@ pub fn convert_mft_file_to_path_collection(
     let resolved_size = uom::si::f64::Information::new::<byte>(resolved_entries_f64 * 256.0);
     let resolve_rate = resolved_size.over(path_resolve_elapsed);
     trace!(
-        drive_letter = &drive_letter,
+        drive_letter = %drive_letter,
         "Took {} ({}) entries_resolved={} total_paths={}",
         path_resolve_elapsed.format_human(),
         resolve_rate.format_human(BINARY),
@@ -94,7 +95,7 @@ pub fn convert_mft_file_to_path_collection(
     );
 
     trace!(
-        drive_letter = &drive_letter,
+        drive_letter = %drive_letter,
         "MFT size={} entries={} entry_size={} names={} resolved={} timings(scan/resolve)={}/{}",
         mft_file.size().format_human(BINARY),
         mft_file.record_count().separate_with_commas(),
@@ -119,7 +120,7 @@ pub fn convert_mft_file_to_path_collection(
     )]
     let entries_rate = Ratio::new::<ratio>(mft_file.record_count() as f64) / elapsed;
     debug!(
-        drive_letter = &drive_letter,
+        drive_letter = %drive_letter,
         "Total processing time for {drive_letter} with {} entries: {} (size={} rate={} entries/s={})",
         mft_file.record_count().separate_with_commas(),
         elapsed.format_human(),

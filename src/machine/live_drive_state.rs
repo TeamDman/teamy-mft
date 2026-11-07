@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::PublishedDrivePaths;
@@ -39,6 +40,7 @@ use tracing::info_span;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
+use uom::si::usize::Information;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveNodeLink {
@@ -55,7 +57,7 @@ struct LiveNode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveDriveGraph {
-    drive_letter: char,
+    drive_letter: DriveLetter,
     root_frn: u64,
     nodes: FxHashMap<u64, LiveNode>,
 }
@@ -68,7 +70,7 @@ struct ProjectedPath {
 
 #[derive(Debug)]
 pub struct LiveDriveState {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     sync_dir: PathBuf,
     pub paths: PublishedDrivePaths,
     volume_serial_number: Option<u32>,
@@ -76,7 +78,7 @@ pub struct LiveDriveState {
     published_last_usn: u64,
     current_next_usn: u64,
     journal_id: u64,
-    base_source_mft_len_bytes: u64,
+    base_source_mft_len: Information,
     base_rows: Vec<SearchIndexPathRow>,
     current_graph: LiveDriveGraph,
     current_rows_cache: Option<Vec<SearchIndexPathRow>>,
@@ -89,7 +91,7 @@ pub struct LiveDriveState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedUsnEvent {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub frn: u64,
     pub parent_frn: u64,
     pub usn: u64,
@@ -158,7 +160,7 @@ impl LiveDriveState {
         let base_graph =
             LiveDriveGraph::from_mft_with_cancel(paths.drive_letter, &mft_file, cancel)?;
         let base_rows = load_rows_from_index_path(&paths.base_index_path)?;
-        let base_source_mft_len_bytes = mft_file.size().get::<uom::si::information::byte>() as u64;
+        let base_source_mft_len = mft_file.size();
 
         let mut state = Self {
             drive_letter: paths.drive_letter,
@@ -169,7 +171,7 @@ impl LiveDriveState {
             published_last_usn: checkpoint.last_usn.unwrap_or(snapshot_usn),
             current_next_usn: snapshot_usn,
             journal_id,
-            base_source_mft_len_bytes,
+            base_source_mft_len,
             base_rows,
             current_graph: base_graph,
             current_rows_cache: None,
@@ -228,7 +230,7 @@ impl LiveDriveState {
         let base_graph =
             LiveDriveGraph::from_mft_with_cancel(paths.drive_letter, &mft_file, cancel)?;
         let graph_elapsed = graph_start.elapsed();
-        let base_source_mft_len_bytes = mft_file.size().get::<uom::si::information::byte>() as u64;
+        let base_source_mft_len = mft_file.size();
         info!(
             drive = %paths.drive_letter,
             node_count = base_graph.nodes.len(),
@@ -246,7 +248,7 @@ impl LiveDriveState {
             published_last_usn: cursor.next_usn,
             current_next_usn: cursor.next_usn,
             journal_id: cursor.journal_id,
-            base_source_mft_len_bytes,
+            base_source_mft_len,
             base_rows: Vec::new(),
             current_graph: base_graph,
             current_rows_cache: None,
@@ -495,7 +497,7 @@ impl LiveDriveState {
         let current_index_bytes = SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(
                 self.drive_letter,
-                self.base_source_mft_len_bytes,
+                self.base_source_mft_len,
                 current_rows.len() as u64,
             ),
             &current_rows,
@@ -537,7 +539,7 @@ impl LiveDriveState {
         let overlay_index_bytes = SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(
                 self.drive_letter,
-                self.base_source_mft_len_bytes,
+                self.base_source_mft_len,
                 overlay_rows.len() as u64,
             ),
             &overlay_rows,
@@ -608,7 +610,7 @@ impl LiveDriveState {
 
 impl LiveDriveGraph {
     fn from_mft_with_cancel(
-        drive_letter: char,
+        drive_letter: DriveLetter,
         mft_file: &MftFile,
         cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
@@ -651,11 +653,14 @@ impl LiveDriveGraph {
                     .and_modify(|(namespace, current_name)| {
                         if namespace_rank(name_ref.namespace) < namespace_rank(*namespace) {
                             *namespace = name_ref.namespace;
-                            *current_name = decode_utf16_lossy(name_ref.name_utf16);
+                            *current_name = String::from_utf16_lossy(name_ref.name_utf16);
                         }
                     })
                     .or_insert_with(|| {
-                        (name_ref.namespace, decode_utf16_lossy(name_ref.name_utf16))
+                        (
+                            name_ref.namespace,
+                            String::from_utf16_lossy(name_ref.name_utf16),
+                        )
                     });
             }
 
@@ -826,7 +831,7 @@ impl LiveDriveGraph {
 }
 
 fn validate_journal_continuity(
-    drive_letter: char,
+    drive_letter: DriveLetter,
     checkpoint: &PublishedCheckpoint,
     cursor: JournalCursor,
 ) -> eyre::Result<()> {
@@ -849,7 +854,7 @@ fn validate_journal_continuity(
 }
 
 fn validate_active_cursor(
-    drive_letter: char,
+    drive_letter: DriveLetter,
     snapshot_usn: u64,
     journal_id: u64,
     current_usn: u64,
@@ -959,10 +964,6 @@ fn join_windows_path(parent: &str, child: &str) -> Pathlike {
     }
 }
 
-fn decode_utf16_lossy(units: &[u16]) -> String {
-    String::from_utf16_lossy(units)
-}
-
 fn namespace_rank(namespace: u8) -> u8 {
     match namespace {
         1 => 0,
@@ -986,6 +987,7 @@ mod tests {
     use super::validate_active_cursor;
     use crate::cancellation::CancellationToken;
     use crate::daemon::MachineErrorKind;
+    use crate::domain::DriveLetter;
     use crate::machine::config::published_drive_paths;
     use crate::machine::daemon::sync_machine_cache;
     use crate::machine::usn::JournalCursor;
@@ -996,10 +998,11 @@ mod tests {
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use crate::sync::IfExistsOutputBehaviour;
-    use eyre::ContextCompat;
     use rustc_hash::FxHashMap;
     use std::path::Path;
     use std::time::Duration;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     fn base_graph() -> LiveDriveGraph {
         let mut nodes = FxHashMap::default();
@@ -1022,7 +1025,7 @@ mod tests {
             },
         );
         LiveDriveGraph {
-            drive_letter: 'C',
+            drive_letter: DriveLetter::C,
             root_frn: 5,
             nodes,
         }
@@ -1030,7 +1033,7 @@ mod tests {
 
     fn state_from_graph(
         cache_dir: &Path,
-        drive_letter: char,
+        drive_letter: DriveLetter,
         graph: LiveDriveGraph,
     ) -> LiveDriveState {
         LiveDriveState {
@@ -1042,7 +1045,7 @@ mod tests {
             published_last_usn: 0,
             current_next_usn: 0,
             journal_id: 1,
-            base_source_mft_len_bytes: 0,
+            base_source_mft_len: Information::new::<byte>(0),
             base_rows: Vec::new(),
             current_graph: graph,
             current_rows_cache: None,
@@ -1066,7 +1069,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(paths.drive_letter, 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                paths.drive_letter,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1075,12 +1082,16 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn drive_letter_from_path(path: &Path) -> char {
-        path.to_string_lossy()
-            .chars()
-            .next()
-            .expect("windows path should start with a drive letter")
-            .to_ascii_uppercase()
+    fn drive_letter_from_path(path: &Path) -> DriveLetter {
+        let Some(std::path::Component::Prefix(prefix)) = path.components().next() else {
+            panic!("windows test path should have a drive prefix");
+        };
+        let (std::path::Prefix::Disk(drive) | std::path::Prefix::VerbatimDisk(drive)) =
+            prefix.kind()
+        else {
+            panic!("windows test path should have a drive prefix");
+        };
+        DriveLetter::try_from(drive).expect("windows test path should have a valid drive letter")
     }
 
     #[cfg(windows)]
@@ -1269,7 +1280,7 @@ mod tests {
                     }],
                 },
             );
-            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let mut state = state_from_graph(cache_dir.path(), DriveLetter::C, graph);
             let cancel = scope.clone();
 
             let rows = state
@@ -1287,7 +1298,7 @@ mod tests {
     fn live_query_cancelled_before_index_query_returns_no_rows() -> eyre::Result<()> {
         CancellationToken::new().with_scope(|scope| {
             let cache_dir = tempfile::tempdir()?;
-            let mut state = state_from_graph(cache_dir.path(), 'C', base_graph());
+            let mut state = state_from_graph(cache_dir.path(), DriveLetter::C, base_graph());
             let cancel = scope.clone();
             cancel.request_cancel("test cancellation");
 
@@ -1323,7 +1334,7 @@ mod tests {
                     }],
                 },
             );
-            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let mut state = state_from_graph(cache_dir.path(), DriveLetter::C, graph);
             let request = QueryPlan {
                 limit: QueryLimit::from(1),
                 ..QueryPlan::new(".txt>")
@@ -1363,7 +1374,7 @@ mod tests {
                     }],
                 },
             );
-            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let mut state = state_from_graph(cache_dir.path(), DriveLetter::C, graph);
             let request = QueryPlan {
                 only_deleted: true,
                 ..QueryPlan::new(".txt>")
@@ -1543,7 +1554,7 @@ mod tests {
                 },
             );
 
-            let mut state = state_from_graph(cache_dir.path(), 'C', graph);
+            let mut state = state_from_graph(cache_dir.path(), DriveLetter::C, graph);
             write_rule_discovery_index(&state.paths, &[rules_path.as_path()])?;
             let cancel = scope.clone();
 
@@ -1603,7 +1614,7 @@ mod tests {
         CancellationToken::new()
             .with_scope(|scope| {
                 let temp_dir = tempfile::tempdir().expect("temp dir");
-                let mut state = state_from_graph(temp_dir.path(), 'C', base_graph());
+                let mut state = state_from_graph(temp_dir.path(), DriveLetter::C, base_graph());
                 state.current_rows_cache = Some(Vec::new());
                 state.current_index_bytes_cache = Some(vec![1, 2, 3]);
                 state.query_cache_dirty = false;
@@ -1621,7 +1632,7 @@ mod tests {
     #[test]
     fn active_cursor_validation_rejects_gaps() {
         let error = validate_active_cursor(
-            'C',
+            DriveLetter::C,
             100,
             5,
             110,
@@ -1644,12 +1655,7 @@ mod tests {
         CancellationToken::new().with_scope(|scope| {
             let scope_dir = tempfile::tempdir()?;
             let cache_dir = tempfile::tempdir()?;
-            let drive_letter = scope_dir
-                .path()
-                .to_string_lossy()
-                .chars()
-                .next()
-                .wrap_err("failed extracting drive letter from temp dir")?;
+            let drive_letter = drive_letter_from_path(scope_dir.path());
             let needle = format!("__teamy_mft_live_refresh_{}__", current_unix_ms());
             let created_path = scope_dir.path().join(format!("{needle}.txt"));
             let cancel = scope.clone();
@@ -1658,7 +1664,7 @@ mod tests {
                 cache_dir.path(),
                 &[drive_letter],
                 IfExistsOutputBehaviour::Overwrite,
-                1,
+                1.into(),
                 None,
                 &cancel,
             )?;

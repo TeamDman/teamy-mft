@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
 use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
@@ -15,7 +16,7 @@ use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct MachineDriveStatus {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub mft_path: PathBuf,
     pub mft_modified_at: Option<SystemTime>,
     pub base_index_path: PathBuf,
@@ -41,7 +42,7 @@ pub struct MachineStatus {
 
 #[derive(Debug, Clone)]
 pub struct PublishedDriveSummary {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub mft_path: PathBuf,
     pub mft_modified_at: Option<SystemTime>,
     pub base_index_path: PathBuf,

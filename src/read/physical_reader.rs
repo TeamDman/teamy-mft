@@ -1,11 +1,10 @@
 use crate::domain::ParallelismLimit;
 use crate::read::active_physical_read_request::ActivePhysicalReadRequest;
+use crate::read::logical_read_plan::LogicalReadPlan;
+use crate::read::physical_read_plan::PhysicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
-use crate::read::physical_read_results::PhysicalReadResultEntry;
-use crate::read::physical_read_results::PhysicalReadResults;
+use crate::read::physical_read_result_entry::PhysicalReadResultEntry;
 use eyre::Context;
-use eyre::ContextCompat;
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use tracing::info_span;
 use tracing::instrument;
@@ -26,9 +25,9 @@ use windows::core::PCWSTR;
 use windows::core::Param;
 
 #[derive(Debug)]
-pub struct PhysicalReader {
+pub struct PhysicalReader<'plan> {
+    logical_read_plan: &'plan LogicalReadPlan,
     remaining: Vec<PhysicalReadRequest>,
-    results: Vec<Option<PhysicalReadResultEntry>>,
     in_flight: usize,
     max_in_flight: NonZeroUsize,
     /// File handle to read from
@@ -37,14 +36,7 @@ pub struct PhysicalReader {
     iocp_handle: Owned<HANDLE>,
 }
 
-#[derive(Debug)]
-pub enum PhysicalReaderEnqueueResult {
-    Enqueued,
-    Full,
-    Done,
-}
-
-impl PhysicalReader {
+impl<'plan> PhysicalReader<'plan> {
     const DEFAULT_MAX_IN_FLIGHT_IO: NonZeroUsize = NonZeroUsize::new(32).unwrap();
 
     pub(crate) fn configured_max_in_flight_io() -> eyre::Result<ParallelismLimit> {
@@ -65,7 +57,7 @@ impl PhysicalReader {
     #[instrument(skip_all)]
     pub fn try_new(
         filename: impl Param<PCWSTR>,
-        requests: impl IntoIterator<Item = PhysicalReadRequest>,
+        physical_read_plan: PhysicalReadPlan<'plan>,
         max_in_flight: ParallelismLimit,
     ) -> eyre::Result<Self> {
         let max_in_flight = match max_in_flight {
@@ -85,69 +77,20 @@ impl PhysicalReader {
             )?)
         };
 
-        let mut remaining: Vec<PhysicalReadRequest> = requests.into_iter().collect();
+        let logical_read_plan = physical_read_plan.logical_plan();
         // pop() should schedule the lowest physical offsets first for sequential device I/O.
-        remaining.sort_unstable();
-        remaining.reverse();
-        let results = (0..remaining.len()).map(|_| None).collect();
+        let remaining = physical_read_plan.into_iter().rev().collect();
         // SAFETY: `CreateIoCompletionPort` is provided a valid handle and acceptable parameters.
         let completion_port =
             unsafe { Owned::new(CreateIoCompletionPort(*file_handle, None, 0, 0)?) };
         Ok(Self {
+            logical_read_plan,
             remaining,
-            results,
             in_flight: 0,
             max_in_flight,
             file_handle,
             iocp_handle: completion_port,
         })
-    }
-
-    /// Enqueue work until the IOCP queue has reached `max_in_flight` or there is no work left.
-    ///
-    /// # Errors
-    ///
-    /// Propagates errors returned by [`PhysicalReader::try_enqueue`].
-    pub fn enqueue_until_saturation(&mut self) -> eyre::Result<()> {
-        trace!(
-            in_flight = self.in_flight,
-            remaining = self.remaining.len(),
-            max_in_flight = self.max_in_flight.get(),
-            "Enqueuing IOCP reads",
-        );
-        while let PhysicalReaderEnqueueResult::Enqueued = self.try_enqueue()? {}
-        Ok(())
-    }
-
-    /// Drain the queue and return the aggregated read results.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if queueing or completion handling fails.
-    pub fn read_all(mut self) -> eyre::Result<PhysicalReadResults> {
-        let _span = info_span!(
-            "drain_physical_reader_iocp",
-            request_count = self.remaining.len(),
-            max_in_flight = self.max_in_flight.get(),
-        )
-        .entered();
-        trace!(request_count = self.remaining.len(), "Queueing IOCP reads",);
-
-        self.enqueue_until_saturation()?;
-
-        trace!("Queue saturated, waiting for completions");
-        while self.in_flight > 0 {
-            self.receive_result()?;
-            self.enqueue_until_saturation()?;
-        }
-        trace!("All IOCP reads completed");
-
-        let entries = std::mem::take(&mut self.results)
-            .into_iter()
-            .enumerate()
-            .map(|(i, o)| o.wrap_err_with(|| format!("Missing response index {i}")))
-            .collect::<eyre::Result<BTreeSet<_>>>()?;
-        Ok(PhysicalReadResults { entries })
     }
 
     /// Consume completed chunks immediately instead of retaining the entire source.
@@ -157,70 +100,51 @@ impl PhysicalReader {
     /// Returns queue, short-read or consumer errors. Pending operations are cancelled and drained on drop.
     pub fn read_each(
         mut self,
-        mut consume: impl FnMut(PhysicalReadResultEntry) -> eyre::Result<()>,
+        mut consume: impl FnMut(PhysicalReadResultEntry<'plan>) -> eyre::Result<()>,
     ) -> eyre::Result<()> {
-        self.enqueue_until_saturation()?;
-        while self.in_flight > 0 {
-            let result = ActivePhysicalReadRequest::receive(*self.iocp_handle);
-            self.in_flight -= 1;
-            let (entry, _) = result?;
-            eyre::ensure!(
-                entry.data.len() == entry.request.length.get::<uom::si::information::byte>(),
-                "Short physical read"
-            );
-            consume(entry)?;
-            self.enqueue_until_saturation()?;
-        }
-        Ok(())
-    }
-
-    /// Await a single IO completion result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if waiting for the completion port fails.
-    pub fn receive_result(&mut self) -> eyre::Result<()> {
-        let result = ActivePhysicalReadRequest::receive(*self.iocp_handle);
-        self.in_flight -= 1;
-        match result {
-            Ok((entry, response_index)) => {
-                self.results[response_index] = Some(entry);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Attempt to enqueue the next read request if the queue is not saturated.
-    ///
-    /// # Errors
-    ///
-    /// Fails if sending the read request to the file handle fails.
-    pub fn try_enqueue(&mut self) -> eyre::Result<PhysicalReaderEnqueueResult> {
-        if self.in_flight >= self.max_in_flight.get() {
-            return Ok(PhysicalReaderEnqueueResult::Full);
-        }
-        let Some(request) = self.remaining.pop() else {
-            return Ok(PhysicalReaderEnqueueResult::Done);
-        };
-
-        let response_index = self.results.len() - self.remaining.len() - 1;
-        let request = ActivePhysicalReadRequest::new(request, response_index);
-        request
-            .send(*self.file_handle)
-            .wrap_err("Failed to send read request")?;
-        self.in_flight += 1;
-        trace!(
-            in_flight = self.in_flight,
-            remaining = self.remaining.len(),
+        let _span = info_span!(
+            "drain_physical_reader_iocp",
+            request_count = self.remaining.len(),
             max_in_flight = self.max_in_flight.get(),
-            "Enqueued IOCP read",
-        );
-        Ok(PhysicalReaderEnqueueResult::Enqueued)
+        )
+        .entered();
+        loop {
+            while self.in_flight < self.max_in_flight.get() {
+                let Some(request) = self.remaining.pop() else {
+                    break;
+                };
+                ActivePhysicalReadRequest::new(request)
+                    .send(*self.file_handle)
+                    .wrap_err("Failed to send read request")?;
+                self.in_flight += 1;
+                trace!(
+                    in_flight = self.in_flight,
+                    remaining = self.remaining.len(),
+                    max_in_flight = self.max_in_flight.get(),
+                    "Enqueued IOCP read",
+                );
+            }
+            if self.in_flight == 0 {
+                break;
+            }
+            // SAFETY: This reader exclusively owns the live port. Only its submitted
+            // requests target it, no foreign packets are posted, and each received
+            // completion reclaims its request allocation exactly once.
+            let result = unsafe { ActivePhysicalReadRequest::receive(*self.iocp_handle) };
+            self.in_flight -= 1;
+            let (request, data) = result?;
+            consume(PhysicalReadResultEntry::new(
+                self.logical_read_plan,
+                request,
+                data,
+            ))?;
+        }
+        trace!("All IOCP reads completed");
+        Ok(())
     }
 }
 
-impl Drop for PhysicalReader {
+impl Drop for PhysicalReader<'_> {
     fn drop(&mut self) {
         if self.in_flight == 0 {
             return;
@@ -229,7 +153,10 @@ impl Drop for PhysicalReader {
         // closing its port so each leaked request allocation is reclaimed exactly once.
         let _ = unsafe { CancelIoEx(*self.file_handle, None) };
         while self.in_flight > 0 {
-            let _ = ActivePhysicalReadRequest::receive(*self.iocp_handle);
+            // SAFETY: We exclusively own the live port and drain only our remaining
+            // submitted requests. Previously received allocations are already gone;
+            // each remaining completion reclaims its allocation once before closing.
+            let _ = unsafe { ActivePhysicalReadRequest::receive(*self.iocp_handle) };
             self.in_flight -= 1;
         }
     }
@@ -239,6 +166,7 @@ impl Drop for PhysicalReader {
 mod tests {
     use super::PhysicalReader;
     use crate::domain::ParallelismLimit;
+    use crate::read::logical_read_plan::LogicalReadPlan;
     use crate::windows_utils::string::EasyPCWSTR;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -300,11 +228,14 @@ mod tests {
     fn reader_resolves_automatic_and_fixed_limits() -> eyre::Result<()> {
         let source = tempfile::NamedTempFile::new()?;
         let path = source.path().easy_pcwstr()?;
+        let logical = LogicalReadPlan {
+            segments: Default::default(),
+        };
         for (limit, expected) in [
             (ParallelismLimit::Automatic, 32),
             (ParallelismLimit::from(7usize), 7),
         ] {
-            let reader = PhysicalReader::try_new(&path, std::iter::empty(), limit)?;
+            let reader = PhysicalReader::try_new(&path, logical.as_physical_read_plan(), limit)?;
             assert_eq!(reader.max_in_flight.get(), expected);
         }
         Ok(())

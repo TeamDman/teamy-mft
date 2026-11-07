@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::PublishedDrivePaths;
 use crate::machine::config::current_unix_ms;
@@ -18,15 +19,17 @@ use std::ffi::OsString;
 use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
+use uom::si::information::byte;
+use uom::si::usize::Information;
 
 /// # Errors
 ///
 /// Returns an error if the input path is empty, cannot be resolved to an absolute drive path,
 /// the published base index is missing, or the overlay/checkpoint cannot be updated.
-pub fn sync_path_into_published_overlay(sync_dir: &Path, path: &str) -> eyre::Result<char> {
+pub fn sync_path_into_published_overlay(sync_dir: &Path, path: &str) -> eyre::Result<DriveLetter> {
     let target_path = resolve_sync_target_path(path)?;
     let rendered_path = target_path.display().to_string();
-    let drive_letter = drive_letter_for_absolute_windows_path(&rendered_path)?;
+    let drive_letter = DriveLetter::from_absolute_windows_path(&target_path)?;
     let published_paths = published_drive_paths(sync_dir, drive_letter);
     if !published_paths.base_index_path.is_file() {
         eyre::bail!(
@@ -66,7 +69,7 @@ pub fn sync_path_into_published_overlay(sync_dir: &Path, path: &str) -> eyre::Re
 pub fn sync_path_recursively_into_published_overlay(
     sync_dir: &Path,
     path: &str,
-) -> eyre::Result<char> {
+) -> eyre::Result<DriveLetter> {
     let target_path = resolve_sync_target_path(path)?;
     if target_path.exists() && !target_path.is_dir() {
         eyre::bail!(
@@ -76,7 +79,7 @@ pub fn sync_path_recursively_into_published_overlay(
     }
 
     let rendered_path = target_path.display().to_string();
-    let drive_letter = drive_letter_for_absolute_windows_path(&rendered_path)?;
+    let drive_letter = DriveLetter::from_absolute_windows_path(&target_path)?;
     let published_paths = published_drive_paths(sync_dir, drive_letter);
     if !published_paths.base_index_path.is_file() {
         eyre::bail!(
@@ -229,7 +232,11 @@ fn write_overlay_rows_and_checkpoint(
     overlay_rows: &[SearchIndexPathRow],
 ) -> eyre::Result<()> {
     SearchIndexBytesMut::from_rows(
-        SearchIndexHeader::new(published_paths.drive_letter, 0, overlay_rows.len() as u64),
+        SearchIndexHeader::new(
+            published_paths.drive_letter,
+            Information::new::<byte>(0),
+            overlay_rows.len() as u64,
+        ),
         overlay_rows,
     )?
     .write_to_path(&published_paths.overlay_index_path)?;
@@ -279,22 +286,11 @@ fn resolve_sync_target_path(path: &str) -> eyre::Result<PathBuf> {
     Ok(resolved)
 }
 
-fn drive_letter_for_absolute_windows_path(path: &str) -> eyre::Result<char> {
-    let bytes = path.as_bytes();
-    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
-        eyre::bail!(
-            "Path {} must resolve to an absolute Windows drive path like C:\\repo\\file.rules",
-            path
-        );
-    }
-    Ok(char::from(bytes[0].to_ascii_uppercase()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::drive_letter_for_absolute_windows_path;
     use super::sync_path_into_published_overlay;
     use super::sync_path_recursively_into_published_overlay;
+    use crate::domain::DriveLetter;
     use crate::machine::config::PublishedCheckpoint;
     use crate::machine::config::load_checkpoint;
     use crate::machine::config::published_drive_paths;
@@ -303,15 +299,20 @@ mod tests {
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     #[test]
     fn sync_path_into_overlay_upserts_one_row_and_checkpoint() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let paths = published_drive_paths(temp_dir.path(), 'C');
-        SearchIndexBytesMut::from_rows(SearchIndexHeader::new('C', 123, 0), &[])?
-            .write_to_path(&paths.base_index_path)?;
+        let paths = published_drive_paths(temp_dir.path(), DriveLetter::C);
         SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 0, 1),
+            SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 0),
+            &[],
+        )?
+        .write_to_path(&paths.base_index_path)?;
+        SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(0), 1),
             &[SearchIndexPathRow {
                 path: String::from(r"C:\existing.txt").into(),
                 has_deleted_entries: false,
@@ -320,12 +321,12 @@ mod tests {
         .write_to_path(&paths.overlay_index_path)?;
         crate::machine::config::save_checkpoint(
             &paths.checkpoint_path,
-            &PublishedCheckpoint::empty('C', SEARCH_INDEX_VERSION),
+            &PublishedCheckpoint::empty(DriveLetter::C, SEARCH_INDEX_VERSION),
         )?;
 
         let drive = sync_path_into_published_overlay(temp_dir.path(), r"C:\repo\filters.rules")?;
 
-        assert_eq!(drive, 'C');
+        assert_eq!(drive, DriveLetter::C);
         let overlay_bytes = std::fs::read(&paths.overlay_index_path)?;
         let overlay_rows = SearchIndexBytes::new(&overlay_bytes)
             .row_views()?
@@ -376,10 +377,10 @@ mod tests {
         let stale_overlay_path = repo_dir.join("stale.txt");
         let outside_overlay_path = temp_dir.path().join("outside.txt");
 
-        let drive = drive_letter_for_absolute_windows_path(&repo_dir.display().to_string())?;
+        let drive = DriveLetter::from_absolute_windows_path(&repo_dir)?;
         let published_paths = published_drive_paths(temp_dir.path(), drive);
         SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(drive, 123, 4),
+            SearchIndexHeader::new(drive, Information::new::<byte>(123), 4),
             &[
                 SearchIndexPathRow {
                     path: repo_dir.display().to_string().into(),
@@ -401,7 +402,7 @@ mod tests {
         )?
         .write_to_path(&published_paths.base_index_path)?;
         SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(drive, 0, 2),
+            SearchIndexHeader::new(drive, Information::new::<byte>(0), 2),
             &[
                 SearchIndexPathRow {
                     path: stale_overlay_path.display().to_string().into(),

@@ -1,12 +1,12 @@
+use crate::domain::ParallelismLimit;
 use crate::sync::DriveSyncInfo;
 use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncIndex;
 use crate::sync::SyncMft;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use teamy_cancellation::CancellationScope;
-use tracing::Instrument;
 use tracing::Span;
 use tracing::info_span;
 
@@ -47,115 +47,298 @@ impl SyncWork {
 /// Work must be selected with `SyncWork::prepare` before execution.
 pub async fn execute_sync(
     work: SyncWork,
-    parallel: usize,
+    parallel: ParallelismLimit,
     console_pid: Option<u32>,
     cancel: &CancellationScope,
 ) -> eyre::Result<()> {
     let SyncWork {
-        mft_drives: mft_drive_infos,
-        index_drives: index_drive_infos,
+        mft_drives,
+        index_drives,
     } = work;
-
-    // Drives present in both sets can build the index directly from the fresh
-    // in-memory `PhysicalMftReadResult` produced by the MFT stage, avoiding a
-    // write-then-read roundtrip through the cached `.mft` file.
-    let mft_drive_letters = mft_drive_infos
+    let fresh_letters = mft_drives
         .iter()
         .map(|info| info.drive_letter)
         .collect::<BTreeSet<_>>();
-    let in_memory_index_drive_letters = Arc::new(
-        index_drive_infos
+    let index_letters = Arc::new(
+        index_drives
             .iter()
             .map(|info| info.drive_letter)
-            .filter(|drive_letter| mft_drive_letters.contains(drive_letter))
             .collect::<BTreeSet<_>>(),
     );
-
-    // Any drive that still needs indexing but is not part of the current MFT sync
-    // cannot use the in-memory fast path. This happens, for example, when the MFT
-    // file already exists and MFT sync is skipped, but the search index still needs
-    // to be built from the cached `.mft` on disk.
-    let fallback_index_drive_infos = index_drive_infos
+    let retained = index_drives
         .into_iter()
-        .filter(|info| !mft_drive_letters.contains(&info.drive_letter))
-        .collect::<Vec<_>>();
+        .filter(|info| !fresh_letters.contains(&info.drive_letter));
+    // A private pool bounds Rayon scans, fixups and path resolution as well as drive jobs.
+    // Never change the daemon's global Rayon pool or its live-query worker policy.
+    let builder = rayon::ThreadPoolBuilder::new();
+    let pool = Arc::new(
+        match parallel {
+            ParallelismLimit::Automatic => builder,
+            ParallelismLimit::Fixed(limit) => builder.num_threads(limit.get()),
+        }
+        .build()?,
+    );
+    // Resolve Rayon's automatic count before limiting concurrent index builds.
+    // Passing zero to for_each_concurrent would allow unlimited builds.
+    let parallel = pool.current_num_threads();
+    tracing::info!(
+        parallel,
+        "Syncing drives with parallel streaming reads and bounded indexing"
+    );
+    let snapshots = SyncMft::invoke(mft_drives, console_pid, cancel.clone())?;
+    let ready = futures::stream::select(snapshots, futures::stream::iter(retained.map(Ok)));
+    build_ready_indexes(ready, parallel, move |info| {
+        let index_letters = Arc::clone(&index_letters);
+        let pool = Arc::clone(&pool);
+        let cancel = cancel.clone();
+        async move {
+            if !index_letters.contains(&info.drive_letter) {
+                return Ok(());
+            }
+            let parent = Span::current();
+            tokio::task::spawn_blocking(move || {
+                let _parent = parent.enter();
+                let _span =
+                    info_span!("build_cached_search_index_for_drive", drive = %info.drive_letter)
+                        .entered();
+                eyre::ensure!(
+                    !cancel.is_cancelled(),
+                    "Cancelled before indexing drive {}",
+                    info.drive_letter
+                );
+                pool.install(|| SyncIndex::invoke_for_mft_path(&info, &cancel))
+            })
+            .await
+            .map_err(|error| eyre::eyre!("Failed joining index task: {error}"))?
+        }
+    })
+    .await
+}
 
-    let mft_span = info_span!("dispatch mft sync work");
-    let mft_data = {
-        let _guard = mft_span.enter();
-        SyncMft::invoke(mft_drive_infos, console_pid)?
-    };
-
-    let in_memory_index_drive_letters_for_stream = Arc::clone(&in_memory_index_drive_letters);
-    let in_memory_indexing = async move {
-        // Consume completed MFT reads as they arrive and fan index construction out
-        // concurrently so slow drives do not block faster ones.
-        tracing::debug!(
-            drive_count = in_memory_index_drive_letters_for_stream.len(),
-            "Collecting MFT sync and in-memory index results"
-        );
-        mft_data
-            .try_for_each_concurrent(None, move |(drive_info, physical_mft)| {
-                let in_memory_index_drive_letters =
-                    Arc::clone(&in_memory_index_drive_letters_for_stream);
-                async move {
-                    if !in_memory_index_drive_letters.contains(&drive_info.drive_letter) {
+async fn build_ready_indexes<S, F, Fut>(ready: S, parallel: usize, build: F) -> eyre::Result<()>
+where
+    S: futures::Stream<Item = eyre::Result<DriveSyncInfo>>,
+    F: Fn(DriveSyncInfo) -> Fut + Clone,
+    Fut: std::future::Future<Output = eyre::Result<()>>,
+{
+    let first_error = Arc::new(std::sync::Mutex::new(None));
+    let error_for_jobs = Arc::clone(&first_error);
+    // Drain acquisition and await every started task even after the first error.
+    ready
+        .for_each_concurrent(parallel, move |item| {
+            let build = build.clone();
+            let errors = Arc::clone(&error_for_jobs);
+            async move {
+                let result = async {
+                    let info = item?;
+                    if errors
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_some()
+                    {
                         return Ok(());
                     }
-
-                    let parent_span = Span::current();
-                    tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                        let _parent_guard = parent_span.enter();
-                        let _guard = info_span!(
-                            "build_in_memory_search_index_for_drive",
-                            drive = %drive_info.drive_letter,
-                            index_path = %drive_info.index_output_path.display(),
-                        )
-                        .entered();
-                        let mft_file = physical_mft.to_mft_file()?;
-                        SyncIndex::invoke_for_mft_file(&drive_info, &mft_file)?;
-                        {
-                            let _guard = info_span!(
-                                "drop_in_memory_index_inputs",
-                                drive = %drive_info.drive_letter,
-                                physical_segments = physical_mft.physical_read_results.entries.len(),
-                                logical_segments = physical_mft.logical_read_plan.segments.len(),
-                                mft_entries = mft_file.record_count(),
-                            )
-                            .entered();
-                            drop(mft_file);
-                            drop(physical_mft);
-                        };
-                        Ok(())
-                    })
-                    .await
-                    .map_err(|error| {
-                        eyre::eyre!("Failed joining in-memory index task: {error}")
-                    })??;
-
-                    Ok(())
+                    build(info).await
                 }
+                .await;
+                if let Err(error) = result {
+                    let mut first = errors
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if first.is_none() {
+                        *first = Some(error);
+                    }
+                }
+            }
+        })
+        .await;
+    match first_error
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::DriveLetter;
+    #[tokio::test]
+    async fn cached_index_outputs_match_at_parallel_one_two_and_auto() -> eyre::Result<()> {
+        crate::cancellation::CancellationToken::new()
+            .with_async_scope(|scope| async move {
+                let mut expected = Vec::new();
+                for parallel in [1, 2, 0] {
+                    let temp = tempfile::tempdir()?;
+                    let infos =
+                        crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
+                            temp.path(),
+                            [DriveLetter::C, DriveLetter::D, DriveLetter::G],
+                        )?;
+                    for info in &infos {
+                        std::fs::write(&info.mft_output_path, crate::mft::sample_mft_records())?;
+                    }
+                    let work = SyncWork::prepare(infos.clone(), &IfExistsOutputBehaviour::Skip)?;
+                    assert!(
+                        work.mft_drives.is_empty(),
+                        "fixture must never open a volume"
+                    );
+                    execute_sync(work, parallel.into(), None, &scope).await?;
+                    let bytes = infos
+                        .iter()
+                        .map(|info| std::fs::read(&info.index_output_path))
+                        .collect::<std::io::Result<Vec<_>>>()?;
+                    if parallel == 1 {
+                        expected = bytes;
+                    } else {
+                        assert_eq!(bytes, expected);
+                    }
+                }
+                Ok(())
             })
             .await
     }
-    .instrument(mft_span);
+    #[tokio::test]
+    async fn ready_indexes_respect_the_resolved_worker_limit() -> eyre::Result<()> {
+        use std::sync::atomic::AtomicUsize;
+        use std::sync::atomic::Ordering;
 
-    let disk_indexing = async move {
-        // Run the disk-backed index path in parallel with the in-memory path so
-        // drives skipped by the MFT stage do not have to wait for fresh MFT reads.
-        if fallback_index_drive_infos.is_empty() {
-            return Ok(());
+        for parallel in [1, 2] {
+            let temp = tempfile::tempdir()?;
+            let infos = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
+                temp.path(),
+                [
+                    DriveLetter::C,
+                    DriveLetter::D,
+                    DriveLetter::E,
+                    DriveLetter::F,
+                    DriveLetter::G,
+                ],
+            )?;
+            let active = Arc::new(AtomicUsize::new(0));
+            let peak = Arc::new(AtomicUsize::new(0));
+            let completed = Arc::new(AtomicUsize::new(0));
+            build_ready_indexes(
+                futures::stream::iter(infos.into_iter().map(Ok)),
+                parallel,
+                {
+                    let active = Arc::clone(&active);
+                    let peak = Arc::clone(&peak);
+                    let completed = Arc::clone(&completed);
+                    move |_| {
+                        let active = Arc::clone(&active);
+                        let peak = Arc::clone(&peak);
+                        let completed = Arc::clone(&completed);
+                        async move {
+                            let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            peak.fetch_max(current, Ordering::SeqCst);
+                            tokio::task::yield_now().await;
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            completed.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    }
+                },
+            )
+            .await?;
+            assert_eq!(peak.load(Ordering::SeqCst), parallel);
+            assert_eq!(active.load(Ordering::SeqCst), 0);
+            assert_eq!(completed.load(Ordering::SeqCst), 5);
         }
-
-        let _guard = info_span!(
-            "build_disk_backed_search_indexes",
-            drive_count = fallback_index_drive_infos.len(),
-        )
-        .entered();
-        SyncIndex::invoke(fallback_index_drive_infos, cancel)
-    };
-
-    tokio::try_join!(in_memory_indexing, disk_indexing)?;
-
-    Ok(())
+        Ok(())
+    }
+    #[tokio::test]
+    async fn acquisition_failure_waits_for_another_active_index() -> eyre::Result<()> {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::Ordering;
+        let temp = tempfile::tempdir()?;
+        let info = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
+            temp.path(),
+            [DriveLetter::C],
+        )?
+        .remove(0);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let channels = Arc::new(std::sync::Mutex::new(Some((started_tx, release_rx))));
+        let finished = Arc::new(AtomicBool::new(false));
+        let finished_job = Arc::clone(&finished);
+        let job = tokio::spawn(async move {
+            build_ready_indexes(
+                futures::stream::iter([
+                    Ok(info),
+                    Err(eyre::eyre!("injected other-drive read failure")),
+                ]),
+                2,
+                move |_| {
+                    let (started, release) = channels.lock().unwrap().take().unwrap();
+                    let finished = Arc::clone(&finished_job);
+                    async move {
+                        let _ = started.send(());
+                        release.await?;
+                        finished.store(true, Ordering::SeqCst);
+                        Ok(())
+                    }
+                },
+            )
+            .await
+        });
+        started_rx.await?;
+        tokio::task::yield_now().await;
+        assert!(
+            !job.is_finished(),
+            "failure must not detach an already-started job"
+        );
+        release_tx.send(()).unwrap();
+        assert!(
+            job.await?
+                .unwrap_err()
+                .to_string()
+                .contains("other-drive read failure")
+        );
+        assert!(finished.load(Ordering::SeqCst));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn failure_drains_another_active_acquisition_before_returning() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let info = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
+            temp.path(),
+            [DriveLetter::G],
+        )?
+        .remove(0);
+        let marker = temp.path().join("completed-acquisition");
+        let marker_job = marker.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let acquisition = futures::stream::once(async move {
+            tokio::task::spawn_blocking(move || {
+                let _ = started_tx.send(());
+                release_rx.recv().unwrap();
+                std::fs::write(marker_job, b"completed before return")?;
+                eyre::Ok(info)
+            })
+            .await
+            .map_err(|error| eyre::eyre!(error))?
+        });
+        let ready =
+            futures::stream::iter([Err(eyre::eyre!("first drive failed"))]).chain(acquisition);
+        let job = tokio::spawn(build_ready_indexes(ready, 2, |_| async {
+            eyre::bail!("index must not start after read failure")
+        }));
+        started_rx.await?;
+        tokio::task::yield_now().await;
+        assert!(!job.is_finished());
+        release_tx.send(())?;
+        assert!(
+            job.await?
+                .unwrap_err()
+                .to_string()
+                .contains("first drive failed")
+        );
+        assert_eq!(std::fs::read(marker)?, b"completed before return");
+        Ok(())
+    }
 }

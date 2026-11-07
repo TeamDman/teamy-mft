@@ -5,11 +5,6 @@ use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 
-fn project_dirs() -> eyre::Result<ProjectDirs> {
-    ProjectDirs::from_path(PathBuf::from("teamy_mft"))
-        .wrap_err("Could not determine project directories")
-}
-
 #[derive(Debug)]
 pub struct ConfigDirPath {
     path: PathBuf,
@@ -22,7 +17,10 @@ impl ConfigDirPath {
     /// Returns an error if the project directories cannot be determined.
     pub fn new() -> eyre::Result<Self> {
         Ok(Self {
-            path: project_dirs()?.config_dir().to_path_buf(),
+            path: ProjectDirs::from_path(PathBuf::from("teamy_mft"))
+                .wrap_err("Could not determine project directories")?
+                .config_dir()
+                .to_path_buf(),
         })
     }
 }

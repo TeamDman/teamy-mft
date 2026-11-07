@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::paths::EnsureParentDirExists;
 use eyre::ContextCompat;
 use facet::Facet;
@@ -194,7 +195,7 @@ unsafe impl Facet<'_> for FacetPathBuf {
 
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 pub struct PublishedCheckpoint {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub volume_serial_number: Option<u32>,
     pub journal_id: Option<u64>,
     pub snapshot_usn: Option<u64>,
@@ -206,7 +207,7 @@ pub struct PublishedCheckpoint {
 
 impl PublishedCheckpoint {
     #[must_use]
-    pub fn empty(drive_letter: char, base_index_version: u16) -> Self {
+    pub fn empty(drive_letter: DriveLetter, base_index_version: u16) -> Self {
         Self {
             drive_letter,
             volume_serial_number: None,
@@ -222,7 +223,7 @@ impl PublishedCheckpoint {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishedDrivePaths {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub mft_path: PathBuf,
     pub base_index_path: PathBuf,
     pub overlay_index_path: PathBuf,
@@ -250,7 +251,7 @@ pub fn default_sync_dir() -> PathBuf {
 }
 
 #[must_use]
-pub fn published_drive_paths(sync_dir: &Path, drive_letter: char) -> PublishedDrivePaths {
+pub fn published_drive_paths(sync_dir: &Path, drive_letter: DriveLetter) -> PublishedDrivePaths {
     PublishedDrivePaths {
         drive_letter,
         mft_path: sync_dir.join(format!("{drive_letter}{MFT_CACHE_FILE_EXTENSION}")),

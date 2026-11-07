@@ -203,26 +203,14 @@ impl MftRecord {
 
     #[inline]
     #[must_use]
-    pub fn flags_is_in_use(flags: MftRecordFlags) -> bool {
-        flags.is_in_use()
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn flags_is_deleted(flags: MftRecordFlags) -> bool {
-        flags.is_deleted()
-    }
-
-    #[inline]
-    #[must_use]
     pub fn is_in_use(&self) -> bool {
-        Self::flags_is_in_use(self.flags())
+        self.flags().is_in_use()
     }
 
     #[inline]
     #[must_use]
     pub fn is_deleted(&self) -> bool {
-        Self::flags_is_deleted(self.flags())
+        self.flags().is_deleted()
     }
 
     /// Bytes in use inside this record.

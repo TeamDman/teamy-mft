@@ -1,5 +1,7 @@
+use crate::domain::DriveLetter;
 use crate::windows_utils::string::EasyPCWSTR;
 use arbitrary::Arbitrary;
+use eyre::WrapErr;
 use eyre::ensure;
 use facet::Facet;
 use std::fmt;
@@ -28,7 +30,7 @@ impl DriveLetterPattern {
     /// # Errors
     ///
     /// Returns an error if the pattern is invalid or no drives are found.
-    pub fn into_drive_letters(&self) -> eyre::Result<Vec<char>> {
+    pub fn into_drive_letters(&self) -> eyre::Result<Vec<DriveLetter>> {
         let input = self.as_ref().trim();
 
         if input == "*" {
@@ -43,12 +45,9 @@ impl DriveLetterPattern {
                 continue;
             }
 
-            ensure!(
-                char.is_ascii_alphabetic(),
-                "Invalid drive letter character at position {i}: '{char}'"
-            );
-
-            rtn.push(char.to_ascii_uppercase());
+            rtn.push(DriveLetter::try_from(char).wrap_err_with(|| {
+                format!("Invalid drive letter character at position {i}: '{char}'")
+            })?);
         }
 
         ensure!(!rtn.is_empty(), "No drive letters found in: '{}'", input);
@@ -66,7 +65,7 @@ impl DriveLetterPattern {
     pub fn into_drive_letters_for_scope_roots<'a>(
         &self,
         scope_roots: impl IntoIterator<Item = &'a Path>,
-    ) -> eyre::Result<Vec<char>> {
+    ) -> eyre::Result<Vec<DriveLetter>> {
         if self != &Self::default() {
             return self.into_drive_letters();
         }
@@ -84,7 +83,7 @@ impl DriveLetterPattern {
             else {
                 continue;
             };
-            let drive = char::from(drive).to_ascii_uppercase();
+            let drive = DriveLetter::try_from(drive)?;
             if !drive_letters.contains(&drive) {
                 drive_letters.push(drive);
             }
@@ -124,7 +123,7 @@ impl AsRef<str> for DriveLetterPattern {
 /// Maybe see also:
 /// <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlogicaldrivestringsw>
 /// <https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file>
-fn get_available_drives() -> eyre::Result<Vec<char>> {
+fn get_available_drives() -> eyre::Result<Vec<DriveLetter>> {
     use windows::Win32::Storage::FileSystem::GetDriveTypeW;
     use windows::Win32::Storage::FileSystem::GetLogicalDrives;
 
@@ -132,11 +131,8 @@ fn get_available_drives() -> eyre::Result<Vec<char>> {
     let drives_bitmask = unsafe { GetLogicalDrives() };
 
     let mut available_drives = Vec::new();
-    for i in 0..26 {
+    for (i, drive_letter) in DriveLetter::ALL.into_iter().enumerate() {
         if (drives_bitmask & (1 << i)) != 0 {
-            // i is constrained 0..26, convert explicitly to u8 to avoid truncation warnings
-            let idx = u8::try_from(i).unwrap_or_default();
-            let drive_letter = (b'A' + idx) as char;
             let drive_root = format!("{drive_letter}:\\");
             let drive_root = drive_root.easy_pcwstr()?;
 
@@ -162,11 +158,30 @@ mod tests {
     use super::DRIVE_REMOTE;
     use super::DriveLetterPattern;
     use super::should_enumerate_drive_type;
+    use crate::domain::DriveLetter;
 
     #[test]
     fn parses_explicit_drive_letters_with_separators() -> eyre::Result<()> {
         let drive_letters = DriveLetterPattern("C,D;E F".to_string()).into_drive_letters()?;
-        assert_eq!(drive_letters, vec!['C', 'D', 'E', 'F']);
+        assert_eq!(
+            drive_letters,
+            vec![
+                DriveLetter::C,
+                DriveLetter::D,
+                DriveLetter::E,
+                DriveLetter::F
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalizes_lowercase_drive_letters() -> eyre::Result<()> {
+        let drive_letters = DriveLetterPattern("c,z;a".to_string()).into_drive_letters()?;
+        assert_eq!(
+            drive_letters,
+            vec![DriveLetter::C, DriveLetter::Z, DriveLetter::A]
+        );
         Ok(())
     }
 
@@ -190,7 +205,7 @@ mod tests {
             std::path::Path::new(r"C:\repo"),
         ])?;
 
-        assert_eq!(drive_letters, vec!['G', 'C']);
+        assert_eq!(drive_letters, vec![DriveLetter::G, DriveLetter::C]);
         Ok(())
     }
 
@@ -199,7 +214,7 @@ mod tests {
         let drive_letters = DriveLetterPattern("C".to_string())
             .into_drive_letters_for_scope_roots([std::path::Path::new(r"G:\repo")])?;
 
-        assert_eq!(drive_letters, vec!['C']);
+        assert_eq!(drive_letters, vec![DriveLetter::C]);
         Ok(())
     }
 

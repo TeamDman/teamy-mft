@@ -35,7 +35,7 @@ use tracing::info_span;
 pub const APP_SEMVER: &str = env!("CARGO_PKG_VERSION");
 pub const APP_GIT_REVISION: &str = env!("GIT_REVISION");
 pub const APP_BUILD_UNIX_MS: &str = env!("BUILD_UNIX_MS");
-pub const DAEMON_RPC_COMPAT_VERSION: u32 = 10;
+pub const DAEMON_RPC_COMPAT_VERSION: u32 = 11;
 
 fn version() -> String {
     let built_at = APP_BUILD_UNIX_MS

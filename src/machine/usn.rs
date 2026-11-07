@@ -8,6 +8,7 @@
     reason = "Windows USN journal IOCTL interop requires raw pointer and integer conversion boilerplate"
 )]
 
+use crate::domain::DriveLetter;
 use crate::windows_utils::string::EasyPCWSTR;
 use eyre::Context;
 use teamy_cancellation::CancellationScope;
@@ -139,7 +140,7 @@ pub struct UsnReadBatch {
 
 #[derive(Debug)]
 pub struct VolumeUsnJournalHandle {
-    drive_letter: char,
+    drive_letter: DriveLetter,
     handle: Owned<HANDLE>,
 }
 
@@ -148,7 +149,7 @@ impl VolumeUsnJournalHandle {
     ///
     /// Returns an error if the NTFS volume handle cannot be opened.
     #[instrument(level = "debug")]
-    pub fn open(drive_letter: char) -> eyre::Result<Self> {
+    pub fn open(drive_letter: DriveLetter) -> eyre::Result<Self> {
         Self::open_with_access(drive_letter, FILE_GENERIC_READ.0)
     }
 
@@ -156,11 +157,11 @@ impl VolumeUsnJournalHandle {
     ///
     /// Returns an error if the NTFS volume handle cannot be opened for journal mutation.
     #[instrument(level = "debug")]
-    pub fn open_writable(drive_letter: char) -> eyre::Result<Self> {
+    pub fn open_writable(drive_letter: DriveLetter) -> eyre::Result<Self> {
         Self::open_with_access(drive_letter, FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0)
     }
 
-    fn open_with_access(drive_letter: char, desired_access: u32) -> eyre::Result<Self> {
+    fn open_with_access(drive_letter: DriveLetter, desired_access: u32) -> eyre::Result<Self> {
         let volume_path = format!(r"\\.\{drive_letter}:");
         let volume_path_wide = volume_path.easy_pcwstr()?;
         let handle = unsafe {
@@ -370,7 +371,9 @@ This usually means the volume does not expose an NTFS USN journal or the volume 
 ///
 /// Returns an error if the volume handle cannot be opened or journal metadata cannot be queried
 /// for a reason other than an inactive journal.
-pub fn query_journal_status(drive_letter: char) -> eyre::Result<crate::daemon::UsnJournalStatus> {
+pub fn query_journal_status(
+    drive_letter: DriveLetter,
+) -> eyre::Result<crate::daemon::UsnJournalStatus> {
     let journal = VolumeUsnJournalHandle::open(drive_letter)?;
     match journal.try_query_cursor_raw() {
         Ok(cursor) => Ok(crate::daemon::UsnJournalStatus {
@@ -407,7 +410,7 @@ pub fn query_journal_status(drive_letter: char) -> eyre::Result<crate::daemon::U
 /// Returns an error if the volume handle cannot be opened, the journal cannot be created,
 /// or the resulting journal metadata cannot be queried.
 pub fn create_journal(
-    drive_letter: char,
+    drive_letter: DriveLetter,
     maximum_size: u64,
     allocation_delta: u64,
 ) -> eyre::Result<crate::daemon::UsnJournalStatus> {

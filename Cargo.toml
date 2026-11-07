@@ -1,10 +1,8 @@
 [package]
-# repo[impl implementation.present]
 name = "teamy-mft"
 version = "0.7.1"
 edition = "2024"
 authors = ["TeamDman"]
-# repo[impl description.meaningful]
 description = "TeamDman's Master File Table CLI and library for NTFS."
 license = "MPL-2.0"
 readme = "README.md"
@@ -84,7 +82,7 @@ ignore = "0.4.24"
 globset = "0.4.15"
 semver = "1.0.27"
 uuid = { version = "1.18.1", features = ["v4"] }
-teamy-cancellation = { package = "teamy-cancellation", version = "=0.7.1", features = ["async"] }
+teamy-cancellation = { package = "teamy-cancellation", version = "=0.8.1", features = ["async", "io"] }
 vox = { package = "teamy-vox", version = "=0.10.0-rc.9", features = ["transport-local"] }
 vox-types = { package = "teamy-vox-types", version = "=0.10.0-rc.9" }
 vox-stream = { package = "teamy-vox-stream", version = "=0.10.0-rc.9" }

@@ -1,71 +1,46 @@
+use crate::read::logical_read_plan::LogicalFileSegment;
+use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_request::PhysicalReadRequest;
-use crate::read::physical_read_results::PhysicalReadResults;
-use crate::read::physical_reader::PhysicalReader;
 use std::collections::BTreeSet;
-use tracing::info_span;
 use tracing::instrument;
 use uom::ConstZero;
 use uom::si::information::byte;
 use uom::si::usize::Information;
-use windows::core::PCWSTR;
-use windows::core::Param;
 
-#[derive(Debug, Default, Clone)]
-pub struct PhysicalReadPlan {
+#[derive(Debug, Clone)]
+pub struct PhysicalReadPlan<'plan> {
+    logical_plan: &'plan LogicalReadPlan,
     requests: BTreeSet<PhysicalReadRequest>,
-    zero_length_behavior: ZeroLengthPushBehaviour,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
-pub enum ZeroLengthPushBehaviour {
-    #[default]
-    Panic,
-    NoOp,
-}
-
-impl IntoIterator for PhysicalReadPlan {
+impl IntoIterator for PhysicalReadPlan<'_> {
     type Item = PhysicalReadRequest;
     type IntoIter = std::collections::btree_set::IntoIter<PhysicalReadRequest>;
     fn into_iter(self) -> Self::IntoIter {
         self.requests.into_iter()
     }
 }
-impl FromIterator<PhysicalReadRequest> for PhysicalReadPlan {
-    fn from_iter<T: IntoIterator<Item = PhysicalReadRequest>>(iter: T) -> Self {
-        let mut plan = PhysicalReadPlan::new();
-        for req in iter {
-            plan.push(req);
+impl<'plan> From<&'plan LogicalReadPlan> for PhysicalReadPlan<'plan> {
+    fn from(logical_plan: &'plan LogicalReadPlan) -> Self {
+        Self {
+            logical_plan,
+            requests: logical_plan
+                .segments
+                .iter()
+                .filter_map(LogicalFileSegment::as_physical_read_request)
+                .filter(|request| request.length != Information::ZERO)
+                .collect(),
         }
-        plan
     }
 }
 
-impl PhysicalReadPlan {
+impl<'plan> PhysicalReadPlan<'plan> {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn logical_plan(&self) -> &'plan LogicalReadPlan {
+        self.logical_plan
     }
 
-    pub fn set_zero_length_behavior(&mut self, behavior: ZeroLengthPushBehaviour) -> &mut Self {
-        self.zero_length_behavior = behavior;
-        self
-    }
-
-    /// # Panics
-    ///
-    /// Panics if the request length is zero and the zero-length behavior is `Panic`.
-    pub fn push(&mut self, request: PhysicalReadRequest) -> &mut Self {
-        if request.length == Information::ZERO {
-            match self.zero_length_behavior {
-                ZeroLengthPushBehaviour::Panic => panic!("Zero-length push detected"),
-                ZeroLengthPushBehaviour::NoOp => return self,
-            }
-        }
-        self.requests.insert(request);
-        self
-    }
-
-    /// Merge physically contiguous requests. Returns &mut self for chaining.
+    /// Merge overlapping or contiguous physical requests. Returns &mut self for chaining.
     pub fn merge_contiguous_reads(&mut self) -> &mut Self {
         if self.requests.is_empty() {
             return self;
@@ -73,15 +48,15 @@ impl PhysicalReadPlan {
         let physical_requests = std::mem::take(&mut self.requests);
         let merged = &mut self.requests;
 
-        // The BTreeSet is sorted by (physical_offset, length), so we can just iterate and merge adjacent ones.
+        // Sorted offsets let each request extend the current physical interval's union.
         for req in physical_requests {
             let Some(mut last) = merged.pop_last() else {
                 merged.insert(req);
                 continue;
             };
-            if last.physical_end() == req.offset {
-                // This begins where the previous one ends, merge together
-                last.length += req.length;
+            if req.offset <= last.physical_end() {
+                let end = std::cmp::max(last.physical_end(), req.physical_end());
+                last.length = end - last.offset;
                 merged.insert(last);
             } else {
                 // No merge; re-insert last and insert new
@@ -100,7 +75,10 @@ impl PhysicalReadPlan {
         if chunk_size == Information::ZERO {
             return self.clone();
         }
-        let mut out = PhysicalReadPlan::new();
+        let mut out = Self {
+            logical_plan: self.logical_plan,
+            requests: BTreeSet::new(),
+        };
         for req in &self.requests {
             let mut remaining = req.length;
             let mut current_physical_offset = req.offset;
@@ -110,7 +88,7 @@ impl PhysicalReadPlan {
                 } else {
                     remaining
                 };
-                out.push(PhysicalReadRequest::new(
+                out.requests.insert(PhysicalReadRequest::new(
                     current_physical_offset,
                     segment_size,
                 ));
@@ -130,7 +108,7 @@ impl PhysicalReadPlan {
         let sector_size = Information::new::<byte>(512);
         for mut req in std::mem::take(&mut self.requests) {
             req.align_to_sector_size(sector_size);
-            self.push(req);
+            self.requests.insert(req);
         }
         self.merge_contiguous_reads();
         self
@@ -153,73 +131,116 @@ impl PhysicalReadPlan {
             .map(|r| r.length)
             .fold(Information::ZERO, |a, b| a + b)
     }
-
-    /// Read the requested ranges from the given file handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if opening the file, enqueuing IO operations, or reading fails.
-    #[instrument(skip_all)]
-    pub fn read(self, filename: impl Param<PCWSTR>) -> eyre::Result<PhysicalReadResults> {
-        if self.is_empty() {
-            return Ok(PhysicalReadResults::new());
-        }
-        let max_in_flight = PhysicalReader::configured_max_in_flight_io();
-        let request_count = self.requests.len();
-        let total_size = self.total_size().get::<byte>();
-        let reader = {
-            let _span = info_span!(
-                "create_physical_reader",
-                request_count,
-                total_physical_bytes = total_size,
-                max_in_flight,
-            )
-            .entered();
-            PhysicalReader::try_new(filename, self.requests, max_in_flight)?
-        };
-        reader.read_all()
-    }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::read::logical_read_plan::LogicalFileSegment;
+    use crate::read::logical_read_plan::LogicalFileSegmentKind;
+    use crate::read::logical_read_plan::LogicalReadPlan;
     use crate::read::physical_read_plan::PhysicalReadPlan;
-    use crate::read::physical_read_plan::ZeroLengthPushBehaviour;
-    use crate::read::physical_read_request::PhysicalReadRequest;
     use uom::si::information::byte;
     use uom::si::usize::Information;
 
-    fn info(bytes: impl Into<usize>) -> Information {
-        Information::new::<byte>(bytes.into())
-    }
-
     #[test]
-    fn merge_adjacent_pushes() {
-        let mut r = PhysicalReadPlan::new();
-        r.push(PhysicalReadRequest::new(info(0usize), info(100usize)));
-        r.push(PhysicalReadRequest::new(info(100usize), info(50usize))); // contiguous -> should merge after merge_contiguous_reads
-        r.merge_contiguous_reads();
-        assert_eq!(r.len(), 1usize, "Expected contiguous pushes to merge");
-        let reqs: Vec<_> = r.clone().into_iter().collect();
+    fn merges_adjacent_physical_segments() {
+        let logical = LogicalReadPlan {
+            segments: [
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(0),
+                    length: Information::new::<byte>(100),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(0),
+                    },
+                },
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(100),
+                    length: Information::new::<byte>(50),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(100),
+                    },
+                },
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut physical = PhysicalReadPlan::from(&logical);
+        physical.merge_contiguous_reads();
+        assert!(std::ptr::eq(physical.logical_plan(), &logical));
+        assert_eq!(physical.len(), 1, "Expected contiguous reads to merge");
+        let reqs: Vec<_> = physical.clone().into_iter().collect();
         assert_eq!(reqs[0].offset.get::<byte>(), 0usize);
         assert_eq!(reqs[0].length.get::<byte>(), 150usize);
-        assert_eq!(r.total_size().get::<byte>(), 150usize);
+        assert_eq!(physical.total_size().get::<byte>(), 150usize);
     }
 
     #[test]
     fn non_adjacent_does_not_merge() {
-        let mut r = PhysicalReadPlan::new();
-        r.push(PhysicalReadRequest::new(info(0usize), info(100usize)));
-        r.push(PhysicalReadRequest::new(info(101usize), info(50usize))); // gap of 1
-        r.merge_contiguous_reads();
-        assert_eq!(r.len(), 2usize, "Non-contiguous pushes must not merge");
+        let logical = LogicalReadPlan {
+            segments: [
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(0),
+                    length: Information::new::<byte>(100),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(0),
+                    },
+                },
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(100),
+                    length: Information::new::<byte>(50),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(101),
+                    },
+                },
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut physical = PhysicalReadPlan::from(&logical);
+        physical.merge_contiguous_reads();
+        assert_eq!(physical.len(), 2, "Non-contiguous reads must not merge");
+    }
+
+    #[test]
+    fn regression_merging_unions_overlapping_contained_and_touching_requests() {
+        let logical = LogicalReadPlan {
+            segments: [(0, 1024), (512, 256), (768, 1024), (1792, 256)]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (offset, length))| LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(index * 2048),
+                    length: Information::new::<byte>(length),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(offset),
+                    },
+                })
+                .collect(),
+        };
+        let mut physical = PhysicalReadPlan::from(&logical);
+        physical.merge_contiguous_reads();
+        let requests = physical.into_iter().collect::<Vec<_>>();
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].offset.get::<byte>(), 0);
+        assert_eq!(requests[0].length.get::<byte>(), 2048);
     }
 
     #[test]
     fn chunking_splits_without_merging_chunks() {
-        let mut r = PhysicalReadPlan::new();
-        r.push(PhysicalReadRequest::new(info(0usize), info(300usize))); // single extent
-        let chunked = r.chunked(info(128usize));
+        let logical = LogicalReadPlan {
+            segments: [LogicalFileSegment {
+                logical_offset: Information::new::<byte>(0),
+                length: Information::new::<byte>(300),
+                kind: LogicalFileSegmentKind::Physical {
+                    physical_offset: Information::new::<byte>(0),
+                },
+            }]
+            .into_iter()
+            .collect(),
+        };
+        let physical = PhysicalReadPlan::from(&logical);
+        let chunked = physical.chunked(Information::new::<byte>(128));
+        assert!(std::ptr::eq(chunked.logical_plan(), &logical));
         // 300 bytes in 128-byte chunks => 128,128,44 (3 chunks)
         assert_eq!(chunked.len(), 3usize, "Chunking should split into 3 parts");
         let reqs: Vec<_> = chunked.clone().into_iter().collect();
@@ -238,9 +259,19 @@ mod test {
 
     #[test]
     fn chunking_respects_exact_division() {
-        let mut r = PhysicalReadPlan::new();
-        r.push(PhysicalReadRequest::new(info(4096usize), info(4096usize)));
-        let c = r.chunked(info(1024usize));
+        let logical = LogicalReadPlan {
+            segments: [LogicalFileSegment {
+                logical_offset: Information::new::<byte>(0),
+                length: Information::new::<byte>(4096),
+                kind: LogicalFileSegmentKind::Physical {
+                    physical_offset: Information::new::<byte>(4096),
+                },
+            }]
+            .into_iter()
+            .collect(),
+        };
+        let physical = PhysicalReadPlan::from(&logical);
+        let c = physical.chunked(Information::new::<byte>(1024));
         assert_eq!(c.len(), 4usize);
         let reqs: Vec<_> = c.clone().into_iter().collect();
         for (i, req) in reqs.iter().enumerate() {
@@ -250,18 +281,64 @@ mod test {
     }
 
     #[test]
-    fn zero_length_push_ignored() {
-        let mut r = PhysicalReadPlan::new();
-        r.set_zero_length_behavior(ZeroLengthPushBehaviour::NoOp);
-        r.push(PhysicalReadRequest::new(info(0usize), info(0usize)));
-        assert!(r.is_empty());
+    fn sparse_and_zero_length_segments_require_no_physical_reads() {
+        let logical = LogicalReadPlan {
+            segments: [
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(0),
+                    length: Information::new::<byte>(0),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(0),
+                    },
+                },
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(128),
+                    length: Information::new::<byte>(512),
+                    kind: LogicalFileSegmentKind::Sparse,
+                },
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let physical = PhysicalReadPlan::from(&logical);
+        assert!(physical.is_empty());
+        assert_eq!(physical.total_size().get::<byte>(), 0);
+        assert!(std::ptr::eq(physical.logical_plan(), &logical));
     }
 
     #[test]
-    #[should_panic(expected = "Zero-length push detected")]
-    fn zero_length_push_panics_by_default() {
-        let mut r = PhysicalReadPlan::new();
-        // default is Panic
-        r.push(PhysicalReadRequest::new(info(0usize), info(0usize)));
+    fn alignment_and_chunking_preserve_the_logical_plan() {
+        let logical = LogicalReadPlan {
+            segments: [
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(0),
+                    length: Information::new::<byte>(300),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(13),
+                    },
+                },
+                LogicalFileSegment {
+                    logical_offset: Information::new::<byte>(300),
+                    length: Information::new::<byte>(700),
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: Information::new::<byte>(600),
+                    },
+                },
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut physical = PhysicalReadPlan::from(&logical);
+        physical.align_512();
+        assert_eq!(physical.len(), 1);
+        assert_eq!(physical.total_size().get::<byte>(), 1536);
+        assert!(std::ptr::eq(physical.logical_plan(), &logical));
+        let chunked = physical.chunked(Information::new::<byte>(512));
+        assert!(std::ptr::eq(chunked.logical_plan(), &logical));
+        assert_eq!(chunked.len(), 3);
+        for (index, request) in chunked.into_iter().enumerate() {
+            assert_eq!(request.offset.get::<byte>(), index * 512);
+            assert_eq!(request.length.get::<byte>(), 512);
+        }
     }
 }

@@ -1,5 +1,5 @@
 use crate::read::physical_read_request::PhysicalReadRequest;
-use crate::read::physical_read_results::PhysicalReadResultEntry;
+use eyre::WrapErr;
 use eyre::bail;
 use std::any::type_name;
 use std::ptr::null_mut;
@@ -12,36 +12,19 @@ use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::IO::GetQueuedCompletionStatus;
 use windows::Win32::System::IO::OVERLAPPED;
 
-// NOTE on layout and safety for IOCP:
-// We intentionally embed OVERLAPPED as the FIRST field and mark the
-// struct as repr(C). With repr(C), field order and the offset of the
-// first field are guaranteed, so the address of a ReadRequest value is
-// equal to the address of its `overlapped` field. This allows us to pass
-// `&mut read_req.overlapped` to ReadFile and later, when IO completes,
-// recover the original allocation from the `lpOverlapped` pointer returned
-// by GetQueuedCompletionStatus via a cast back to *mut ReadRequest.
-//
-// Safety invariants relied upon by this file:
-// - `overlapped` MUST remain the first field of ReadRequest.
-// - ReadRequest MUST remain `#[repr(C)]`.
-// - Each queued I/O leaks its Box<ReadRequest> (Box::into_raw) so the
-//   allocation outlives the async operation; ownership is reclaimed once
-//   the completion is dequeued by converting the raw pointer back with
-//   Box::from_raw exactly once.
-// - We never move/relocate the allocation after queueing the I/O.
+// `overlapped` must remain first under `repr(C)`: its completion pointer identifies
+// the entire allocation released by `Box::into_raw` and reclaimed by `receive`.
 #[repr(C)]
-pub struct ActivePhysicalReadRequest {
-    pub overlapped: OVERLAPPED,
-    pub buffer: Vec<u8>,
-    pub response_index: usize,
-    pub original: PhysicalReadRequest,
+pub(super) struct ActivePhysicalReadRequest {
+    overlapped: OVERLAPPED,
+    buffer: Vec<u8>,
+    original: PhysicalReadRequest,
 }
 impl std::fmt::Debug for ActivePhysicalReadRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(type_name::<ActivePhysicalReadRequest>())
             .field("file_offset", &self.original.offset)
             .field("length", &self.original.length)
-            .field("response_index", &self.response_index)
             .field("buffer length", &self.buffer.len())
             .field("overlapped", &format_args!("{:p}", &self.overlapped))
             .finish_non_exhaustive()
@@ -55,7 +38,7 @@ impl ActivePhysicalReadRequest {
     ///
     /// Panics if the masked offset slices do not fit within `u32`, which should
     /// never happen on supported target pointer widths.
-    pub fn new(request: PhysicalReadRequest, response_index: usize) -> Self {
+    pub(super) fn new(request: PhysicalReadRequest) -> Self {
         let overlapped = {
             let mut overlapped = OVERLAPPED::default();
             let offset = request.offset.get::<byte>();
@@ -86,7 +69,6 @@ impl ActivePhysicalReadRequest {
         Self {
             overlapped,
             buffer: vec![0; request.length.get::<byte>()],
-            response_index,
             original: request,
         }
     }
@@ -95,50 +77,55 @@ impl ActivePhysicalReadRequest {
     ///
     /// # Errors
     ///
-    /// Returns an eyre error if `ReadFile` fails to queue the request for
-    /// reasons other than `ERROR_IO_PENDING`.
-    pub fn send(self, file_handle: HANDLE) -> eyre::Result<()> {
-        let mut boxed = Box::new(self);
+    /// Returns an error if the buffer exceeds Win32's byte-count limit or
+    /// `ReadFile` rejects the request for a reason other than `ERROR_IO_PENDING`.
+    pub(super) fn send(self, file_handle: HANDLE) -> eyre::Result<()> {
+        // The projected ReadFile API unwraps its usize-to-u32 conversion.
+        u32::try_from(self.buffer.len())
+            .wrap_err("Physical read buffer exceeds Win32's u32 byte-count limit")?;
+        let request_ptr = Box::into_raw(Box::new(self));
 
-        // We pass a pointer to the embedded OVERLAPPED. Because
-        // `overlapped` is the first field of a repr(C) struct, this
-        // pointer is also the address of the parent ReadRequest.
-        // On completion, IOCP will give us back this same pointer
-        // so we can recover the Box<ReadRequest>.
-        let overlapped_ptr: *mut OVERLAPPED = &raw mut boxed.overlapped;
-        // SAFETY: The buffer pointer and OVERLAPPED structure remain valid for
-        // the duration of the ReadFile call because `boxed` owns both.
+        // SAFETY: both pointers project disjoint fields of the live raw allocation.
+        // No Box or reference to the entire request is recreated while I/O is pending.
+        // The allocation and buffer stay alive until rejection or dequeued completion.
         match unsafe {
-            ReadFile(
-                file_handle,
-                Some(&mut *boxed.buffer),
-                None,
-                Some(overlapped_ptr),
-            )
+            let overlapped_ptr = &raw mut (*request_ptr).overlapped;
+            let buffer = (&mut (*request_ptr).buffer).as_mut_slice();
+            ReadFile(file_handle, Some(buffer), None, Some(overlapped_ptr))
         } {
             Ok(()) => {}
             Err(e) => {
                 if e.code() != ERROR_IO_PENDING.into() {
+                    // SAFETY: the OS rejected submission, so it retains neither pointer
+                    // and no completion can reclaim this allocation.
+                    let boxed = unsafe { Box::from_raw(request_ptr) };
                     bail!("ReadFile failed to queue request {boxed:?}: {e:?}");
                 }
             }
         }
 
-        // Leak the Box so the allocation outlives the async I/O.
-        // We reconstitute it with Box::from_raw when the completion
-        // is dequeued, ensuring exactly-once free and no leaks.
-        let _ = Box::into_raw(boxed);
+        // Accepted requests are owned by the completion path; do not access request_ptr again.
         Ok(())
     }
 
     /// Waits for the next completion from `completion_port` and returns the
-    /// associated read payload along with the response index.
+    /// original request and complete read payload.
     ///
     /// # Errors
     ///
-    /// Returns an error if IOCP fails, or if a completion with a null
-    /// overlapped pointer appears (which violates the request invariants).
-    pub fn receive(completion_port: HANDLE) -> eyre::Result<(PhysicalReadResultEntry, usize)> {
+    /// Returns an error if IOCP fails, the completion is short, or a completion
+    /// has a null overlapped pointer (which violates the request invariants).
+    ///
+    /// # Safety
+    ///
+    /// The port must remain open and contain only completions for requests accepted
+    /// by `Self::send`, with their original `OVERLAPPED` pointers. The corresponding
+    /// `send` call must have returned before receiving its completion. Foreign or
+    /// posted packets are forbidden. Each allocation must be reclaimed exactly once,
+    /// through its completion, and remain untouched by Rust code until then.
+    pub(super) unsafe fn receive(
+        completion_port: HANDLE,
+    ) -> eyre::Result<(PhysicalReadRequest, Vec<u8>)> {
         let mut bytes_transferred: u32 = 0;
         let mut completion_key: usize = 0;
         let mut lp_overlapped: *mut OVERLAPPED = null_mut();
@@ -154,53 +141,92 @@ impl ActivePhysicalReadRequest {
                 u32::MAX,
             )
         };
-        match res {
-            Ok(()) => {
-                if lp_overlapped.is_null() {
-                    bail!("IOCP returned success but OVERLAPPED ptr was null");
-                }
-                // Recover original allocation using container_of pattern: lp_overlapped points to the first
-                // field (overlapped) so casting back to the parent type is sound under our invariants.
-                let req_ptr = lp_overlapped.cast::<ActivePhysicalReadRequest>();
-                // SAFETY: `req_ptr` came from a boxed request whose OVERLAPPED
-                // field we previously leaked via `Box::into_raw`.
-                let boxed_req = unsafe { Box::from_raw(req_ptr) };
-                trace!(?boxed_req, bytes_transferred, "Completed IOCP read",);
-                let mut data = boxed_req.buffer;
-                let copy_len =
-                    (bytes_transferred as usize).min(boxed_req.original.length.get::<byte>());
-                if copy_len < data.len() {
-                    data.truncate(copy_len);
-                }
-                Ok((
-                    PhysicalReadResultEntry {
-                        request: boxed_req.original,
-                        data,
-                    },
-                    boxed_req.response_index,
-                ))
-            }
-            Err(e) => {
-                if lp_overlapped.is_null() {
-                    Err(eyre::eyre!("GetQueuedCompletionStatus failed: {e:?}"))
-                } else {
-                    // Same recovery path on error: take ownership back
-                    // and allow the allocation to be freed when dropped.
-                    let req_ptr = lp_overlapped.cast::<ActivePhysicalReadRequest>();
-                    // SAFETY: Same as above, the pointer originates from `Box::into_raw`.
-                    let boxed_req = unsafe { Box::from_raw(req_ptr) };
-                    Err(eyre::eyre!("I/O operation failed for {boxed_req:?}: {e:?}"))
-                }
-            }
+        if lp_overlapped.is_null() {
+            res.wrap_err("GetQueuedCompletionStatus failed without dequeuing a completion")?;
+            bail!("IOCP returned success but OVERLAPPED ptr was null");
         }
+        // SAFETY: the caller guarantees this is an unreclaimed allocation from send.
+        // repr(C) and the first-field layout recover its original pointer. The operation
+        // has completed, so neither the OS nor another receiver may use the allocation.
+        let boxed_req = unsafe { Box::from_raw(lp_overlapped.cast::<Self>()) };
+        res.wrap_err_with(|| format!("I/O operation failed for {boxed_req:?}"))?;
+        trace!(?boxed_req, bytes_transferred, "Completed IOCP read",);
+        let expected_len = boxed_req.original.length.get::<byte>();
+        eyre::ensure!(
+            usize::try_from(bytes_transferred)? == expected_len
+                && boxed_req.buffer.len() == expected_len,
+            "Short physical read: expected {expected_len} bytes, received {bytes_transferred}"
+        );
+        Ok((boxed_req.original, boxed_req.buffer))
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::windows_utils::string::EasyPCWSTR;
     use std::ptr::from_mut;
     use uom::si::usize::Information;
+    use windows::Win32::Storage::FileSystem::CreateFileW;
+    use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+    use windows::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+    use windows::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+    use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+    use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
+    use windows::Win32::System::IO::CreateIoCompletionPort;
+    use windows::core::Owned;
+
+    #[test]
+    fn rejected_and_short_reads_leave_the_port_usable() -> eyre::Result<()> {
+        let source = tempfile::NamedTempFile::new()?;
+        source.as_file().set_len(512)?;
+        let path = source.path().easy_pcwstr()?;
+        // SAFETY: the path is valid and the returned file handle is immediately owned.
+        let file_handle = unsafe {
+            Owned::new(CreateFileW(
+                &path,
+                FILE_GENERIC_READ.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                None,
+            )?)
+        };
+        // SAFETY: the file is valid and the returned completion port is immediately owned.
+        let completion_port =
+            unsafe { Owned::new(CreateIoCompletionPort(*file_handle, None, 0, 0)?) };
+
+        let request =
+            PhysicalReadRequest::new(Information::new::<byte>(0), Information::new::<byte>(512));
+        let error = ActivePhysicalReadRequest::new(request)
+            .send(HANDLE::default())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("ReadFile failed to queue request")
+        );
+
+        ActivePhysicalReadRequest::new(PhysicalReadRequest::new(
+            Information::new::<byte>(0),
+            Information::new::<byte>(1024),
+        ))
+        .send(*file_handle)?;
+        // SAFETY: this live port contains only our one submitted request's completion.
+        let error = unsafe { ActivePhysicalReadRequest::receive(*completion_port) }.unwrap_err();
+        assert!(error.to_string().contains("Short physical read"));
+
+        ActivePhysicalReadRequest::new(request).send(*file_handle)?;
+        // SAFETY: the prior request was reclaimed; only this request can complete here.
+        let (completed_request, data) =
+            unsafe { ActivePhysicalReadRequest::receive(*completion_port) }?;
+        assert_eq!(completed_request, request);
+        assert_eq!(data, [0; 512]);
+        Ok(())
+    }
 
     // Invariant check: `overlapped` must be the first field.
     // This ensures `&mut req.overlapped as *mut _` equals
@@ -211,7 +237,6 @@ mod test {
         let mut dummy = Box::new(ActivePhysicalReadRequest {
             overlapped: OVERLAPPED::default(),
             buffer: Vec::new(),
-            response_index: 0,
             original: PhysicalReadRequest::new(
                 Information::new::<byte>(0),
                 Information::new::<byte>(0),

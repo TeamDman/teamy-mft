@@ -55,7 +55,9 @@ impl<'a> FileNameCollection<'a> {
     /// # fn demo() -> eyre::Result<()> {
     /// // Load an MFT file and collect all filename (x30) attributes
     /// let cancel = teamy_mft::cancellation::CancellationToken::new();
-    /// let mft = MftFile::from_path(std::path::Path::new("C:\\path\\to\\cached.mft"), &cancel)?;
+    /// let mft = cancel.with_scope(|scope| {
+    ///     MftFile::from_path(std::path::Path::new("C:\\path\\to\\cached.mft"), &scope)
+    /// })?;
     /// let collection = fast_entry::collect_filenames(&mft);
     /// for filename in collection.filenames_for_entry(5) {
     ///     println!("Entry 5 filename: {:?}", filename);
@@ -235,7 +237,9 @@ pub fn for_each_filename<'a, F: FnMut(FileNameRef<'a>)>(
 /// use teamy_mft::mft::{fast_entry, mft_file::MftFile};
 /// # fn demo() -> eyre::Result<()> {
 /// let cancel = teamy_mft::cancellation::CancellationToken::new();
-/// let mft = MftFile::from_path(std::path::Path::new("C:\\path\\to\\cached.mft"), &cancel)?;
+/// let mft = cancel.with_scope(|scope| {
+///     MftFile::from_path(std::path::Path::new("C:\\path\\to\\cached.mft"), &scope)
+/// })?;
 /// let collection = fast_entry::collect_filenames(&mft);
 /// // Access all filenames for entry ID 5
 /// for filename in collection.filenames_for_entry(5) {

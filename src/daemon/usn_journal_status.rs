@@ -1,6 +1,8 @@
+use crate::domain::DriveLetter;
+
 #[derive(Debug, Clone, PartialEq, Eq, vox::facet::Facet)]
 pub struct UsnJournalStatus {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub active: bool,
     pub journal_id: Option<u64>,
     pub first_usn: Option<u64>,

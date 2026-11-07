@@ -1,5 +1,7 @@
+use crate::domain::DriveLetter;
 use crate::machine::config::SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::query::Pathlike;
+use crate::search_index::SearchIndexFlags;
 use crate::search_index::format::SEARCH_INDEX_HEADER_LEN;
 use crate::search_index::format::SEARCH_INDEX_MAGIC;
 use crate::search_index::format::SEARCH_INDEX_VERSION;
@@ -15,6 +17,8 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::info_span;
+use uom::si::information::byte;
+use uom::si::usize::Information;
 use zerotrie::ZeroTriePerfectHash;
 
 const SEARCH_INDEX_BODY_PREFIX_LEN: usize = 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4;
@@ -193,7 +197,7 @@ impl<'a> SearchIndexBytes<'a> {
     /// # Errors
     ///
     /// Returns an error if the bytes are too short to contain a full header or
-    /// if the header magic does not match the expected search index magic.
+    /// if the header magic, flags or drive letter is invalid.
     pub fn header(&self) -> eyre::Result<SearchIndexHeader> {
         if self.bytes.len() < SEARCH_INDEX_HEADER_LEN {
             bail!(
@@ -209,17 +213,22 @@ impl<'a> SearchIndexBytes<'a> {
 
         let mut cursor = SEARCH_INDEX_MAGIC.len();
         let version = read_u16(self.bytes, &mut cursor);
-        let flags = read_u16(self.bytes, &mut cursor);
-        let drive_letter = self.bytes[cursor];
+        let flags = SearchIndexFlags::try_from(read_u16(self.bytes, &mut cursor))
+            .wrap_err("Invalid search index header flags")?;
+        let drive_letter = DriveLetter::try_from(self.bytes[cursor])
+            .wrap_err("Invalid search index header drive letter")?;
         cursor += 1;
-        let source_mft_len_bytes = read_u64(self.bytes, &mut cursor);
+        let source_mft_len = Information::new::<byte>(
+            usize::try_from(read_u64(self.bytes, &mut cursor))
+                .wrap_err("Search index source MFT length exceeds addressable size")?,
+        );
         let node_count = read_u64(self.bytes, &mut cursor);
 
         Ok(SearchIndexHeader {
             version,
             flags,
             drive_letter,
-            source_mft_len_bytes,
+            source_mft_len,
             node_count,
         })
     }
@@ -931,6 +940,18 @@ impl SearchIndexBytesMut {
     /// Returns an error if the provided header version is unsupported or any row
     /// cannot be buffered for later serialization.
     pub fn from_rows(header: SearchIndexHeader, rows: &[SearchIndexPathRow]) -> eyre::Result<Self> {
+        Self::from_owned_rows(header, rows.to_vec())
+    }
+
+    /// Accept already-owned rows without cloning every path into a second buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported index version.
+    pub fn from_owned_rows(
+        header: SearchIndexHeader,
+        rows: Vec<SearchIndexPathRow>,
+    ) -> eyre::Result<Self> {
         if header.version != SEARCH_INDEX_VERSION {
             bail!(
                 "Cannot build search index bytes with unsupported version {} (expected {})",
@@ -939,9 +960,7 @@ impl SearchIndexBytesMut {
             );
         }
 
-        let mut bytes = Self::new(header);
-        bytes.extend_rows(rows.iter())?;
-        Ok(bytes)
+        Ok(Self { header, rows })
     }
 
     #[must_use]
@@ -1226,7 +1245,7 @@ fn serialize_search_index_tables(
         .wrap_err("Too many trigram posting segment ids to encode")?;
 
     let mut bytes = Vec::with_capacity(SEARCH_INDEX_HEADER_LEN + row_count * 16);
-    header.extend_vec(&mut bytes);
+    header.extend_vec(&mut bytes)?;
     bytes.extend_from_slice(&segment_count.to_le_bytes());
     bytes.extend_from_slice(&extension_count.to_le_bytes());
     bytes.extend_from_slice(&trigram_count.to_le_bytes());
@@ -1674,12 +1693,77 @@ mod tests {
     use super::ParsedSearchIndex;
     use super::SearchIndexBytes;
     use super::SearchIndexBytesMut;
+    use crate::domain::DriveLetter;
+    use crate::search_index::SearchIndexFlags;
     use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use eyre::ContextCompat;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     const VIRTUAL_SNAPSHOT_TEST_PATH: &str = "Q:\\__TEAMY_MFT_VIRTUAL_SNAPSHOT_FIXTURE__\\a.txt";
+
+    #[test]
+    fn typed_header_preserves_the_binary_layout_and_full_length_range() -> eyre::Result<()> {
+        for source_bytes in [0, 123, usize::MAX] {
+            let header =
+                SearchIndexHeader::new(DriveLetter::Z, Information::new::<byte>(source_bytes), 45);
+            let mut bytes = Vec::new();
+            header.write_to(&mut bytes)?;
+
+            assert_eq!(bytes.len(), 29);
+            assert_eq!(&bytes[..8], b"TMFTIDX\0");
+            assert_eq!(&bytes[8..13], &[7, 0, 0, 0, b'Z']);
+            assert_eq!(&bytes[13..21], &u64::try_from(source_bytes)?.to_le_bytes());
+            assert_eq!(&bytes[21..29], &45_u64.to_le_bytes());
+            let mut extended = Vec::new();
+            header.extend_vec(&mut extended)?;
+            assert_eq!(extended, bytes);
+            let parsed = SearchIndexBytes::new(&bytes).header()?;
+            assert_eq!(parsed, header);
+            assert_eq!(parsed.flags, SearchIndexFlags::Reserved);
+            assert_eq!(parsed.source_mft_len.get::<byte>(), source_bytes);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn header_parsing_rejects_nonzero_reserved_flags() -> eyre::Result<()> {
+        let mut bytes = Vec::new();
+        SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(0), 0)
+            .write_to(&mut bytes)?;
+
+        for invalid in [1_u16, 2, 0x8000, u16::MAX] {
+            bytes[10..12].copy_from_slice(&invalid.to_le_bytes());
+            let error = SearchIndexBytes::new(&bytes).header().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Invalid search index header flags")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn header_parsing_rejects_invalid_drive_bytes() -> eyre::Result<()> {
+        let mut bytes = Vec::new();
+        SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 0)
+            .write_to(&mut bytes)?;
+        let drive_offset = crate::search_index::format::SEARCH_INDEX_MAGIC.len() + 4;
+
+        for invalid in [0, b'0', b'?', b':', 0x80, 0xff] {
+            bytes[drive_offset] = invalid;
+            let error = SearchIndexBytes::new(&bytes).header().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Invalid search index header drive letter")
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn segment_dictionary_and_parent_chain_roundtrip() -> eyre::Result<()> {
@@ -1695,7 +1779,11 @@ mod tests {
         ];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1749,7 +1837,11 @@ mod tests {
         }];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 7, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(7),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1797,7 +1889,11 @@ mod tests {
         ];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1848,7 +1944,11 @@ mod tests {
         ];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1894,7 +1994,11 @@ mod tests {
         ];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;
@@ -1928,7 +2032,11 @@ mod tests {
         ];
 
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             &rows,
         )?
         .into_inner()?;

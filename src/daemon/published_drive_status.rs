@@ -1,6 +1,8 @@
+use crate::domain::DriveLetter;
+
 #[derive(Debug, Clone, PartialEq, Eq, vox::facet::Facet)]
 pub struct PublishedDriveStatus {
-    pub drive_letter: char,
+    pub drive_letter: DriveLetter,
     pub mft_path: String,
     pub mft_modified_at_unix_ms: Option<u64>,
     pub base_index_path: String,

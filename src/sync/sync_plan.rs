@@ -1,3 +1,4 @@
+use crate::domain::ParallelismLimit;
 use crate::sync::IfExistsOutputBehaviour;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -7,8 +8,8 @@ use figue::{self as args};
 #[derive(Facet, PartialEq, Debug, Arbitrary, Clone)]
 pub struct SyncPlan {
     /// Maximum concurrent index builds and shared indexing CPU workers (0: Rayon automatic). Drive reads remain parallel.
-    #[facet(args::named, default = 1)]
-    pub parallel: usize,
+    #[facet(args::named, default)]
+    pub parallel: ParallelismLimit,
 
     /// Drive letter pattern to match drives to sync (e.g., "*", "C", "CD", "C,D"). Compatibility alias: `--drive`.
     #[facet(args::named, args::alias = "drive", default)]
@@ -30,7 +31,7 @@ pub struct SyncPlan {
 impl Default for SyncPlan {
     fn default() -> Self {
         Self {
-            parallel: 1,
+            parallel: ParallelismLimit::default(),
             drive_letter_pattern: DriveLetterPattern::default(),
             if_exists: IfExistsOutputBehaviour::default(),
             recursive: false,

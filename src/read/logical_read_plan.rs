@@ -26,11 +26,8 @@ impl LogicalReadPlan {
 
     #[must_use]
     #[instrument(skip_all)]
-    pub fn as_physical_read_plan(&self) -> PhysicalReadPlan {
-        self.segments
-            .iter()
-            .filter_map(LogicalFileSegment::as_physical_read_request)
-            .collect()
+    pub fn as_physical_read_plan(&self) -> PhysicalReadPlan<'_> {
+        PhysicalReadPlan::from(self)
     }
 
     #[must_use]

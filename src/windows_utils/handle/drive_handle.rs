@@ -1,3 +1,4 @@
+use crate::domain::DriveLetter;
 use crate::windows_utils::string::EasyPCWSTR;
 use eyre::Context;
 use windows::Win32::Foundation::HANDLE;
@@ -10,7 +11,7 @@ use windows::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
 use windows::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows::core::Owned;
 
-pub fn get_read_only_drive_handle(drive_letter: char) -> eyre::Result<Owned<HANDLE>> {
+pub fn get_read_only_drive_handle(drive_letter: DriveLetter) -> eyre::Result<Owned<HANDLE>> {
     let drive_path = format!("\\\\.\\{drive_letter}:");
     let raw_handle = unsafe {
         CreateFileW(
@@ -26,7 +27,7 @@ pub fn get_read_only_drive_handle(drive_letter: char) -> eyre::Result<Owned<HAND
         )
     };
     let handle = raw_handle.wrap_err(format!(
-        "Failed to open volume handle for {drive_letter:?}, did you forget to elevate?"
+        "Failed to open volume handle for {drive_letter}, did you forget to elevate?"
     ))?;
 
     Ok(unsafe { Owned::new(handle) })

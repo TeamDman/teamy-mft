@@ -18,6 +18,7 @@ use tracing::debug;
 use tracing::debug_span;
 use tracing::instrument;
 use uom::si::information::byte;
+use uom::si::information::mebibyte;
 use uom::si::usize::Information;
 
 pub struct MftFile {
@@ -157,27 +158,25 @@ impl MftFile {
                 file_size_bytes = mft_file_size.get::<byte>()
             )
             .entered();
-            let mut buf = Vec::with_capacity(mft_file_size.get::<byte>());
-            let mut reader = std::io::BufReader::new(&file);
-            let mut chunk = vec![0u8; 1024 * 1024];
-            loop {
+            let mut buf = Vec::new();
+            buf.try_reserve_exact(mft_file_size.get::<byte>())
+                .wrap_err("Cannot reserve cached MFT buffer")?;
+            buf.resize(mft_file_size.get::<byte>(), 0);
+            let mut reader = file;
+            for chunk in buf.chunks_mut(Information::new::<mebibyte>(1).get::<byte>()) {
                 if cancel.is_cancelled() {
                     bail!("Cancelled reading {}", mft_file_path.display());
                 }
-                let read = reader
-                    .read(&mut chunk)
+                reader
+                    .read_exact(chunk)
                     .wrap_err_with(|| format!("Failed to read {}", mft_file_path.display()))?;
-                if read == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..read]);
             }
-            BytesMut::from(Bytes::from(buf))
+            buf
         };
 
         let rtn = {
             let _span = debug_span!("construct_from_bytes").entered();
-            MftFile::from_bytes(bytes)?
+            MftFile::from_vec(bytes)?
         };
 
         // Log summary
@@ -237,5 +236,17 @@ impl MftFile {
     #[inline]
     pub fn iter_records(&self) -> MftRecordIter {
         MftRecordIter::new(self.bytes.clone(), self.record_size())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uom::si::information::byte;
+    use uom::si::information::mebibyte;
+    use uom::si::usize::Information;
+
+    #[test]
+    fn expected_size() {
+        assert_eq!(Information::new::<mebibyte>(1).get::<byte>(), 1024 * 1024);
     }
 }

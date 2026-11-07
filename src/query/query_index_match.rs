@@ -270,16 +270,23 @@ fn union_sorted_ids(left: &[u32], right: &[u32]) -> Vec<u32> {
 mod tests {
     use super::MatchingRowIndices;
     use super::matching_row_indices_for_rule;
+    use crate::domain::DriveLetter;
     use crate::query::QueryRule;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::ParsedSearchIndex;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use uom::si::information::byte;
+    use uom::si::usize::Information;
 
     fn parse_index(rows: &[SearchIndexPathRow]) -> eyre::Result<ParsedSearchIndex<'static>> {
         let bytes = SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new('C', 123, rows.len() as u64),
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                rows.len() as u64,
+            ),
             rows,
         )?
         .into_inner()?;

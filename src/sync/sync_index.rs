@@ -14,6 +14,7 @@ use tracing::debug;
 use tracing::info;
 use tracing::info_span;
 use uom::si::information::byte;
+use uom::si::usize::Information;
 
 #[derive(Debug)]
 pub struct SyncIndex;
@@ -112,7 +113,7 @@ impl SyncIndex {
                 output_path = %info.index_output_path.display(),
             )
             .entered();
-            Self::write_index_output(info, mft_file, &rows)
+            Self::write_index_output(info, mft_file.size(), rows)
         };
         info!(
             drive_letter = %info.drive_letter,
@@ -129,7 +130,10 @@ impl SyncIndex {
         })
     }
 
-    fn invoke_for_mft_path(info: &DriveSyncInfo, cancel: &CancellationScope) -> eyre::Result<()> {
+    pub(crate) fn invoke_for_mft_path(
+        info: &DriveSyncInfo,
+        cancel: &CancellationScope,
+    ) -> eyre::Result<()> {
         if !info.mft_output_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",
@@ -138,6 +142,8 @@ impl SyncIndex {
             );
         }
 
+        let start = Instant::now();
+        info!(drive_letter = %info.drive_letter, mft_path = %info.mft_output_path.display(), "Building search index from cached snapshot");
         let mft_file = {
             let _span = info_span!(
                 "load_cached_mft_for_index",
@@ -154,17 +160,25 @@ impl SyncIndex {
             })?
         };
 
-        Self::invoke_for_mft_file(info, &mft_file)
+        let mft_size = mft_file.size();
+        let rows = Self::build_rows_for_mft_file(info, &mft_file)?;
+        drop(mft_file);
+        eyre::ensure!(
+            !cancel.is_cancelled(),
+            "Cancelled before publishing index for drive {}",
+            info.drive_letter
+        );
+        let result = Self::write_index_output(info, mft_size, rows);
+        info!(drive_letter = %info.drive_letter, elapsed_ms = start.elapsed().as_millis(), "Cached search index build finished");
+        result
     }
 
     fn build_rows_for_mft_file(
         info: &DriveSyncInfo,
         mft_file: &MftFile,
     ) -> eyre::Result<Vec<SearchIndexPathRow>> {
-        let drive_name = info.drive_letter.to_string();
-
-        let files =
-            convert_mft_file_to_path_collection(&drive_name, mft_file).wrap_err_with(|| {
+        let files = convert_mft_file_to_path_collection(info.drive_letter, mft_file)
+            .wrap_err_with(|| {
                 format!(
                     "Failed processing MFT data for drive {} from {}",
                     info.drive_letter,
@@ -185,15 +199,11 @@ impl SyncIndex {
 
     fn write_index_output(
         info: &DriveSyncInfo,
-        mft_file: &MftFile,
-        rows: &[SearchIndexPathRow],
+        mft_size: Information,
+        rows: Vec<SearchIndexPathRow>,
     ) -> eyre::Result<()> {
-        SearchIndexBytesMut::from_rows(
-            SearchIndexHeader::new(
-                info.drive_letter,
-                mft_file.size().get::<byte>() as u64,
-                rows.len() as u64,
-            ),
+        SearchIndexBytesMut::from_owned_rows(
+            SearchIndexHeader::new(info.drive_letter, mft_size, rows.len() as u64),
             rows,
         )?
         .write_to_path(&info.index_output_path)

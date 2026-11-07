@@ -2,10 +2,6 @@ use uom::ConstZero;
 use uom::si::usize::Information;
 
 /// A request to read from a physical device at a specific physical offset.
-///
-/// Includes the logical offset to place the data in the final output.
-///
-/// This is used for reading the MFT, which is a file that consists of chunks spread across the disk which we want to reassemble into a single file.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PhysicalReadRequest {
     /// Where on the disk this chunk is located
