@@ -141,9 +141,11 @@ mod tests {
     use super::SyncMft;
     use crate::cancellation::CancellationToken;
     use crate::mft::PhysicalMftReadRequest;
+    use crate::read::byte_range::ByteRange;
     use crate::read::logical_read_plan::LogicalFileSegment;
     use crate::read::logical_read_plan::LogicalFileSegmentKind;
     use crate::read::logical_read_plan::LogicalReadPlan;
+    use crate::read::physical_read_plan::PhysicalReadPlan;
     use crate::windows_utils::string::EasyPCWSTR;
     use std::io::Write;
     use std::os::windows::fs::OpenOptionsExt;
@@ -187,8 +189,10 @@ mod tests {
         std::fs::write(&output, b"previous snapshot")?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: Information::new::<byte>(0),
-                length: Information::new::<byte>(1024),
+                logical_range: ByteRange::from_offset_and_length(
+                    Information::new::<byte>(0),
+                    Information::new::<byte>(1024),
+                )?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: Information::new::<byte>(0),
                 },
@@ -202,7 +206,7 @@ mod tests {
                 &scope,
                 |writer| {
                     PhysicalMftReadRequest::write_plan(
-                        logical.as_physical_read_plan(),
+                        PhysicalReadPlan::try_from(&logical)?,
                         &source,
                         writer,
                     )

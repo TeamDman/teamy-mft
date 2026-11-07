@@ -25,16 +25,24 @@ pub struct PhysicalReadResultEntry<'plan> {
 }
 
 impl<'plan> PhysicalReadResultEntry<'plan> {
-    pub(super) fn new(
+    /// # Errors
+    /// Returns an error if the buffer length differs from the requested range length.
+    pub(super) fn try_new(
         logical_plan: &'plan LogicalReadPlan,
         request: PhysicalReadRequest,
         data: Vec<u8>,
-    ) -> Self {
-        Self {
+    ) -> eyre::Result<Self> {
+        let expected_len = request.range().length().get::<byte>();
+        eyre::ensure!(
+            data.len() == expected_len,
+            "Physical read buffer length mismatch: expected {expected_len} bytes, received {}",
+            data.len()
+        );
+        Ok(Self {
             logical_plan,
             request,
             data,
-        }
+        })
     }
 
     #[must_use]
@@ -51,37 +59,34 @@ impl<'plan> PhysicalReadResultEntry<'plan> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the read is short, a logical offset cannot be represented,
+    /// Returns an error if a physical or logical range overflows,
     /// or the writer cannot seek or accept all bytes.
     pub fn write(&self, writer: &mut (impl Seek + Write)) -> eyre::Result<usize> {
-        eyre::ensure!(
-            self.data.len() == self.request.length.get::<byte>(),
-            "Short physical read"
-        );
+        let this_physical_request_range = self.request.range();
         let mut written = 0;
-        for segment in self.logical_plan.physical_segments() {
-            let Some(source) = segment.as_physical_read_request() else {
+        for logical_segment in &self.logical_plan.segments {
+            let Some(logical_segment_physical_range) = logical_segment.physical_range()? else {
                 continue;
             };
-            let start = std::cmp::max(source.offset, self.request.offset);
-            let end = std::cmp::min(source.physical_end(), self.request.physical_end());
-            if start >= end {
+            let Some(physical_coverage) =
+                logical_segment_physical_range.intersection(&this_physical_request_range)
+            else {
                 continue;
-            }
-            let offset = (start - self.request.offset).get::<byte>();
-            let length = (end - start).get::<byte>();
-            let source_relative_offset = (start - source.offset).get::<byte>();
-            let logical_offset = segment
-                .logical_offset
-                .get::<byte>()
-                .checked_add(source_relative_offset)
-                .wrap_err("Logical write offset overflows")?;
-            logical_offset
-                .checked_add(length)
-                .wrap_err("Logical write range overflows")?;
-            writer.seek(SeekFrom::Start(u64::try_from(logical_offset)?))?;
-            writer.write_all(&self.data[offset..offset + length])?;
-            written += length;
+            };
+            let this_result_data_range =
+                physical_coverage.relative_to(&this_physical_request_range)?;
+            let logical_destination_range = physical_coverage
+                .relative_to(&logical_segment_physical_range)?
+                .shifted_by(logical_segment.logical_range.start())?;
+            let data = self
+                .data
+                .get(this_result_data_range.byte_indices())
+                .wrap_err("Physical read intersection exceeds its completed buffer")?;
+            writer.seek(SeekFrom::Start(u64::try_from(
+                logical_destination_range.start().get::<byte>(),
+            )?))?;
+            writer.write_all(data)?;
+            written += data.len();
         }
         Ok(written)
     }
@@ -90,6 +95,7 @@ impl<'plan> PhysicalReadResultEntry<'plan> {
 #[cfg(test)]
 mod tests {
     use super::PhysicalReadResultEntry;
+    use crate::read::byte_range::ByteRange;
     use crate::read::logical_read_plan::LogicalFileSegment;
     use crate::read::logical_read_plan::LogicalFileSegmentKind;
     use crate::read::logical_read_plan::LogicalReadPlan;
@@ -111,27 +117,23 @@ mod tests {
         let logical = LogicalReadPlan {
             segments: [
                 LogicalFileSegment {
-                    logical_offset: info(0),
-                    length: info(256),
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(256))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(768),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(256),
-                    length: info(256),
+                    logical_range: ByteRange::from_offset_and_length(info(256), info(256))?,
                     kind: LogicalFileSegmentKind::Sparse,
                 },
                 LogicalFileSegment {
-                    logical_offset: info(512),
-                    length: info(512),
+                    logical_range: ByteRange::from_offset_and_length(info(512), info(512))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(512),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(1024),
-                    length: info(256),
+                    logical_range: ByteRange::from_offset_and_length(info(1024), info(256))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(768),
                     },
@@ -143,11 +145,11 @@ mod tests {
         let data = (0..512)
             .map(|index| u8::try_from(index % 251).unwrap())
             .collect::<Vec<_>>();
-        let entry = PhysicalReadResultEntry::new(
+        let entry = PhysicalReadResultEntry::try_new(
             &logical,
-            PhysicalReadRequest::new(info(512), info(512)),
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(512), info(512))?),
             data.clone(),
-        );
+        )?;
         let mut output = Cursor::new(vec![0xff; 1280]);
         let mut expected = vec![0xff; 1280];
         expected[..256].copy_from_slice(&data[256..512]);
@@ -156,7 +158,7 @@ mod tests {
 
         assert_eq!(entry.write(&mut output)?, 1024);
         assert_eq!(output.into_inner(), expected);
-        assert_eq!(entry.request().offset, info(512));
+        assert_eq!(entry.request().range().start(), info(512));
         assert_eq!(entry.data(), data.as_slice());
         Ok(())
     }
@@ -165,8 +167,7 @@ mod tests {
     fn aligned_read_writes_only_the_overlapping_part_of_a_segment() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(200),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(200))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(400),
                 },
@@ -174,11 +175,11 @@ mod tests {
             .into_iter()
             .collect(),
         };
-        let entry = PhysicalReadResultEntry::new(
+        let entry = PhysicalReadResultEntry::try_new(
             &logical,
-            PhysicalReadRequest::new(info(0), info(512)),
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(0), info(512))?),
             vec![7; 512],
-        );
+        )?;
         let mut output = Cursor::new(vec![0xff; 200]);
 
         assert_eq!(entry.write(&mut output)?, 112);
@@ -191,8 +192,7 @@ mod tests {
     fn regression_high_physical_offset_maps_to_small_logical_offset() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(512),
-                length: info(1),
+                logical_range: ByteRange::from_offset_and_length(info(512), info(1))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(usize::MAX - 511),
                 },
@@ -200,11 +200,14 @@ mod tests {
             .into_iter()
             .collect(),
         };
-        let entry = PhysicalReadResultEntry::new(
+        let entry = PhysicalReadResultEntry::try_new(
             &logical,
-            PhysicalReadRequest::new(info(usize::MAX - 511), info(1)),
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(
+                info(usize::MAX - 511),
+                info(1),
+            )?),
             vec![7],
-        );
+        )?;
         let mut output = Cursor::new(vec![0xff; 513]);
 
         assert_eq!(entry.write(&mut output)?, 1);
@@ -215,56 +218,63 @@ mod tests {
     }
 
     #[test]
-    fn regression_logical_write_overflow_preserves_output() {
+    fn constructor_rejects_mismatched_buffer_lengths() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
-            segments: [LogicalFileSegment {
-                logical_offset: info(usize::MAX - 1),
-                length: info(2),
-                kind: LogicalFileSegmentKind::Physical {
-                    physical_offset: info(0),
-                },
-            }]
-            .into_iter()
-            .collect(),
+            segments: Default::default(),
         };
-        let entry = PhysicalReadResultEntry::new(
-            &logical,
-            PhysicalReadRequest::new(info(0), info(2)),
-            vec![7; 2],
-        );
-        let mut output = Cursor::new(b"unchanged".to_vec());
-        output.set_position(3);
-
-        let error = entry.write(&mut output).unwrap_err();
-        assert_eq!(error.to_string(), "Logical write range overflows");
-        assert_eq!(output.position(), 3);
-        assert_eq!(output.into_inner(), b"unchanged");
+        let request =
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(0), info(512))?);
+        for length in [0, 511, 513] {
+            let error =
+                PhysicalReadResultEntry::try_new(&logical, request, vec![7; length]).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!(
+                    "Physical read buffer length mismatch: expected 512 bytes, received {length}"
+                )
+            );
+        }
+        Ok(())
     }
 
     #[test]
-    fn short_read_is_rejected_before_output_is_changed() {
+    fn disjoint_and_touching_segments_leave_output_unchanged() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
-            segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(512),
-                kind: LogicalFileSegmentKind::Physical {
-                    physical_offset: info(0),
+            segments: [
+                LogicalFileSegment {
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(100))?,
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: info(100),
+                    },
                 },
-            }]
+                LogicalFileSegment {
+                    logical_range: ByteRange::from_offset_and_length(info(100), info(100))?,
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: info(300),
+                    },
+                },
+                LogicalFileSegment {
+                    logical_range: ByteRange::from_offset_and_length(info(200), info(100))?,
+                    kind: LogicalFileSegmentKind::Physical {
+                        physical_offset: info(500),
+                    },
+                },
+            ]
             .into_iter()
             .collect(),
         };
-        let entry = PhysicalReadResultEntry::new(
+        let entry = PhysicalReadResultEntry::try_new(
             &logical,
-            PhysicalReadRequest::new(info(0), info(512)),
-            vec![7; 511],
-        );
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(200), info(100))?),
+            vec![7; 100],
+        )?;
         let mut output = Cursor::new(b"unchanged".to_vec());
         output.set_position(3);
 
-        assert!(entry.write(&mut output).is_err());
+        assert_eq!(entry.write(&mut output)?, 0);
         assert_eq!(output.position(), 3);
         assert_eq!(output.into_inner(), b"unchanged");
+        Ok(())
     }
 
     struct FailingWriter {
@@ -292,11 +302,10 @@ mod tests {
     }
 
     #[test]
-    fn writer_errors_preserve_the_original_error_kind() {
+    fn writer_errors_preserve_the_original_error_kind() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(512),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(512))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -304,11 +313,11 @@ mod tests {
             .into_iter()
             .collect(),
         };
-        let entry = PhysicalReadResultEntry::new(
+        let entry = PhysicalReadResultEntry::try_new(
             &logical,
-            PhysicalReadRequest::new(info(0), info(512)),
+            PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(0), info(512))?),
             vec![7; 512],
-        );
+        )?;
         for (fail_seek, expected) in [
             (true, io::ErrorKind::InvalidInput),
             (false, io::ErrorKind::BrokenPipe),
@@ -316,5 +325,6 @@ mod tests {
             let error = entry.write(&mut FailingWriter { fail_seek }).unwrap_err();
             assert_eq!(error.downcast_ref::<io::Error>().unwrap().kind(), expected);
         }
+        Ok(())
     }
 }

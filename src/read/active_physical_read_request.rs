@@ -23,8 +23,8 @@ pub(super) struct ActivePhysicalReadRequest {
 impl std::fmt::Debug for ActivePhysicalReadRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(type_name::<ActivePhysicalReadRequest>())
-            .field("file_offset", &self.original.offset)
-            .field("length", &self.original.length)
+            .field("file_offset", &self.original.range().start())
+            .field("length", &self.original.range().length())
             .field("buffer length", &self.buffer.len())
             .field("overlapped", &format_args!("{:p}", &self.overlapped))
             .finish_non_exhaustive()
@@ -39,21 +39,23 @@ impl ActivePhysicalReadRequest {
     /// Panics if the masked offset slices do not fit within `u32`, which should
     /// never happen on supported target pointer widths.
     pub(super) fn new(request: PhysicalReadRequest) -> Self {
+        let range = request.range();
         let overlapped = {
             let mut overlapped = OVERLAPPED::default();
-            let offset = request.offset.get::<byte>();
-            if request.offset.get::<byte>() & 0x1FF != 0 {
+            let offset = range.start().get::<byte>();
+            let length = range.length().get::<byte>();
+            if offset & 0x1FF != 0 {
                 warn!(
-                    ?request.offset,
-                    ?request.length,
+                    offset_bytes = offset,
+                    length_bytes = length,
                     "Constructing {} - not 512-byte aligned",
                     type_name::<PhysicalReadRequest>(),
                 );
             }
-            if request.length.get::<byte>() & 0x1FF != 0 {
+            if length & 0x1FF != 0 {
                 warn!(
-                    ?request.offset,
-                    ?request.length,
+                    offset_bytes = offset,
+                    length_bytes = length,
                     "Constructing {} - not 512-byte multiple",
                     type_name::<PhysicalReadRequest>(),
                 );
@@ -68,7 +70,7 @@ impl ActivePhysicalReadRequest {
         };
         Self {
             overlapped,
-            buffer: vec![0; request.length.get::<byte>()],
+            buffer: vec![0; range.length().get::<byte>()],
             original: request,
         }
     }
@@ -151,7 +153,7 @@ impl ActivePhysicalReadRequest {
         let boxed_req = unsafe { Box::from_raw(lp_overlapped.cast::<Self>()) };
         res.wrap_err_with(|| format!("I/O operation failed for {boxed_req:?}"))?;
         trace!(?boxed_req, bytes_transferred, "Completed IOCP read",);
-        let expected_len = boxed_req.original.length.get::<byte>();
+        let expected_len = boxed_req.original.range().length().get::<byte>();
         eyre::ensure!(
             usize::try_from(bytes_transferred)? == expected_len
                 && boxed_req.buffer.len() == expected_len,
@@ -164,6 +166,7 @@ impl ActivePhysicalReadRequest {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::read::byte_range::ByteRange;
     use crate::windows_utils::string::EasyPCWSTR;
     use std::ptr::from_mut;
     use uom::si::usize::Information;
@@ -199,8 +202,10 @@ mod test {
         let completion_port =
             unsafe { Owned::new(CreateIoCompletionPort(*file_handle, None, 0, 0)?) };
 
-        let request =
-            PhysicalReadRequest::new(Information::new::<byte>(0), Information::new::<byte>(512));
+        let request = PhysicalReadRequest::from(ByteRange::from_offset_and_length(
+            Information::new::<byte>(0),
+            Information::new::<byte>(512),
+        )?);
         let error = ActivePhysicalReadRequest::new(request)
             .send(HANDLE::default())
             .unwrap_err();
@@ -210,9 +215,11 @@ mod test {
                 .contains("ReadFile failed to queue request")
         );
 
-        ActivePhysicalReadRequest::new(PhysicalReadRequest::new(
-            Information::new::<byte>(0),
-            Information::new::<byte>(1024),
+        ActivePhysicalReadRequest::new(PhysicalReadRequest::from(
+            ByteRange::from_offset_and_length(
+                Information::new::<byte>(0),
+                Information::new::<byte>(1024),
+            )?,
         ))
         .send(*file_handle)?;
         // SAFETY: this live port contains only our one submitted request's completion.
@@ -233,14 +240,14 @@ mod test {
     // `&mut req as *mut _` so that we can cast the lp_overlapped pointer
     // back to *mut ReadRequest on completion safely.
     #[test]
-    fn assert_pointer_alignment() {
+    fn assert_pointer_alignment() -> eyre::Result<()> {
         let mut dummy = Box::new(ActivePhysicalReadRequest {
             overlapped: OVERLAPPED::default(),
             buffer: Vec::new(),
-            original: PhysicalReadRequest::new(
+            original: PhysicalReadRequest::from(ByteRange::from_offset_and_length(
                 Information::new::<byte>(0),
                 Information::new::<byte>(0),
-            ),
+            )?),
         });
         let req_ref = dummy.as_mut();
         let parent_ptr = from_mut(req_ref) as usize;
@@ -250,5 +257,6 @@ mod test {
             "ReadRequest.overlapped must be the first field (offset 0)"
         );
         drop(dummy);
+        Ok(())
     }
 }

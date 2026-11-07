@@ -5,6 +5,7 @@ use crate::mft::mft_record_number::MftRecordNumber;
 use crate::mft::mft_record_size::MftRecordSize;
 use crate::ntfs::ntfs_boot_sector::NtfsBootSector;
 use crate::ntfs::ntfs_drive_handle::NtfsDriveHandle;
+use crate::read::logical_read_plan::LogicalFileSegmentKind;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use crate::read::physical_read_plan::PhysicalReadPlan;
 use crate::read::physical_reader::PhysicalReader;
@@ -50,8 +51,8 @@ impl PhysicalMftReadRequest {
                 chunk_size_bytes = chunk_size.get::<byte>(),
             )
             .entered();
-            let mut physical = logical.as_physical_read_plan();
-            physical.align_512();
+            let mut physical = PhysicalReadPlan::try_from(&logical)?;
+            physical.align_512()?;
             physical.chunked(chunk_size)
         };
         let count = physical.len();
@@ -113,7 +114,7 @@ impl PhysicalMftReadRequest {
             )
             .entered();
             decoded_runs
-                .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()))
+                .into_logical_read_plan(Information::new::<byte>(boot_sector.bytes_per_cluster()))?
         };
         if logical_read_plan.segments.is_empty() {
             eyre::bail!("Logical plan empty (no runs)");
@@ -140,11 +141,11 @@ impl PhysicalMftReadRequest {
         let zeros = [0; 64 * 1024];
         let mut logical_end = 0usize;
         for segment in &logical.segments {
-            let start = segment.logical_offset.get::<byte>();
-            let end = start + segment.length.get::<byte>();
+            let start = segment.logical_range.start().get::<byte>();
+            let end = segment.logical_range.end().get::<byte>();
             let zero_end = match segment.kind {
-                crate::read::logical_read_plan::LogicalFileSegmentKind::Sparse => end,
-                crate::read::logical_read_plan::LogicalFileSegmentKind::Physical { .. } => start,
+                LogicalFileSegmentKind::Sparse => end,
+                LogicalFileSegmentKind::Physical { .. } => start,
             };
             if logical_end < zero_end {
                 writer.seek(SeekFrom::Start(u64::try_from(logical_end)?))?;
@@ -163,8 +164,14 @@ impl PhysicalMftReadRequest {
             Ok(())
         })?;
         let expected = logical
-            .physical_segments()
-            .map(|segment| segment.length.get::<byte>())
+            .segments
+            .iter()
+            .map(|segment| match segment.kind {
+                LogicalFileSegmentKind::Physical { .. } => {
+                    segment.logical_range.length().get::<byte>()
+                }
+                LogicalFileSegmentKind::Sparse => 0,
+            })
             .sum::<usize>();
         eyre::ensure!(
             written == expected,
@@ -195,8 +202,8 @@ mod streaming_tests {
     use super::*;
     use crate::mft::mft_file::MftFile;
     use crate::read::CancellableSeekWriter;
+    use crate::read::byte_range::ByteRange;
     use crate::read::logical_read_plan::LogicalFileSegment;
-    use crate::read::logical_read_plan::LogicalFileSegmentKind;
     use std::io::Cursor;
     use std::io::Read;
     use teamy_cancellation::CancellationErrorExt;
@@ -217,42 +224,37 @@ mod streaming_tests {
         let logical = LogicalReadPlan {
             segments: [
                 LogicalFileSegment {
-                    logical_offset: info(0),
-                    length: info(768),
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(768))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(2048),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(768),
-                    length: info(512),
+                    logical_range: ByteRange::from_offset_and_length(info(768), info(512))?,
                     kind: LogicalFileSegmentKind::Sparse,
                 },
                 LogicalFileSegment {
-                    logical_offset: info(1280),
-                    length: info(1024),
+                    logical_range: ByteRange::from_offset_and_length(info(1280), info(1024))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(0),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(2304),
-                    length: info(512),
+                    logical_range: ByteRange::from_offset_and_length(info(2304), info(512))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(2048),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(3328),
-                    length: info(256),
+                    logical_range: ByteRange::from_offset_and_length(info(3328), info(256))?,
                     kind: LogicalFileSegmentKind::Sparse,
                 },
             ]
             .into_iter()
             .collect(),
         };
-        let mut physical = logical.as_physical_read_plan();
-        physical.align_512();
+        let mut physical = PhysicalReadPlan::try_from(&logical)?;
+        physical.align_512()?;
         let physical = physical.chunked(Information::new::<mebibyte>(1));
         let mut expected = vec![0; 3584];
         expected[..768].copy_from_slice(&source[2048..2816]);
@@ -280,15 +282,13 @@ mod streaming_tests {
         let logical = LogicalReadPlan {
             segments: [
                 LogicalFileSegment {
-                    logical_offset: info(0),
-                    length: info(500),
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(500))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(100),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(500),
-                    length: info(500),
+                    logical_range: ByteRange::from_offset_and_length(info(500), info(500))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(600),
                     },
@@ -297,8 +297,8 @@ mod streaming_tests {
             .into_iter()
             .collect(),
         };
-        let mut physical = logical.as_physical_read_plan();
-        physical.align_512();
+        let mut physical = PhysicalReadPlan::try_from(&logical)?;
+        physical.align_512()?;
         let physical = physical.chunked(Information::new::<mebibyte>(1));
         let mut output = Cursor::new(vec![0xff; 1000]);
 
@@ -315,15 +315,18 @@ mod streaming_tests {
         let path = source.path().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(128),
-                length: info(256),
+                logical_range: ByteRange::from_offset_and_length(info(128), info(256))?,
                 kind: LogicalFileSegmentKind::Sparse,
             }]
             .into_iter()
             .collect(),
         };
         let mut output = Cursor::new(vec![0xff; 384]);
-        PhysicalMftReadRequest::write_plan(logical.as_physical_read_plan(), &path, &mut output)?;
+        PhysicalMftReadRequest::write_plan(
+            PhysicalReadPlan::try_from(&logical)?,
+            &path,
+            &mut output,
+        )?;
         assert_eq!(output.into_inner(), vec![0; 384]);
         Ok(())
     }
@@ -335,8 +338,7 @@ mod streaming_tests {
         let path = source.path().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(1024),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(1024))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -345,9 +347,12 @@ mod streaming_tests {
             .collect(),
         };
         let mut output = Cursor::new(Vec::new());
-        let error =
-            PhysicalMftReadRequest::write_plan(logical.as_physical_read_plan(), &path, &mut output)
-                .unwrap_err();
+        let error = PhysicalMftReadRequest::write_plan(
+            PhysicalReadPlan::try_from(&logical)?,
+            &path,
+            &mut output,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("Short physical read"));
         assert!(output.into_inner().is_empty());
         Ok(())
@@ -360,8 +365,7 @@ mod streaming_tests {
         let path = source.path().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(512),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(512))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -376,7 +380,7 @@ mod streaming_tests {
                 token.request_cancel("cancel through writer");
                 let mut writer = CancellableSeekWriter::new(&mut output, &scope);
                 PhysicalMftReadRequest::write_plan(
-                    logical.as_physical_read_plan(),
+                    PhysicalReadPlan::try_from(&logical)?,
                     &path,
                     &mut writer,
                 )
@@ -405,15 +409,16 @@ mod streaming_tests {
         let logical = LogicalReadPlan {
             segments: [
                 LogicalFileSegment {
-                    logical_offset: info(0),
-                    length: info(split),
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(split))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(raw.len() - split),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(split),
-                    length: info(raw.len() - split),
+                    logical_range: ByteRange::from_offset_and_length(
+                        info(split),
+                        info(raw.len() - split),
+                    )?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(0),
                     },
@@ -422,7 +427,7 @@ mod streaming_tests {
             .into_iter()
             .collect(),
         };
-        let physical = logical.as_physical_read_plan().chunked(info(512));
+        let physical = PhysicalReadPlan::try_from(&logical)?.chunked(info(512));
         let mut output = Cursor::new(Vec::new());
         PhysicalMftReadRequest::write_plan(physical, &path, &mut output)?;
         assert_eq!(output.get_ref(), &raw);
@@ -459,15 +464,13 @@ mod streaming_tests {
         let logical = LogicalReadPlan {
             segments: [
                 LogicalFileSegment {
-                    logical_offset: info(0),
-                    length: info(512),
+                    logical_range: ByteRange::from_offset_and_length(info(0), info(512))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(512),
                     },
                 },
                 LogicalFileSegment {
-                    logical_offset: info(512),
-                    length: info(512),
+                    logical_range: ByteRange::from_offset_and_length(info(512), info(512))?,
                     kind: LogicalFileSegmentKind::Physical {
                         physical_offset: info(0),
                     },
@@ -477,12 +480,11 @@ mod streaming_tests {
             .collect(),
         };
         let mut entries = Vec::new();
-        PhysicalReader::try_new(&path, logical.as_physical_read_plan(), 2.into())?.read_each(
-            |entry| {
+        PhysicalReader::try_new(&path, PhysicalReadPlan::try_from(&logical)?, 2.into())?
+            .read_each(|entry| {
                 entries.push(entry);
                 Ok(())
-            },
-        )?;
+            })?;
         assert_eq!(entries.len(), 2);
 
         let mut output = Cursor::new(vec![0xff; 1024]);
@@ -502,8 +504,7 @@ mod streaming_tests {
         let path = source.path().to_string_lossy().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(4 * 1024 * 1024),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(4 * 1024 * 1024))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -511,7 +512,7 @@ mod streaming_tests {
             .into_iter()
             .collect(),
         };
-        let plan = logical.as_physical_read_plan().chunked(info(65536));
+        let plan = PhysicalReadPlan::try_from(&logical)?.chunked(info(65536));
         let mut count = 0;
         let mut bytes = 0;
         PhysicalReader::try_new(&path, plan.clone(), 2.into())?.read_each(|entry| {
@@ -551,8 +552,7 @@ mod streaming_tests {
         let path = source.path().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(expected.len()),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(expected.len()))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -560,7 +560,7 @@ mod streaming_tests {
             .into_iter()
             .collect(),
         };
-        let plan = logical.as_physical_read_plan().chunked(info(512));
+        let plan = PhysicalReadPlan::try_from(&logical)?.chunked(info(512));
         let reader = PhysicalReader::try_new(&path, plan.clone(), 3.into())?;
 
         // The first callback runs after three reads are submitted and only one is received.
@@ -600,8 +600,7 @@ mod streaming_tests {
         let path = source.path().to_string_lossy().easy_pcwstr()?;
         let logical = LogicalReadPlan {
             segments: [LogicalFileSegment {
-                logical_offset: info(0),
-                length: info(64 * 1024 * 1024),
+                logical_range: ByteRange::from_offset_and_length(info(0), info(64 * 1024 * 1024))?,
                 kind: LogicalFileSegmentKind::Physical {
                     physical_offset: info(0),
                 },
@@ -609,7 +608,7 @@ mod streaming_tests {
             .into_iter()
             .collect(),
         };
-        let plan = logical.as_physical_read_plan().chunked(info(1024 * 1024));
+        let plan = PhysicalReadPlan::try_from(&logical)?.chunked(info(1024 * 1024));
         let start = std::time::Instant::now();
         let mut count = 0;
         let mut total = 0;

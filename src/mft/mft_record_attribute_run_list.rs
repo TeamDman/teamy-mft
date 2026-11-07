@@ -1,8 +1,10 @@
 use crate::mft::mft_record::MftRecord;
+use crate::read::byte_range::ByteRange;
 use crate::read::logical_read_plan::LogicalFileSegment;
 use crate::read::logical_read_plan::LogicalFileSegmentKind;
 use crate::read::logical_read_plan::LogicalReadPlan;
 use eyre::Context;
+use eyre::ContextCompat;
 use eyre::Result;
 use eyre::eyre;
 use std::collections::BTreeSet;
@@ -10,6 +12,7 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use tracing::instrument;
 use uom::ConstZero;
+use uom::si::information::byte;
 use uom::si::usize::Information;
 
 /// Generic decoded run list entry.
@@ -167,36 +170,53 @@ impl MftRecordAttributeRunListOwned {
     ///
     /// Future opportunity: produce a sparse output file
     /// by marking destination with `FSCTL_SET_SPARSE` and eliding zero allocation explicitly.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero cluster size or unrepresentable byte ranges.
     #[instrument(skip_all)]
-    pub fn into_logical_read_plan(&self, cluster_size: Information) -> LogicalReadPlan {
+    pub fn into_logical_read_plan(&self, cluster_size: Information) -> Result<LogicalReadPlan> {
+        let cluster_size_bytes = cluster_size.get::<byte>();
+        eyre::ensure!(cluster_size_bytes != 0, "Cluster size must be positive");
         let mut segments = BTreeSet::default();
         let mut logical_offset = Information::ZERO;
-        if cluster_size == Information::ZERO {
-            return LogicalReadPlan { segments };
-        }
         for run in self.iter() {
-            let length_clusters = run.length_clusters;
-            if length_clusters == 0 {
+            if run.length_clusters == 0 {
                 continue;
             }
-            #[expect(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
-            let length = length_clusters as usize * cluster_size;
+            let length_clusters = usize::try_from(run.length_clusters)
+                .wrap_err("Run cluster count exceeds addressable size")?;
+            let length_bytes = length_clusters
+                .checked_mul(cluster_size_bytes)
+                .wrap_err("Run length in bytes overflows")?;
+            let length = Information::new::<byte>(length_bytes);
+            let logical_range = ByteRange::from_offset_and_length(logical_offset, length)
+                .wrap_err("Logical MFT run range overflows")?;
             let kind = match run.local_cluster_network_start_entry_index {
-                Some(lcn) => LogicalFileSegmentKind::Physical {
-                    #[expect(clippy::cast_possible_truncation, reason = "safe on 64-bit systems")]
-                    physical_offset: lcn as usize * cluster_size,
-                },
+                Some(lcn) => {
+                    let lcn = usize::try_from(lcn)
+                        .wrap_err("Run cluster offset exceeds addressable size")?;
+                    let physical_offset_bytes = lcn
+                        .checked_mul(cluster_size_bytes)
+                        .wrap_err("Run physical byte offset overflows")?;
+                    let physical_range = ByteRange::from_offset_and_length(
+                        Information::new::<byte>(physical_offset_bytes),
+                        length,
+                    )
+                    .wrap_err("Physical MFT run range overflows")?;
+                    LogicalFileSegmentKind::Physical {
+                        physical_offset: physical_range.start(),
+                    }
+                }
                 None => LogicalFileSegmentKind::Sparse,
             };
+            logical_offset = logical_range.end();
             segments.insert(LogicalFileSegment {
-                logical_offset,
-                length,
+                logical_range,
                 kind,
             });
-            logical_offset += length;
         }
-        LogicalReadPlan { segments }
+        Ok(LogicalReadPlan { segments })
     }
 }
 impl Deref for MftRecordAttributeRunListOwned {
@@ -252,16 +272,113 @@ mod tests {
     }
 
     #[test]
-    fn physical_sparse_and_backward_runs_decode() {
+    fn physical_sparse_and_backward_runs_map_to_logical_ranges() -> Result<()> {
         let runs = MftRecordAttributeRunList::new(&[0x11, 2, 10, 0x01, 3, 0x11, 1, 0xfe, 0])
-            .decode_all()
-            .unwrap();
+            .decode_all()?;
         assert_eq!(
             runs.iter()
                 .map(|run| run.local_cluster_network_start_entry_index)
                 .collect::<Vec<_>>(),
             [Some(10), None, Some(8)]
         );
+        let plan = MftRecordAttributeRunListOwned { inner: runs }
+            .into_logical_read_plan(Information::new::<byte>(512))?;
+        assert_eq!(
+            plan.segments
+                .iter()
+                .map(|segment| segment.logical_range.byte_indices())
+                .collect::<Vec<_>>(),
+            [0..1024, 1024..2560, 2560..3072]
+        );
+        let physical_ranges = plan
+            .segments
+            .iter()
+            .map(|segment| Ok(segment.physical_range()?.map(|range| range.byte_indices())))
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(physical_ranges, [Some(5120..6144), None, Some(4096..4608)]);
+        assert_eq!(plan.total_logical_size(), Information::new::<byte>(3072));
+        Ok(())
+    }
+
+    #[test]
+    fn logical_plan_rejects_zero_cluster_size() {
+        let error = MftRecordAttributeRunListOwned::default()
+            .into_logical_read_plan(Information::ZERO)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Cluster size must be positive");
+    }
+
+    #[test]
+    fn zero_length_runs_do_not_advance_logical_offset() -> Result<()> {
+        let runs = MftRecordAttributeRunListOwned {
+            inner: vec![
+                MftRecordAttributeRunListEntry {
+                    length_clusters: 0,
+                    local_cluster_network_start_entry_index: Some(u64::MAX),
+                },
+                MftRecordAttributeRunListEntry {
+                    length_clusters: 1,
+                    local_cluster_network_start_entry_index: Some(1),
+                },
+            ],
+        };
+        let plan = runs.into_logical_read_plan(Information::new::<byte>(512))?;
+        assert_eq!(plan.segments.len(), 1);
+        let segment = plan.segments.first().unwrap();
+        assert_eq!(segment.logical_range.byte_indices(), 0..512);
+        assert_eq!(segment.physical_range()?.unwrap().byte_indices(), 512..1024);
+        Ok(())
+    }
+
+    #[test]
+    fn logical_plan_rejects_overflowing_run_ranges() -> Result<()> {
+        let max_clusters = u64::try_from(usize::MAX)?;
+        for (runs, cluster_size, expected_error) in [
+            (
+                vec![MftRecordAttributeRunListEntry {
+                    length_clusters: max_clusters,
+                    local_cluster_network_start_entry_index: None,
+                }],
+                2,
+                "Run length in bytes overflows",
+            ),
+            (
+                vec![MftRecordAttributeRunListEntry {
+                    length_clusters: 1,
+                    local_cluster_network_start_entry_index: Some(max_clusters),
+                }],
+                2,
+                "Run physical byte offset overflows",
+            ),
+            (
+                vec![
+                    MftRecordAttributeRunListEntry {
+                        length_clusters: max_clusters,
+                        local_cluster_network_start_entry_index: None,
+                    },
+                    MftRecordAttributeRunListEntry {
+                        length_clusters: 1,
+                        local_cluster_network_start_entry_index: None,
+                    },
+                ],
+                1,
+                "Logical MFT run range overflows",
+            ),
+            (
+                vec![MftRecordAttributeRunListEntry {
+                    length_clusters: 2,
+                    local_cluster_network_start_entry_index: Some(max_clusters - 1),
+                }],
+                1,
+                "Physical MFT run range overflows",
+            ),
+        ] {
+            let error = MftRecordAttributeRunListOwned { inner: runs }
+                .into_logical_read_plan(Information::new::<byte>(cluster_size))
+                .unwrap_err();
+            assert_eq!(error.to_string(), expected_error);
+        }
+        Ok(())
     }
 
     #[test]

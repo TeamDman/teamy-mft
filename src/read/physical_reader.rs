@@ -133,11 +133,11 @@ impl<'plan> PhysicalReader<'plan> {
             let result = unsafe { ActivePhysicalReadRequest::receive(*self.iocp_handle) };
             self.in_flight -= 1;
             let (request, data) = result?;
-            consume(PhysicalReadResultEntry::new(
+            consume(PhysicalReadResultEntry::try_new(
                 self.logical_read_plan,
                 request,
                 data,
-            ))?;
+            )?)?;
         }
         trace!("All IOCP reads completed");
         Ok(())
@@ -167,6 +167,7 @@ mod tests {
     use super::PhysicalReader;
     use crate::domain::ParallelismLimit;
     use crate::read::logical_read_plan::LogicalReadPlan;
+    use crate::read::physical_read_plan::PhysicalReadPlan;
     use crate::windows_utils::string::EasyPCWSTR;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -235,7 +236,8 @@ mod tests {
             (ParallelismLimit::Automatic, 32),
             (ParallelismLimit::from(7usize), 7),
         ] {
-            let reader = PhysicalReader::try_new(&path, logical.as_physical_read_plan(), limit)?;
+            let reader =
+                PhysicalReader::try_new(&path, PhysicalReadPlan::try_from(&logical)?, limit)?;
             assert_eq!(reader.max_in_flight.get(), expected);
         }
         Ok(())
