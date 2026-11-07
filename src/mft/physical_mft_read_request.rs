@@ -12,9 +12,11 @@ use crate::read::physical_reader::PhysicalReader;
 use crate::windows_utils::handle::get_read_only_drive_handle;
 use crate::windows_utils::string::EasyPCWSTR;
 use eyre::WrapErr;
+use humansize::BINARY;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::io::Write;
+use teamy_uom_extensions::HumanInformationExt;
 use tracing::info;
 use tracing::info_span;
 use tracing::instrument;
@@ -56,9 +58,9 @@ impl PhysicalMftReadRequest {
             physical.chunked(chunk_size)
         };
         let count = physical.len();
-        let size = logical.total_logical_size().get::<byte>();
+        let size = logical.total_logical_size();
         Self::write_plan(physical, &volume_path, writer)?;
-        info!(drive = %self.drive_letter, physical_requests = count, logical_bytes = size, "Streamed MFT to writer");
+        info!(drive = %self.drive_letter, physical_requests = count, logical_size_bytes = size.get::<byte>(), logical_size_human = size.format_human(BINARY), "Streamed MFT to writer");
         Ok(())
     }
 
