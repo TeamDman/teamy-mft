@@ -1032,6 +1032,8 @@ mod child_file_inheritance_tests {
 
     #[test]
     fn inherited_parent_and_protected_parent_produce_native_child_policies() -> eyre::Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+
         let root = tempfile::tempdir()?;
         let sid = current_user_sid_string()?;
         set_test_dacl(
@@ -1052,7 +1054,6 @@ mod child_file_inheritance_tests {
                 )?;
             }
             let native = parent.join("native.bin");
-            use std::os::windows::fs::OpenOptionsExt;
             let _native = std::fs::OpenOptions::new()
                 .read(true)
                 .write(true)

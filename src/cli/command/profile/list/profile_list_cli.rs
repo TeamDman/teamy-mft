@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryFilterRules;
 use crate::windows_utils::storage::DriveLetterPattern;
@@ -19,7 +20,7 @@ impl ProfileListArgs {
     /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or discovered rule files cannot be parsed.
     pub fn invoke(self) -> eyre::Result<()> {
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let files =
             QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;

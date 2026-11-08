@@ -140,7 +140,7 @@ impl PhysicalMftReadRequest {
             logical_bytes = size,
         )
         .entered();
-        let zeros = [0; 64 * 1024];
+        let zeros = vec![0; 64 * 1024];
         let mut logical_end = 0usize;
         for segment in &logical.segments {
             let start = segment.logical_range.start().get::<byte>();
@@ -219,8 +219,8 @@ mod streaming_tests {
         let temp = tempfile::tempdir()?;
         let source_path = temp.path().join("source.bin");
         let source = (0..4096usize)
-            .map(|offset| (offset % 251) as u8)
-            .collect::<Vec<_>>();
+            .map(|offset| u8::try_from(offset % 251))
+            .collect::<Result<Vec<_>, _>>()?;
         std::fs::write(&source_path, &source)?;
         let path = source_path.easy_pcwstr()?;
         let logical = LogicalReadPlan {

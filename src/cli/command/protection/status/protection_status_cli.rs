@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use arbitrary::Arbitrary;
 use facet::Facet;
 
@@ -9,7 +10,7 @@ impl ProtectionStatusArgs {
     ///
     /// Returns an error if the machine config or cache ACL cannot be read.
     pub fn invoke(self) -> eyre::Result<()> {
-        let config = crate::machine::config::load_required_machine_config()?;
+        let config = MachineConfig::load()?;
         let status = crate::machine::security::query_path_protection_status(
             &config.sync_dir,
             &config.owner_sid,

@@ -79,7 +79,8 @@ mod tests {
         assert_eq!(status.drive_letters, [DriveLetter::C, DriveLetter::D]);
         for invalid in ["?", "1", "é", "CC"] {
             let json = format!(r#"{{"drive_letter":"{invalid}"}}"#);
-            assert!(facet_json::from_str::<UsnJournalRequest>(&json).is_err());
+            let _error = facet_json::from_str::<UsnJournalRequest>(&json)
+                .expect_err("invalid drive letters must be rejected over JSON");
         }
         Ok(())
     }
@@ -122,13 +123,13 @@ mod tests {
         }
         async fn query_usn_journal(
             &self,
-            request: UsnJournalRequest,
+            usn_journal_request: UsnJournalRequest,
             logs: vox::Tx<DaemonLogWireEvent>,
         ) -> Result<UsnJournalStatus, MachineError> {
-            assert_eq!(request.drive_letter, DriveLetter::C);
+            assert_eq!(usn_journal_request.drive_letter, DriveLetter::C);
             logs.close(Vec::new().into()).await.unwrap();
             Ok(UsnJournalStatus {
-                drive_letter: request.drive_letter,
+                drive_letter: usn_journal_request.drive_letter,
                 active: true,
                 journal_id: Some(123),
                 first_usn: Some(1),

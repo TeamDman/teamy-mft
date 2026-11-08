@@ -1,6 +1,9 @@
 # Disallow specific standard library methods across the crate.
 # See: https://doc.rust-lang.org/nightly/clippy/lint_configuration.html#disallowed_methods
 
+# Keep common three-part std paths; longer paths should use imports in opted-in modules.
+absolute-paths-max-segments = 3
+
 disallowed-methods = [
   { path = "std::env::set_var", reason = "Avoid setting global environment variables; use helpers (tempfile/TempEnv) or design APIs that accept configuration explicitly" },
   { path = "std::process::Command::new", reason = "Do not shell out for Windows service management; use windows-rs SCM APIs instead." },

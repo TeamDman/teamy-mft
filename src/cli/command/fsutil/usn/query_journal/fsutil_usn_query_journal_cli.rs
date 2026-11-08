@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::windows_utils::elevation::ensure_elevated;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -58,7 +59,7 @@ impl FsutilUsnQueryJournalArgs {
         let filter = self.filter;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         if self.daemon {
-            let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+            let config = MachineConfig::load_for_client()?;
             crate::machine::ipc::ensure_daemon_ready(&config)?;
             for drive_letter in drive_letters {
                 let (logs_tx, logs_rx) =

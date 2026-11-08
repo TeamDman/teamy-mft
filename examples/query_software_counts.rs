@@ -47,7 +47,7 @@ fn main() -> eyre::Result<()> {
                 },
             )?;
             cancel.bail_if_cancelled()?;
-            println!("{:<20} {}", segment, count);
+            println!("{segment:<20} {count}");
         }
 
         Ok(())

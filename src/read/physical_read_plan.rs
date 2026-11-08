@@ -173,7 +173,7 @@ mod test {
         };
         let mut physical = PhysicalReadPlan::try_from(&logical)?;
         physical.merge_contiguous_reads()?;
-        assert!(std::ptr::eq(physical.logical_plan(), &logical));
+        assert!(std::ptr::eq(physical.logical_plan(), &raw const logical));
         assert_eq!(physical.len(), 1, "Expected contiguous reads to merge");
         let reqs: Vec<_> = physical.clone().into_iter().collect();
         assert_eq!(reqs[0].range().start().get::<byte>(), 0usize);
@@ -261,14 +261,14 @@ mod test {
         let physical = PhysicalReadPlan::try_from(&logical)?;
         for chunk_size in [0, 300, usize::MAX] {
             let unsplit = physical.chunked(Information::new::<byte>(chunk_size));
-            assert!(std::ptr::eq(unsplit.logical_plan(), &logical));
+            assert!(std::ptr::eq(unsplit.logical_plan(), &raw const logical));
             assert_eq!(
                 unsplit.into_iter().collect::<Vec<_>>(),
                 physical.clone().into_iter().collect::<Vec<_>>()
             );
         }
         let chunked = physical.chunked(Information::new::<byte>(128));
-        assert!(std::ptr::eq(chunked.logical_plan(), &logical));
+        assert!(std::ptr::eq(chunked.logical_plan(), &raw const logical));
         // 300 bytes in 128-byte chunks => 128,128,44 (3 chunks)
         assert_eq!(chunked.len(), 3usize, "Chunking should split into 3 parts");
         let reqs: Vec<_> = chunked.clone().into_iter().collect();
@@ -339,7 +339,7 @@ mod test {
         let physical = PhysicalReadPlan::try_from(&logical)?;
         assert!(physical.is_empty());
         assert_eq!(physical.total_size().get::<byte>(), 0);
-        assert!(std::ptr::eq(physical.logical_plan(), &logical));
+        assert!(std::ptr::eq(physical.logical_plan(), &raw const logical));
         Ok(())
     }
 
@@ -373,9 +373,9 @@ mod test {
         physical.align_512()?;
         assert_eq!(physical.len(), 1);
         assert_eq!(physical.total_size().get::<byte>(), 1536);
-        assert!(std::ptr::eq(physical.logical_plan(), &logical));
+        assert!(std::ptr::eq(physical.logical_plan(), &raw const logical));
         let chunked = physical.chunked(Information::new::<byte>(512));
-        assert!(std::ptr::eq(chunked.logical_plan(), &logical));
+        assert!(std::ptr::eq(chunked.logical_plan(), &raw const logical));
         assert_eq!(chunked.len(), 3);
         for (index, request) in chunked.into_iter().enumerate() {
             assert_eq!(request.range().start().get::<byte>(), index * 512);
@@ -399,7 +399,7 @@ mod test {
             .into_iter()
             .collect(),
         };
-        assert!(PhysicalReadPlan::try_from(&logical).is_err());
+        let _error = PhysicalReadPlan::try_from(&logical).unwrap_err();
         Ok(())
     }
 
@@ -420,7 +420,7 @@ mod test {
         };
         let mut physical = PhysicalReadPlan::try_from(&logical)?;
         let requests = physical.clone().into_iter().collect::<Vec<_>>();
-        assert!(physical.align_512().is_err());
+        let _error = physical.align_512().unwrap_err();
         assert_eq!(physical.into_iter().collect::<Vec<_>>(), requests);
         Ok(())
     }

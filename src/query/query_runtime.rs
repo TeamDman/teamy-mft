@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::machine::ipc::CorrelationId;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -140,7 +141,7 @@ impl DaemonQueryVisitor {
         cancellation_scope: &CancellationScope,
     ) -> eyre::Result<Self> {
         let request_cancel = cancellation_scope.clone();
-        let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+        let config = MachineConfig::load_for_client()?;
         crate::machine::ipc::ensure_daemon_ready(&config)?;
         let (rows_tx, rows_rx) = vox::channel::<QueryResultRow>();
         let (logs_tx, logs_rx) = vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();

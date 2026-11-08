@@ -1,4 +1,4 @@
-use crate::machine::config::MachineConfig;
+use crate::machine::MachineConfig;
 use crate::machine::security::service_sddl;
 use crate::windows_utils::string::EasyPCWSTR;
 use eyre::WrapErr;

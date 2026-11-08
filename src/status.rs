@@ -1,5 +1,6 @@
 use crate::domain::DriveLetter;
-use crate::machine::config::published_drive_paths;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineConfig;
 use crate::windows_utils::storage::DriveLetterPattern;
 use std::path::Path;
 use std::path::PathBuf;
@@ -60,7 +61,7 @@ impl TeamyMftStatus {
     /// Returns an error if the machine cache is unavailable, drive letters cannot be resolved,
     /// or file metadata cannot be read.
     pub fn load(drive_letter_pattern: &DriveLetterPattern) -> eyre::Result<Self> {
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let drive_letters = drive_letter_pattern.into_drive_letters()?;
         Self::from_sync_dir_and_drive_letters(&sync_dir, drive_letters)
     }
@@ -75,7 +76,7 @@ impl TeamyMftStatus {
         let mut drives = drive_letters
             .into_iter()
             .map(|drive_letter| {
-                let paths = published_drive_paths(sync_dir, drive_letter);
+                let paths = DriveArtifactInfo::new(sync_dir, drive_letter);
                 DriveCacheStatus {
                     drive_letter,
                     mft_path: paths.mft_path,
@@ -234,7 +235,7 @@ mod tests {
         };
 
         let error = status
-            .assert_query_ready_not_older_than(Duration::from_secs(60), SystemTime::now())
+            .assert_query_ready_not_older_than(Duration::from_mins(1), SystemTime::now())
             .expect_err("missing search index should fail");
         assert!(
             error

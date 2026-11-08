@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::mft::mft_file::MftFile;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
@@ -48,7 +49,7 @@ impl ListPathsArgs {
         reason = "function processes MFT data in a single pass for performance"
     )]
     pub fn invoke(self, cancellation_scope: &CancellationScope) -> eyre::Result<()> {
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         // Resolve drive letters from pattern
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         // Build list of existing cached MFT files for matching drives

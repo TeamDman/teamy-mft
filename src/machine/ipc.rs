@@ -14,7 +14,7 @@ pub use crate::daemon::StatusRequest;
 pub use crate::daemon::StatusResponse;
 pub use crate::daemon::UsnJournalRequest;
 pub use crate::daemon::UsnJournalStatus;
-use crate::machine::config::MachineConfig;
+use crate::machine::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::query::QueryPlan;
 use crate::query::QueryResultRow;
@@ -242,13 +242,6 @@ Use the repo's .\\install.ps1 workflow to update the installed daemon binary.",
 
 /// # Errors
 ///
-/// Returns an error if the installed machine config exists but cannot be parsed.
-pub fn load_machine_daemon_client_config() -> eyre::Result<MachineConfig> {
-    crate::machine::config::load_machine_client_config()
-}
-
-/// # Errors
-///
 /// Returns an error if the daemon transport cannot be reached or the call fails outside
 /// the daemon's structured machine error contract.
 pub fn stream_logs(
@@ -426,11 +419,7 @@ mod tests {
     }
 
     fn mismatched_rpc_compat_version() -> u32 {
-        if crate::DAEMON_RPC_COMPAT_VERSION == 0 {
-            1
-        } else {
-            0
-        }
+        u32::from(crate::DAEMON_RPC_COMPAT_VERSION == 0)
     }
 
     #[test]

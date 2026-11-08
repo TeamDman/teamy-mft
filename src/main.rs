@@ -51,10 +51,14 @@ mod tests {
         };
         // Use Rust's Result reporting path, as returning from main would.
         let exit_code = handle_elevation_completion(result).report();
-        std::process::exit(if exit_code == ExitCode::SUCCESS { 0 } else { 1 });
+        std::process::exit(i32::from(exit_code != ExitCode::SUCCESS));
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "A child process isolates exit-code reporting; this does not manage Windows services."
+    )]
     fn entrypoint_reports_only_real_errors_and_preserves_exit_codes() {
         for (case, expected_code, expect_report) in [
             ("success", 0_u32, false),

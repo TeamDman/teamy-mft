@@ -1,4 +1,4 @@
-use crate::machine::config::load_machine_config;
+use crate::machine::MachineConfig;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use tracing::debug;
@@ -13,17 +13,20 @@ impl ServiceIsRunningArgs {
     ///
     /// This command exits with status 1 when the daemon is not running or cannot be queried.
     pub fn invoke(self) -> eyre::Result<()> {
-        let is_running = load_machine_config().ok().flatten().is_some_and(|config| {
-            let (logs_tx, logs_rx) =
-                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-            let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-            let result = crate::machine::ipc::ping(&config, logs_tx);
-            drop(log_drain);
-            if let Err(error) = &result {
-                debug!(error = %error, "daemon ping failed while checking running state");
-            }
-            result.is_ok()
-        });
+        let is_running = MachineConfig::load_if_present()
+            .ok()
+            .flatten()
+            .is_some_and(|config| {
+                let (logs_tx, logs_rx) =
+                    vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
+                let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
+                let result = crate::machine::ipc::ping(&config, logs_tx);
+                drop(log_drain);
+                if let Err(error) = &result {
+                    debug!(error = %error, "daemon ping failed while checking running state");
+                }
+                result.is_ok()
+            });
         if is_running {
             info!(is_running, "daemon status");
         } else {

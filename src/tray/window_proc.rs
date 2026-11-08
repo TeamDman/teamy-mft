@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::tray::current_tray_icon;
 use crate::tray::set_tray_icon;
 use crate::windows_utils::console::console_attach;
@@ -172,13 +173,20 @@ impl TrayWindowState {
             return;
         }
 
-        let Some(config) = load_config_for_tray_logs() else {
-            let _ = writeln!(
-                std::io::stdout(),
-                "teamy-mft daemon is not installed yet. Run `teamy-mft install` first."
-            );
-            let _ = std::io::stdout().flush();
-            return;
+        let config = match MachineConfig::load_if_present() {
+            Ok(Some(config)) => config,
+            Ok(None) => {
+                let _ = writeln!(
+                    std::io::stdout(),
+                    "teamy-mft daemon is not installed yet. Run `teamy-mft install` first."
+                );
+                let _ = std::io::stdout().flush();
+                return;
+            }
+            Err(error) => {
+                eprintln!("Failed loading machine daemon config: {error}");
+                return;
+            }
         };
 
         let (cancel_tx, cancel_rx) = vox::channel::<u8>();
@@ -301,16 +309,6 @@ impl TrayWindowState {
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
             }
             _ => {}
-        }
-    }
-}
-
-fn load_config_for_tray_logs() -> Option<crate::machine::config::MachineConfig> {
-    match crate::machine::config::load_machine_config() {
-        Ok(config) => config,
-        Err(error) => {
-            eprintln!("Failed loading machine daemon config: {error}");
-            None
         }
     }
 }

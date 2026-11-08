@@ -92,8 +92,13 @@ impl ActivePhysicalReadRequest {
         // The allocation and buffer stay alive until rejection or dequeued completion.
         match unsafe {
             let overlapped_ptr = &raw mut (*request_ptr).overlapped;
-            let buffer = (&mut (*request_ptr).buffer).as_mut_slice();
-            ReadFile(file_handle, Some(buffer), None, Some(overlapped_ptr))
+            let buffer = &mut (*request_ptr).buffer;
+            ReadFile(
+                file_handle,
+                Some(buffer.as_mut_slice()),
+                None,
+                Some(overlapped_ptr),
+            )
         } {
             Ok(()) => {}
             Err(e) => {

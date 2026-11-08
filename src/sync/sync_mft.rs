@@ -1,11 +1,9 @@
+use crate::machine::DriveArtifactInfo;
 use crate::mft::PhysicalMftReadRequest;
 use crate::read::CancellableSeekWriter;
-use crate::sync::DriveSyncInfo;
-use crate::sync::IfExistsOutputBehaviour;
 use crate::windows_utils::elevation::enable_backup_privileges;
 use crate::windows_utils::elevation::ensure_elevated;
 use eyre::Context;
-use eyre::bail;
 use futures::StreamExt as _;
 use futures::stream;
 use itertools::Itertools;
@@ -14,7 +12,6 @@ use std::io::Write;
 use std::path::Path;
 use teamy_cancellation::CancellationScope;
 use tokio_stream::Stream;
-use tracing::debug;
 use tracing::info;
 use tracing::info_span;
 
@@ -22,63 +19,47 @@ use tracing::info_span;
 pub struct SyncMft;
 
 impl SyncMft {
-    /// Validate the sync can proceed before any MFT reads begin.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `if_exists` is `Abort` and any MFT output already exists.
-    pub fn invoke_preflight(
-        drive_infos: Vec<DriveSyncInfo>,
-        if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<Vec<DriveSyncInfo>> {
-        let mut rtn = Vec::with_capacity(drive_infos.len());
-        for info in drive_infos {
-            let mft_exists = info.mft_output_path.exists();
-            match (mft_exists, if_exists) {
-                (false, _) | (true, IfExistsOutputBehaviour::Overwrite) => {
-                    rtn.push(info);
-                }
-                (true, IfExistsOutputBehaviour::Skip) => {
-                    debug!(
-                        drive = %info.drive_letter,
-                        path = %info.mft_output_path.display(),
-                        "Skipping existing MFT output"
-                    );
-                }
-                (true, IfExistsOutputBehaviour::Abort) => {
-                    bail!(
-                        "Aborting sync: {} already exists",
-                        info.mft_output_path.display()
-                    );
-                }
-            }
-        }
-        Ok(rtn)
-    }
-
     /// Sync MFT data from drives.
     ///
-    /// Does not call the preflight check.
+    /// The caller selects artifact records after preflight.
     ///
     /// # Errors
     ///
-    /// Returns an error if the sync directory cannot be retrieved, elevation fails,
-    /// or if reading/writing MFT data fails.
-    pub fn invoke(
-        drive_infos: Vec<DriveSyncInfo>,
+    /// Returns an error if elevation fails or if reading/writing MFT data fails.
+    pub fn invoke<'a>(
+        drive_infos: impl Iterator<Item = &'a DriveArtifactInfo> + Clone + 'a,
         console_pid: Option<u32>,
-        cancel: teamy_cancellation::CancellationScope,
-    ) -> eyre::Result<impl Stream<Item = eyre::Result<DriveSyncInfo>>> {
-        if !drive_infos.is_empty() {
+        cancel: CancellationScope,
+    ) -> eyre::Result<impl Stream<Item = eyre::Result<DriveArtifactInfo>> + 'a> {
+        let drive_count = drive_infos.clone().count();
+        if drive_count > 0 {
             ensure_elevated(console_pid)?;
             enable_backup_privileges().wrap_err("Failed to enable backup privileges")?;
         }
         info!(
             "Found {} drives to sync MFT files for: {}",
-            drive_infos.len(),
-            drive_infos.iter().map(|info| info.drive_letter).join(", ")
+            drive_count,
+            drive_infos.clone().map(|info| info.drive_letter).join(", ")
         );
-        Ok(read_physical_mft_stream_with_info(drive_infos, cancel))
+        Ok(stream::iter(drive_infos).map(move |drive_info| {
+            let cancel = cancel.clone();
+            async move {
+                let drive_info = drive_info.clone();
+                let parent = tracing::Span::current();
+                tokio::task::spawn_blocking(move || -> eyre::Result<DriveArtifactInfo> {
+                    let _parent = parent.enter();
+                    let _span = info_span!("stream_physical_mft_for_drive", drive = %drive_info.drive_letter).entered();
+                    Self::publish_snapshot(
+                        &drive_info.mft_path,
+                        &cancel,
+                        |writer| PhysicalMftReadRequest { drive_letter: drive_info.drive_letter }.execute(writer),
+                        |file| Ok(file.sync_all()?),
+                    )
+                        .wrap_err_with(|| format!("Failed streaming MFT for drive {}", drive_info.drive_letter))?;
+                    Ok(drive_info)
+                }).await.map_err(|error| eyre::eyre!("Failed joining MFT read task: {error}"))?
+            }
+        }).buffer_unordered(drive_count.max(1)))
     }
 
     pub(crate) fn publish_snapshot(
@@ -93,8 +74,8 @@ impl SyncMft {
         {
             let mut writer = CancellableSeekWriter::new(snapshot.as_file_mut(), cancel);
             produce(&mut writer)?;
-            writer.flush()?;
-        }
+            writer.flush()
+        }?;
         cancel.bail_if_cancelled()?;
         flush(snapshot.as_file())?;
         cancel.bail_if_cancelled()?;
@@ -108,32 +89,6 @@ impl SyncMft {
         snapshot.persist(output_path).map_err(|error| error.error)?;
         Ok(())
     }
-}
-
-pub fn read_physical_mft_stream_with_info(
-    drive_infos: impl IntoIterator<Item = DriveSyncInfo>,
-    cancel: teamy_cancellation::CancellationScope,
-) -> impl Stream<Item = eyre::Result<DriveSyncInfo>> {
-    let drive_infos = drive_infos.into_iter().collect::<Vec<_>>();
-    let concurrency = drive_infos.len().max(1);
-    stream::iter(drive_infos).map(move |drive_info| {
-        let cancel = cancel.clone();
-        async move {
-            let parent = tracing::Span::current();
-            tokio::task::spawn_blocking(move || -> eyre::Result<DriveSyncInfo> {
-                let _parent = parent.enter();
-                let _span = info_span!("stream_physical_mft_for_drive", drive = %drive_info.drive_letter).entered();
-                SyncMft::publish_snapshot(
-                    &drive_info.mft_output_path,
-                    &cancel,
-                    |writer| PhysicalMftReadRequest { drive_letter: drive_info.drive_letter }.execute(writer),
-                    |file| Ok(file.sync_all()?),
-                )
-                    .wrap_err_with(|| format!("Failed streaming MFT for drive {}", drive_info.drive_letter))?;
-                Ok(drive_info)
-            }).await.map_err(|error| eyre::eyre!("Failed joining MFT read task: {error}"))?
-        }
-    }).buffer_unordered(concurrency)
 }
 
 #[cfg(test)]
@@ -172,7 +127,8 @@ mod tests {
             )
         });
 
-        assert!(result.is_err());
+        let _error =
+            result.expect_err("pre-cancelled publication must fail before producing a snapshot");
         assert!(!produced);
         assert_eq!(std::fs::read(&output)?, b"previous snapshot");
         assert_eq!(std::fs::read_dir(temp.path())?.count(), 1);
@@ -215,7 +171,7 @@ mod tests {
             )
         });
 
-        assert!(result.is_err());
+        let _error = result.expect_err("a short physical read must prevent snapshot publication");
         assert_eq!(std::fs::read(&output)?, b"previous snapshot");
         assert_eq!(std::fs::read_dir(temp.path())?.count(), 2);
         Ok(())
@@ -243,7 +199,8 @@ mod tests {
             )
         });
 
-        assert!(result.is_err());
+        let _error =
+            result.expect_err("cancellation during production must prevent snapshot publication");
         assert!(partial);
         assert_eq!(std::fs::read(&output)?, b"previous snapshot");
         assert_eq!(std::fs::read_dir(temp.path())?.count(), 1);
@@ -283,7 +240,8 @@ mod tests {
             )
         });
 
-        assert!(result.is_err());
+        let _error =
+            result.expect_err("cancellation during flush must prevent snapshot publication");
         assert!(observed);
         assert_eq!(std::fs::read(&output)?, b"previous snapshot");
         assert_eq!(std::fs::read_dir(temp.path())?.count(), 1);
@@ -333,7 +291,7 @@ mod tests {
             )
         });
 
-        assert!(result.is_err());
+        let _error = result.expect_err("the held destination must prevent snapshot replacement");
         drop(held);
         assert_eq!(std::fs::read(&output)?, b"previous snapshot");
         assert_eq!(std::fs::read_dir(temp.path())?.count(), 1);

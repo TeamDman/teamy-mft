@@ -1,9 +1,8 @@
 use crate::domain::DriveLetter;
+use crate::machine::DriveArtifactInfo;
 use crate::machine::config::PublishedCheckpoint;
-use crate::machine::config::PublishedDrivePaths;
 use crate::machine::config::current_unix_ms;
 use crate::machine::config::load_checkpoint;
-use crate::machine::config::published_drive_paths;
 use crate::machine::config::save_checkpoint;
 use crate::query::QueryPlan;
 use crate::query::QueryScope;
@@ -30,7 +29,7 @@ pub fn sync_path_into_published_overlay(sync_dir: &Path, path: &str) -> eyre::Re
     let target_path = resolve_sync_target_path(path)?;
     let rendered_path = target_path.display().to_string();
     let drive_letter = DriveLetter::from_absolute_windows_path(&target_path)?;
-    let published_paths = published_drive_paths(sync_dir, drive_letter);
+    let published_paths = DriveArtifactInfo::new(sync_dir, drive_letter);
     if !published_paths.base_index_path.is_file() {
         eyre::bail!(
             "Cannot sync path {} because {} is missing. Run `teamy-mft sync --drive {}` first.",
@@ -80,7 +79,7 @@ pub fn sync_path_recursively_into_published_overlay(
 
     let rendered_path = target_path.display().to_string();
     let drive_letter = DriveLetter::from_absolute_windows_path(&target_path)?;
-    let published_paths = published_drive_paths(sync_dir, drive_letter);
+    let published_paths = DriveArtifactInfo::new(sync_dir, drive_letter);
     if !published_paths.base_index_path.is_file() {
         eyre::bail!(
             "Cannot sync path {} because {} is missing. Run `teamy-mft sync --drive {}` first.",
@@ -228,7 +227,7 @@ fn collect_recursive_rows(target_path: &Path) -> eyre::Result<Vec<SearchIndexPat
 }
 
 fn write_overlay_rows_and_checkpoint(
-    published_paths: &PublishedDrivePaths,
+    published_paths: &DriveArtifactInfo,
     overlay_rows: &[SearchIndexPathRow],
 ) -> eyre::Result<()> {
     SearchIndexBytesMut::from_rows(
@@ -291,21 +290,22 @@ mod tests {
     use super::sync_path_into_published_overlay;
     use super::sync_path_recursively_into_published_overlay;
     use crate::domain::DriveLetter;
+    use crate::machine::DriveArtifactInfo;
     use crate::machine::config::PublishedCheckpoint;
     use crate::machine::config::load_checkpoint;
-    use crate::machine::config::published_drive_paths;
     use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytes;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
+    use crate::search_index::search_index_bytes::SearchIndexPathRowView;
     use uom::si::information::byte;
     use uom::si::usize::Information;
 
     #[test]
     fn sync_path_into_overlay_upserts_one_row_and_checkpoint() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let paths = published_drive_paths(temp_dir.path(), DriveLetter::C);
+        let paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 0),
             &[],
@@ -330,7 +330,7 @@ mod tests {
         let overlay_bytes = std::fs::read(&paths.overlay_index_path)?;
         let overlay_rows = SearchIndexBytes::new(&overlay_bytes)
             .row_views()?
-            .map(|row| row.map(|view| view.to_owned()))
+            .map(|row| row.map(SearchIndexPathRowView::to_owned))
             .collect::<eyre::Result<Vec<_>>>()?;
         assert!(
             overlay_rows
@@ -378,7 +378,7 @@ mod tests {
         let outside_overlay_path = temp_dir.path().join("outside.txt");
 
         let drive = DriveLetter::from_absolute_windows_path(&repo_dir)?;
-        let published_paths = published_drive_paths(temp_dir.path(), drive);
+        let published_paths = DriveArtifactInfo::new(temp_dir.path(), drive);
         SearchIndexBytesMut::from_rows(
             SearchIndexHeader::new(drive, Information::new::<byte>(123), 4),
             &[

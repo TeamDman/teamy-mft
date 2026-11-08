@@ -1868,7 +1868,7 @@ mod tests {
         assert_eq!(
             parsed
                 .extension_postings(".txt")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![0])
         );
 
@@ -1907,10 +1907,10 @@ mod tests {
         assert_eq!(
             validated
                 .extension_postings(".jar")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             trusted
                 .extension_postings(".jar")?
-                .map(|iter| iter.collect::<Vec<_>>())
+                .map(Iterator::collect::<Vec<_>>)
         );
         assert_eq!(
             validated
@@ -1957,19 +1957,19 @@ mod tests {
         assert_eq!(
             parsed
                 .extension_postings(".jar")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![0, 1])
         );
         assert_eq!(
             parsed
                 .extension_postings(".txt")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![2])
         );
         assert_eq!(
             parsed
                 .extension_postings(".zip")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             None
         );
 
@@ -2007,7 +2007,7 @@ mod tests {
         assert_eq!(
             parsed
                 .extension_postings(".git")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![0])
         );
 
@@ -2045,7 +2045,7 @@ mod tests {
         assert_eq!(
             parsed
                 .trigram_postings(*b"flo")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![
                 segment_id_for(&parsed, "flower.jar")?,
                 segment_id_for(&parsed, "flowchart.txt")?
@@ -2054,13 +2054,13 @@ mod tests {
         assert_eq!(
             parsed
                 .trigram_postings(*b"owe")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![segment_id_for(&parsed, "flower.jar")?])
         );
         assert_eq!(
             parsed
                 .trigram_postings(*b"zip")?
-                .map(|iter| iter.collect::<Vec<_>>()),
+                .map(Iterator::collect::<Vec<_>>),
             Some(vec![segment_id_for(&parsed, "trees.zip")?])
         );
         assert!(parsed.trigram_postings(*b"xyz")?.is_none());
@@ -2069,11 +2069,11 @@ mod tests {
     }
 
     fn segment_id_for(parsed: &ParsedSearchIndex<'_>, normalized: &str) -> eyre::Result<u32> {
-        parsed
+        let segment_id = parsed
             .segments()
             .iter()
             .position(|segment| segment.normalized == normalized)
-            .map(|segment_id| segment_id as u32)
-            .wrap_err_with(|| format!("missing segment {normalized}"))
+            .wrap_err_with(|| format!("missing segment {normalized}"))?;
+        Ok(u32::try_from(segment_id)?)
     }
 }

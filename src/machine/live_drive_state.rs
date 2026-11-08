@@ -1,7 +1,7 @@
 use crate::domain::DriveLetter;
+use crate::machine::DriveArtifactInfo;
 use crate::machine::config::OVERLAY_SEARCH_INDEX_TEMP_FILE_EXTENSION;
 use crate::machine::config::PublishedCheckpoint;
-use crate::machine::config::PublishedDrivePaths;
 use crate::machine::config::current_unix_ms;
 use crate::machine::config::load_checkpoint;
 use crate::machine::config::save_checkpoint;
@@ -72,7 +72,7 @@ struct ProjectedPath {
 pub struct LiveDriveState {
     pub drive_letter: DriveLetter,
     sync_dir: PathBuf,
-    pub paths: PublishedDrivePaths,
+    pub paths: DriveArtifactInfo,
     volume_serial_number: Option<u32>,
     snapshot_usn: u64,
     published_last_usn: u64,
@@ -110,7 +110,7 @@ impl LiveDriveState {
     #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
     pub fn load(
         sync_dir: &Path,
-        paths: PublishedDrivePaths,
+        paths: DriveArtifactInfo,
         cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?.wrap_err_with(|| {
@@ -200,7 +200,7 @@ impl LiveDriveState {
     #[instrument(level = "debug", skip_all, fields(drive = %paths.drive_letter))]
     pub fn load_for_observation_with_cancel(
         sync_dir: &Path,
-        paths: PublishedDrivePaths,
+        paths: DriveArtifactInfo,
         cancel: &CancellationScope,
     ) -> eyre::Result<Self> {
         let checkpoint = load_checkpoint(&paths.checkpoint_path)?;
@@ -976,11 +976,11 @@ fn namespace_rank(namespace: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::DriveArtifactInfo;
     use super::LiveDriveGraph;
     use super::LiveDriveState;
     use super::LiveNode;
     use super::LiveNodeLink;
-    use super::PublishedDrivePaths;
     use super::current_unix_ms;
     use super::diff_overlay_rows;
     use super::join_windows_path;
@@ -988,8 +988,7 @@ mod tests {
     use crate::cancellation::CancellationToken;
     use crate::daemon::MachineErrorKind;
     use crate::domain::DriveLetter;
-    use crate::machine::config::published_drive_paths;
-    use crate::machine::daemon::sync_machine_cache;
+    use crate::machine::MachineCacheSyncRequest;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
     use crate::query::QueryLimit;
@@ -1039,7 +1038,7 @@ mod tests {
         LiveDriveState {
             drive_letter,
             sync_dir: cache_dir.to_path_buf(),
-            paths: published_drive_paths(cache_dir, drive_letter),
+            paths: DriveArtifactInfo::new(cache_dir, drive_letter),
             volume_serial_number: None,
             snapshot_usn: 0,
             published_last_usn: 0,
@@ -1058,7 +1057,7 @@ mod tests {
     }
 
     fn write_rule_discovery_index(
-        paths: &PublishedDrivePaths,
+        paths: &DriveArtifactInfo,
         rule_file_paths: &[&Path],
     ) -> eyre::Result<()> {
         let rows = rule_file_paths
@@ -1660,18 +1659,18 @@ mod tests {
             let created_path = scope_dir.path().join(format!("{needle}.txt"));
             let cancel = scope.clone();
 
-            sync_machine_cache(
-                cache_dir.path(),
-                &[drive_letter],
-                IfExistsOutputBehaviour::Overwrite,
-                1.into(),
-                None,
-                &cancel,
-            )?;
+            MachineCacheSyncRequest {
+                sync_dir: cache_dir.path().to_path_buf(),
+                drive_letters: vec![drive_letter],
+                if_exists: IfExistsOutputBehaviour::Overwrite,
+                parallel: 1.into(),
+                console_pid: None,
+            }
+            .execute_blocking(&cancel)?;
 
             let mut state = LiveDriveState::load(
                 cache_dir.path(),
-                published_drive_paths(cache_dir.path(), drive_letter),
+                DriveArtifactInfo::new(cache_dir.path(), drive_letter),
                 &cancel,
             )?;
             let base_request = QueryPlan {

@@ -3,7 +3,6 @@
 //! These utilities operate over raw entry byte slices (after fixups applied)
 //! to extract `FILE_NAME` (0x30) attributes with minimal overhead.
 
-use crate::mft::fast_fixup::detect_entry_size;
 use crate::mft::mft_file::MftFile;
 use crate::mft::mft_record_index::MftRecordIndex;
 use rayon::prelude::*;
@@ -116,13 +115,6 @@ fn read_u64(bytes: &[u8], off: usize) -> Option<u64> {
     bytes
         .get(off..off + 8)
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-}
-
-/// Parse the total entry size from the first entry slice (delegates to `fast_fixup` helper)
-#[inline]
-#[must_use]
-pub fn parse_first_entry_size(first_entry: &[u8]) -> Option<u32> {
-    detect_entry_size(first_entry)
 }
 
 /// Iterate all `FILE_NAME` attributes in an entry, invoking callback for each.

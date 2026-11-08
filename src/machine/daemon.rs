@@ -1,13 +1,8 @@
 use crate::cancellation::CancellationToken;
-use crate::domain::DirectoryExclusivityGuard;
 use crate::domain::DriveLetter;
-use crate::domain::ParallelismLimit;
-use crate::machine::config::MachineConfig;
-use crate::machine::config::PublishedCheckpoint;
-use crate::machine::config::current_unix_ms;
-use crate::machine::config::load_machine_config;
-use crate::machine::config::published_drive_paths;
-use crate::machine::config::save_checkpoint;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineCacheSyncRequest;
+use crate::machine::MachineConfig;
 use crate::machine::daemon_log::daemon_log_hub;
 use crate::machine::daemon_log::spawn_correlation_log_forwarder;
 use crate::machine::daemon_log::stop_log_forwarder;
@@ -21,8 +16,6 @@ use crate::machine::ipc::RpcQueryResponse;
 use crate::machine::ipc::StatusRequest;
 use crate::machine::ipc::StatusResponse;
 use crate::machine::live_drive_state::LiveDriveState;
-use crate::machine::usn::JournalCursor;
-use crate::machine::usn::VolumeUsnJournalHandle;
 use crate::query::QueryFilterRules;
 use crate::query::QueryLimit;
 use crate::query::QueryPlan;
@@ -30,11 +23,7 @@ use crate::query::QueryResultRow;
 use crate::query::QueryRowFilter;
 use crate::query::resolve_query_scopes;
 use crate::query::visit_drive_search_index_rows;
-use crate::search_index::format::SEARCH_INDEX_VERSION;
-use crate::sync::IfExistsOutputBehaviour;
 use crate::sync::SyncPlan;
-use crate::sync::SyncWork;
-use crate::sync::resolve_drive_infos_in_dir_for_letters;
 use crate::windows_utils::string::EasyPCWSTR;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
@@ -59,8 +48,6 @@ use tracing::Instrument;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
-use uom::si::information::byte;
-use uom::si::usize::Information;
 use windows::Win32::Foundation::NO_ERROR;
 use windows::Win32::System::Services::RegisterServiceCtrlHandlerExW;
 use windows::Win32::System::Services::SERVICE_ACCEPT_SHUTDOWN;
@@ -91,19 +78,6 @@ struct MachineDaemonPipeAcceptor {
     owner_sid: String,
     pending: Mutex<NamedPipeServer>,
 }
-
-#[derive(Debug, Clone)]
-pub struct MachineCacheSyncResult {
-    pub synced_drives: Vec<DriveLetter>,
-    pub live_drives: Vec<DriveLetter>,
-    pub skipped_drives: Vec<(DriveLetter, String)>,
-}
-
-type SupportedDriveSyncOutcome = (
-    Vec<DriveLetter>,
-    FxHashMap<DriveLetter, JournalCursor>,
-    Vec<(DriveLetter, String)>,
-);
 
 #[derive(Debug)]
 struct DaemonRuntimeState {
@@ -380,7 +354,7 @@ impl DriveWorkerState {
 
         if self.state.is_none() {
             self.loading = true;
-            let paths = published_drive_paths(&self.sync_dir, self.drive);
+            let paths = DriveArtifactInfo::new(&self.sync_dir, self.drive);
             let state = (|| -> eyre::Result<LiveDriveState> {
                 if !paths.mft_path.is_file() {
                     eyre::bail!(
@@ -1022,7 +996,7 @@ fn published_drive_cache_available(
     drive: DriveLetter,
     sync_dir: &std::path::Path,
 ) -> eyre::Result<bool> {
-    let paths = published_drive_paths(sync_dir, drive);
+    let paths = DriveArtifactInfo::new(sync_dir, drive);
     Ok(std::fs::metadata(&paths.mft_path)
         .map(|metadata| metadata.is_file())
         .or_else(|error| match error.kind() {
@@ -1111,14 +1085,14 @@ impl DaemonRuntimeState {
             );
             repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
-            let sync_result = sync_machine_cache_async(
-                &self.sync_dir,
-                &drive_letters,
-                request.if_exists,
-                request.parallel,
-                self.console_pid,
-                cancel,
-            )
+            let sync_result = MachineCacheSyncRequest {
+                sync_dir: self.sync_dir.clone(),
+                drive_letters,
+                if_exists: request.if_exists,
+                parallel: request.parallel,
+                console_pid: self.console_pid,
+            }
+            .execute(cancel)
             .await
             .map_err(|error| MachineError::degraded(error.to_string()))?;
 
@@ -1211,7 +1185,7 @@ impl DaemonRuntimeState {
         drive: DriveLetter,
         cancel: &CancellationScope,
     ) -> eyre::Result<LiveDriveState> {
-        let paths = published_drive_paths(&self.sync_dir, drive);
+        let paths = DriveArtifactInfo::new(&self.sync_dir, drive);
         if !paths.mft_path.is_file() {
             eyre::bail!(
                 "Drive {} has no published MFT snapshot at {}",
@@ -1416,7 +1390,7 @@ fn repair_published_drive_permissions(
     drive_letters: &[DriveLetter],
 ) -> eyre::Result<()> {
     for &drive in drive_letters {
-        let paths = published_drive_paths(sync_dir, drive);
+        let paths = DriveArtifactInfo::new(sync_dir, drive);
         for artifact_path in [
             &paths.mft_path,
             &paths.base_index_path,
@@ -1874,7 +1848,7 @@ pub fn run_daemon(
     if service_mode {
         run_windows_service_dispatcher(cancellation_scope)
     } else {
-        let config = load_machine_config()?
+        let config = MachineConfig::load_if_present()?
             .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
         run_daemon_runtime(config, console_pid, cancellation_scope)
     }
@@ -1884,7 +1858,7 @@ fn run_windows_service_dispatcher(cancellation_scope: CancellationScope) -> eyre
     *SERVICE_CANCELLATION_TOKEN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(cancellation_scope);
-    let config = load_machine_config()?
+    let config = MachineConfig::load_if_present()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let mut service_name = crate::machine::security::encode_wide(&config.service_name);
     let mut table = [
@@ -1907,7 +1881,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut windows::core::PW
 }
 
 fn service_main_impl() -> eyre::Result<()> {
-    let config = load_machine_config()?
+    let config = MachineConfig::load_if_present()?
         .wrap_err("Machine config is not installed. Run `teamy-mft install` first.")?;
     let service_name = config.service_name.as_str().easy_pcwstr()?;
     // SAFETY: The service name pointer remains valid for the call and the handler function has the required ABI.
@@ -2101,137 +2075,6 @@ fn machine_error_from_panic(
     MachineError::degraded(format!("{context}: {detail}"))
 }
 
-/// # Errors
-///
-/// Returns an error if sync fails or if overlay/checkpoint sidecars cannot be written.
-pub fn sync_machine_cache(
-    sync_dir: &std::path::Path,
-    drive_letters: &[DriveLetter],
-    if_exists: IfExistsOutputBehaviour,
-    parallel: ParallelismLimit,
-    console_pid: Option<u32>,
-    cancel: &CancellationScope,
-) -> eyre::Result<MachineCacheSyncResult> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(sync_machine_cache_async(
-        sync_dir,
-        drive_letters,
-        if_exists,
-        parallel,
-        console_pid,
-        cancel,
-    ))
-}
-
-async fn sync_machine_cache_async(
-    sync_dir: &std::path::Path,
-    drive_letters: &[DriveLetter],
-    if_exists: IfExistsOutputBehaviour,
-    parallel: ParallelismLimit,
-    console_pid: Option<u32>,
-    cancel: &CancellationScope,
-) -> eyre::Result<MachineCacheSyncResult> {
-    crate::windows_utils::elevation::ensure_elevated(console_pid)?;
-    std::fs::create_dir_all(sync_dir)?;
-    let _directory_guard = DirectoryExclusivityGuard::acquire(sync_dir)?;
-    let drive_infos =
-        resolve_drive_infos_in_dir_for_letters(sync_dir, drive_letters.iter().copied())?;
-    let work = SyncWork::prepare(drive_infos, &if_exists)?;
-    let synced_drives = work
-        .index_drives
-        .iter()
-        .map(|info| info.drive_letter)
-        .collect::<Vec<_>>();
-    let fresh_snapshots = work.mft_drives.clone();
-    let fresh_drive_letters = fresh_snapshots
-        .iter()
-        .map(|info| info.drive_letter)
-        .collect::<Vec<_>>();
-    let (live_drives, snapshot_cursors, mut skipped_drives) =
-        collect_supported_drives_for_machine_sync(&fresh_drive_letters);
-    for &drive in drive_letters {
-        if !synced_drives.contains(&drive) {
-            skipped_drives.push((drive, String::from("Existing base index retained")));
-        }
-    }
-    work.execute(parallel, console_pid, cancel).await?;
-    publish_machine_snapshots(sync_dir, fresh_snapshots, &snapshot_cursors)?;
-
-    Ok(MachineCacheSyncResult {
-        synced_drives,
-        live_drives,
-        skipped_drives,
-    })
-}
-
-fn publish_machine_snapshots(
-    sync_dir: &std::path::Path,
-    fresh_snapshots: Vec<crate::sync::DriveSyncInfo>,
-    snapshot_cursors: &FxHashMap<DriveLetter, JournalCursor>,
-) -> eyre::Result<()> {
-    for info in fresh_snapshots {
-        let paths = published_drive_paths(sync_dir, info.drive_letter);
-        crate::search_index::search_index_bytes::SearchIndexBytesMut::from_rows(
-            crate::search_index::format::SearchIndexHeader::new(
-                info.drive_letter,
-                Information::new::<byte>(0),
-                0,
-            ),
-            &[],
-        )?
-        .write_to_path(&paths.overlay_index_path)?;
-        let cursor = snapshot_cursors.get(&info.drive_letter).copied();
-        let checkpoint = if let Some(cursor) = cursor {
-            PublishedCheckpoint {
-                drive_letter: info.drive_letter,
-                volume_serial_number: None,
-                journal_id: Some(cursor.journal_id),
-                snapshot_usn: Some(cursor.next_usn),
-                last_usn: Some(cursor.next_usn),
-                published_at_unix_ms: current_unix_ms(),
-                overlay_row_count: 0,
-                base_index_version: SEARCH_INDEX_VERSION,
-            }
-        } else {
-            PublishedCheckpoint {
-                published_at_unix_ms: current_unix_ms(),
-                ..PublishedCheckpoint::empty(info.drive_letter, SEARCH_INDEX_VERSION)
-            }
-        };
-        save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
-    }
-
-    Ok(())
-}
-
-fn collect_supported_drives_for_machine_sync(
-    drive_letters: &[DriveLetter],
-) -> SupportedDriveSyncOutcome {
-    let mut supported_drives = Vec::new();
-    let mut cursors = FxHashMap::default();
-    let mut skipped_drives = Vec::new();
-    for &drive in drive_letters {
-        match VolumeUsnJournalHandle::open(drive).and_then(|journal| journal.query_cursor()) {
-            Ok(cursor) => {
-                supported_drives.push(drive);
-                cursors.insert(drive, cursor);
-            }
-            Err(error) => {
-                let message = format!("{error:#}");
-                warn!(
-                    drive = %drive,
-                    error = %message,
-                    "USN journal unavailable; syncing snapshot without live updates"
-                );
-                skipped_drives.push((drive, message));
-            }
-        }
-    }
-    (supported_drives, cursors, skipped_drives)
-}
-
 #[cfg(test)]
 mod tests {
     use super::DaemonRuntimeState;
@@ -2239,196 +2082,20 @@ mod tests {
     use super::DriveWorkerRuntimeMode;
     use super::DriveWorkerState;
     use super::DriveWorkerStatusSnapshot;
-    use super::publish_machine_snapshots;
     use super::warm_next_drive_worker;
     use crate::cancellation::CancellationToken;
     use crate::domain::DriveLetter;
-    use crate::machine::config::PublishedCheckpoint;
-    use crate::machine::config::load_checkpoint;
-    use crate::machine::config::published_drive_paths;
-    use crate::machine::config::save_checkpoint;
-    use crate::machine::usn::JournalCursor;
+    use crate::machine::DriveArtifactInfo;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
-    use crate::sync::IfExistsOutputBehaviour;
-    use crate::sync::SyncWork;
-    use crate::sync::resolve_drive_infos_in_dir_for_letters;
     use rustc_hash::FxHashMap;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use std::time::Instant;
     use uom::si::information::byte;
     use uom::si::usize::Information;
-
-    #[tokio::test]
-    async fn skipped_snapshots_preserve_sidecars_and_cached_mft() -> eyre::Result<()> {
-        CancellationToken::new()
-            .with_async_scope(|scope| async move {
-                for (mft_exists, index_exists) in [(true, true), (false, true), (true, false)] {
-                    let temp = tempfile::tempdir()?;
-                    let paths = published_drive_paths(temp.path(), DriveLetter::C);
-                    // A cached stream containing one unused record builds an empty base index.
-                    let mut mft = vec![0; 1024];
-                    mft[0x1c..0x20].copy_from_slice(&1024u32.to_le_bytes());
-                    if mft_exists {
-                        std::fs::write(&paths.mft_path, &mft)?;
-                    }
-                    if index_exists {
-                        std::fs::write(&paths.base_index_path, b"retained base index")?;
-                    }
-                    SearchIndexBytesMut::from_rows(
-                        SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(1024), 1),
-                        &[SearchIndexPathRow {
-                            path: String::from(r"C:\added.txt").into(),
-                            has_deleted_entries: false,
-                        }],
-                    )?
-                    .write_to_path(&paths.overlay_index_path)?;
-                    let checkpoint = PublishedCheckpoint {
-                        journal_id: Some(7),
-                        snapshot_usn: Some(100),
-                        last_usn: Some(150),
-                        overlay_row_count: 1,
-                        ..PublishedCheckpoint::empty(
-                            DriveLetter::C,
-                            crate::search_index::format::SEARCH_INDEX_VERSION,
-                        )
-                    };
-                    save_checkpoint(&paths.checkpoint_path, &checkpoint)?;
-                    let overlay_bytes = std::fs::read(&paths.overlay_index_path)?;
-                    let checkpoint_bytes = std::fs::read(&paths.checkpoint_path)?;
-                    let infos =
-                        resolve_drive_infos_in_dir_for_letters(temp.path(), [DriveLetter::C])?;
-                    let work = SyncWork::prepare(infos, &IfExistsOutputBehaviour::Skip)?;
-                    assert!(work.mft_drives.is_empty());
-                    assert_eq!(work.index_drives.len(), usize::from(!index_exists));
-                    let fresh_snapshots = work.mft_drives.clone();
-                    work.execute(1.into(), None, &scope).await?;
-                    let cursors = FxHashMap::from_iter([(
-                        DriveLetter::C,
-                        JournalCursor {
-                            journal_id: 7,
-                            first_usn: 0,
-                            next_usn: 999,
-                            lowest_valid_usn: 0,
-                            max_usn: u64::MAX,
-                        },
-                    )]);
-                    publish_machine_snapshots(temp.path(), fresh_snapshots, &cursors)?;
-                    assert_eq!(std::fs::read(&paths.overlay_index_path)?, overlay_bytes);
-                    assert_eq!(std::fs::read(&paths.checkpoint_path)?, checkpoint_bytes);
-                    if mft_exists {
-                        assert_eq!(std::fs::read(&paths.mft_path)?, mft);
-                    } else {
-                        assert!(!paths.mft_path.exists());
-                    }
-                    if index_exists {
-                        assert_eq!(
-                            std::fs::read(&paths.base_index_path)?,
-                            b"retained base index"
-                        );
-                    } else {
-                        assert!(paths.base_index_path.exists());
-                    }
-                }
-                Ok(())
-            })
-            .await
-    }
-
-    #[test]
-    fn snapshot_publication_only_advances_fresh_drives() -> eyre::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let old_paths = published_drive_paths(temp.path(), DriveLetter::C);
-        std::fs::write(&old_paths.mft_path, b"old MFT")?;
-        std::fs::write(&old_paths.base_index_path, b"old base")?;
-        std::fs::write(&old_paths.overlay_index_path, b"old overlay")?;
-        std::fs::write(&old_paths.checkpoint_path, b"old checkpoint")?;
-        let work = SyncWork::prepare(
-            resolve_drive_infos_in_dir_for_letters(
-                temp.path(),
-                [DriveLetter::C, DriveLetter::D, DriveLetter::E],
-            )?,
-            &IfExistsOutputBehaviour::Skip,
-        )?;
-        assert_eq!(
-            work.mft_drives
-                .iter()
-                .map(|info| info.drive_letter)
-                .collect::<Vec<_>>(),
-            [DriveLetter::D, DriveLetter::E]
-        );
-        let cursors = FxHashMap::from_iter([(
-            DriveLetter::D,
-            JournalCursor {
-                journal_id: 9,
-                first_usn: 0,
-                next_usn: 200,
-                lowest_valid_usn: 0,
-                max_usn: u64::MAX,
-            },
-        )]);
-        // The raw-read stage is omitted; this test exercises sidecar publication after success.
-        publish_machine_snapshots(temp.path(), work.mft_drives, &cursors)?;
-        assert_eq!(
-            std::fs::read(&old_paths.overlay_index_path)?,
-            b"old overlay"
-        );
-        assert_eq!(
-            std::fs::read(&old_paths.checkpoint_path)?,
-            b"old checkpoint"
-        );
-        let fresh_paths = published_drive_paths(temp.path(), DriveLetter::D);
-        let fresh = load_checkpoint(&fresh_paths.checkpoint_path)?.unwrap();
-        assert_eq!(fresh.journal_id, Some(9));
-        assert_eq!(fresh.snapshot_usn, Some(200));
-        assert_eq!(fresh.last_usn, Some(200));
-        assert_eq!(fresh.overlay_row_count, 0);
-        let snapshot_only =
-            load_checkpoint(&published_drive_paths(temp.path(), DriveLetter::E).checkpoint_path)?
-                .unwrap();
-        assert_eq!(snapshot_only.snapshot_usn, None);
-        assert_eq!(snapshot_only.journal_id, None);
-        Ok(())
-    }
-
-    #[test]
-    fn overwrite_and_abort_preflight_preserve_expected_behavior() -> eyre::Result<()> {
-        for (mft_exists, index_exists) in
-            [(false, false), (true, false), (false, true), (true, true)]
-        {
-            let temp = tempfile::tempdir()?;
-            let paths = published_drive_paths(temp.path(), DriveLetter::C);
-            if mft_exists {
-                std::fs::write(&paths.mft_path, b"MFT")?;
-            }
-            if index_exists {
-                std::fs::write(&paths.base_index_path, b"base")?;
-            }
-            let infos = resolve_drive_infos_in_dir_for_letters(temp.path(), [DriveLetter::C])?;
-            let overwrite = SyncWork::prepare(infos.clone(), &IfExistsOutputBehaviour::Overwrite)?;
-            assert_eq!(overwrite.mft_drives.len(), 1);
-            assert_eq!(overwrite.index_drives.len(), 1);
-            let abort = SyncWork::prepare(infos, &IfExistsOutputBehaviour::Abort);
-            if mft_exists || index_exists {
-                let error = abort.unwrap_err();
-                assert!(error.to_string().contains("Aborting sync"));
-            } else {
-                let abort = abort?;
-                assert_eq!(abort.mft_drives.len(), 1);
-                assert_eq!(abort.index_drives.len(), 1);
-            }
-            if mft_exists {
-                assert_eq!(std::fs::read(&paths.mft_path)?, b"MFT");
-            }
-            if index_exists {
-                assert_eq!(std::fs::read(&paths.base_index_path)?, b"base");
-            }
-        }
-        Ok(())
-    }
 
     fn state(
         temp_dir: &tempfile::TempDir,
@@ -2516,7 +2183,7 @@ mod tests {
     fn published_index_only_mode_queries_base_index_without_live_state() -> eyre::Result<()> {
         CancellationToken::new().with_scope(|scope| {
             let temp_dir = tempfile::tempdir()?;
-            let paths = published_drive_paths(temp_dir.path(), DriveLetter::C);
+            let paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
             SearchIndexBytesMut::from_rows(
                 SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 1),
                 &[SearchIndexPathRow {
@@ -2575,7 +2242,7 @@ mod tests {
     -> eyre::Result<()> {
         CancellationToken::new().with_scope(|scope| {
             let temp_dir = tempfile::tempdir()?;
-            let paths = published_drive_paths(temp_dir.path(), DriveLetter::C);
+            let paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
             std::fs::create_dir_all(
                 paths
                     .base_index_path

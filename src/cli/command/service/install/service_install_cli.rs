@@ -1,5 +1,5 @@
+use crate::machine::MachineConfig;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
-use crate::machine::config::MachineConfig;
 use crate::machine::config::machine_config_path;
 use crate::machine::config::machine_root_dir;
 use crate::machine::config::save_machine_config;

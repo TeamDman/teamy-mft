@@ -76,13 +76,13 @@ mod tests {
             );
         }
         for value in ["", "-1", "auto", "1.5"] {
-            assert!(value.parse::<ParallelismLimit>().is_err());
-        }
-        assert!(
-            format!("{}0", usize::MAX)
+            value
                 .parse::<ParallelismLimit>()
-                .is_err()
-        );
+                .expect_err("invalid parallelism limits should be rejected");
+        }
+        format!("{}0", usize::MAX)
+            .parse::<ParallelismLimit>()
+            .expect_err("parallelism limits exceeding usize should be rejected");
         Ok(())
     }
 

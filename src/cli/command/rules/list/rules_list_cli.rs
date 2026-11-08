@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryFilterRules;
 use crate::query::normalize_profile_name;
@@ -23,7 +24,7 @@ impl RulesListArgs {
     /// or discovered rules files cannot be parsed.
     pub fn invoke(self) -> eyre::Result<()> {
         let profile = normalize_profile_name(self.profile.as_deref())?;
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
 
         let rules = QueryFilterRules::discover_for_drive_letters(

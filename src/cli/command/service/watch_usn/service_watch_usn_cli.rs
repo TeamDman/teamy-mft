@@ -1,4 +1,5 @@
-use crate::machine::config::published_drive_paths;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineConfig;
 use crate::machine::live_drive_state::LiveDriveState;
 use crate::machine::live_drive_state::ObservedUsnEvent;
 use crate::query::QueryScope;
@@ -40,7 +41,7 @@ impl ServiceWatchUsnArgs {
     pub fn invoke(self, console_pid: Option<u32>, cancel: &CancellationScope) -> eyre::Result<()> {
         ensure_elevated(console_pid)?;
         cancel.bail_if_cancelled()?;
-        let config = crate::machine::config::load_required_machine_config()?;
+        let config = MachineConfig::load()?;
         let scopes = resolve_query_scopes(&self.r#in)?;
         let drive_letters = self
             .drive_letter_pattern
@@ -49,7 +50,7 @@ impl ServiceWatchUsnArgs {
         let mut states = Vec::new();
 
         for drive_letter in drive_letters {
-            let paths = published_drive_paths(&config.sync_dir, drive_letter);
+            let paths = DriveArtifactInfo::new(&config.sync_dir, drive_letter);
             let state =
                 LiveDriveState::load_for_observation_with_cancel(&config.sync_dir, paths, cancel)?;
             println!("usn-watch-drive-ready={drive_letter}");

@@ -5,7 +5,7 @@ use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 
-#[derive(Facet, PartialEq, Debug, Arbitrary, Clone)]
+#[derive(Facet, PartialEq, Debug, Arbitrary, Clone, Default)]
 pub struct SyncPlan {
     /// Maximum concurrent index builds and shared indexing CPU workers (0: Rayon automatic). Drive reads remain parallel.
     #[facet(args::named, default)]
@@ -26,16 +26,4 @@ pub struct SyncPlan {
     /// Optional path to reflect into the published overlay index without rebuilding a full drive index
     #[facet(args::positional, default)]
     pub path: Option<String>,
-}
-
-impl Default for SyncPlan {
-    fn default() -> Self {
-        Self {
-            parallel: ParallelismLimit::default(),
-            drive_letter_pattern: DriveLetterPattern::default(),
-            if_exists: IfExistsOutputBehaviour::default(),
-            recursive: false,
-            path: None,
-        }
-    }
 }

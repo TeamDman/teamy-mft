@@ -11,6 +11,7 @@ mod query_runtime;
 mod query_scope;
 mod query_session;
 mod query_string;
+mod rule_file_profile_selection;
 mod search_index_query;
 
 pub use crate::domain::Pathlike;

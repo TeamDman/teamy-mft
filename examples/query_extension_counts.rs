@@ -46,8 +46,7 @@ fn main() -> eyre::Result<()> {
     cancellation_token.with_scope(|cancellation_token| {
         let scope = std::env::args()
             .nth(1)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+            .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
         let scope = dunce::canonicalize(&scope)?;
 
         let mut plan = QueryPlan::single_rule(QueryRule::MatchAll);

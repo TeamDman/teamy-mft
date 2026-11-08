@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::paths::EnsureParentDirExists;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -73,7 +74,7 @@ impl MoveArgs {
             destination_path.display()
         );
 
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let rendered_source_path = source_path.to_string_lossy().into_owned();
         match crate::sync::sync_path_into_published_overlay(&sync_dir, &rendered_source_path) {
             Ok(drive_letter) => {

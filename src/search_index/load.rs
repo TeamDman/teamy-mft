@@ -41,7 +41,7 @@ impl MappedSearchIndex {
         if header.version != SEARCH_INDEX_VERSION {
             let drive_letter = header.drive_letter;
             bail!(
-                "Unsupported search index version {} in {}. Run `teamy-mft sync index --drive-pattern {}` to rebuild the stale index for drive {}.",
+                "Unsupported search index version {} in {}. Run `teamy-mft sync --drive-letter-pattern {}` to rebuild the stale index for drive {}.",
                 header.version,
                 path.display(),
                 drive_letter,
@@ -176,7 +176,7 @@ mod tests {
         bytes.extend_from_slice(&1u64.to_le_bytes());
 
         let path = b"C:\\legacy.txt";
-        bytes.extend_from_slice(&(path.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(path.len())?.to_le_bytes());
         bytes.push(0);
         bytes.extend_from_slice(path);
 
@@ -188,7 +188,7 @@ mod tests {
         let message = error.to_string();
 
         assert!(message.contains("Unsupported search index version 1"));
-        assert!(message.contains("teamy-mft sync index --drive-pattern C"));
+        assert!(message.contains("teamy-mft sync --drive-letter-pattern C"));
 
         Ok(())
     }

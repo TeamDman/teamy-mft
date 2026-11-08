@@ -1,4 +1,5 @@
 use crate::cli::command::protection::ProtectionTarget;
+use crate::machine::MachineConfig;
 use crate::windows_utils::elevation::ensure_elevated;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -17,7 +18,7 @@ impl ProtectionEnableArgs {
     /// Returns an error if elevation is unavailable or cache ACL repair fails.
     pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         ensure_elevated(console_pid)?;
-        let config = crate::machine::config::load_required_machine_config()?;
+        let config = MachineConfig::load()?;
         let target = self.target.unwrap_or(ProtectionTarget::All);
         match target {
             ProtectionTarget::All => {

@@ -186,8 +186,8 @@ mod tests {
 
     #[test]
     fn constructors_reject_reversed_and_overflowing_bounds() -> eyre::Result<()> {
-        assert!(ByteRange::new(info(20), info(10)).is_err());
-        assert!(ByteRange::from_offset_and_length(info(usize::MAX), info(1)).is_err());
+        let _error = ByteRange::new(info(20), info(10)).unwrap_err();
+        let _error = ByteRange::from_offset_and_length(info(usize::MAX), info(1)).unwrap_err();
         assert_eq!(
             ByteRange::from_offset_and_length(info(0), info(usize::MAX))?.end(),
             info(usize::MAX)
@@ -233,11 +233,9 @@ mod tests {
             20..20
         );
         for (start, end) in [(9, 20), (20, 31), (31, 31)] {
-            assert!(
-                ByteRange::new(info(start), info(end))?
-                    .relative_to(&parent)
-                    .is_err()
-            );
+            let _error = ByteRange::new(info(start), info(end))?
+                .relative_to(&parent)
+                .unwrap_err();
         }
         Ok(())
     }
@@ -278,16 +276,12 @@ mod tests {
                 .byte_indices(),
             25..30
         );
-        assert!(
-            ByteRange::new(info(usize::MAX - 10), info(usize::MAX))?
-                .shifted_by(info(1))
-                .is_err()
-        );
-        assert!(
-            ByteRange::new(info(usize::MAX), info(usize::MAX))?
-                .shifted_by(info(1))
-                .is_err()
-        );
+        let _error = ByteRange::new(info(usize::MAX - 10), info(usize::MAX))?
+            .shifted_by(info(1))
+            .unwrap_err();
+        let _error = ByteRange::new(info(usize::MAX), info(usize::MAX))?
+            .shifted_by(info(1))
+            .unwrap_err();
         Ok(())
     }
 
@@ -303,12 +297,10 @@ mod tests {
         assert_eq!(aligned.aligned_to(info(64))?, aligned);
         let empty = ByteRange::new(info(13), info(13))?;
         assert_eq!(empty.aligned_to(info(64))?, empty);
-        assert!(aligned.aligned_to(info(0)).is_err());
-        assert!(
-            ByteRange::new(info(usize::MAX - 1), info(usize::MAX))?
-                .aligned_to(info(2))
-                .is_err()
-        );
+        let _error = aligned.aligned_to(info(0)).unwrap_err();
+        let _error = ByteRange::new(info(usize::MAX - 1), info(usize::MAX))?
+            .aligned_to(info(2))
+            .unwrap_err();
         Ok(())
     }
 }

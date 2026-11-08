@@ -1,5 +1,5 @@
 use crate::domain::DriveLetter;
-use crate::machine::config::published_drive_paths;
+use crate::machine::DriveArtifactInfo;
 use crate::query::MatchingRowIndices;
 use crate::query::Pathlike;
 use crate::query::QueryPlan;
@@ -275,13 +275,6 @@ fn visit_matching_search_index_rows(
     visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
 ) -> eyre::Result<(usize, ControlFlow<(), ()>)> {
     let _span = info_span!("load_drive_search_index").entered();
-    {
-        let _span = info_span!("validate_search_index_file").entered();
-        if !index_path.is_file() {
-            eyre::bail!("Fast query requires {}.", index_path.display(),);
-        }
-    }
-
     let mapped = {
         let _span = info_span!("map_search_index_file").entered();
         MappedSearchIndex::open(index_path).wrap_err_with(|| {
@@ -386,14 +379,15 @@ pub(crate) fn visit_drive_search_index_rows(
     only_deleted: bool,
     mut visit: impl FnMut(QueryResultRow) -> eyre::Result<ControlFlow<(), ()>>,
 ) -> eyre::Result<usize> {
-    let paths = published_drive_paths(sync_dir, drive_letter);
+    let paths = DriveArtifactInfo::new(sync_dir, drive_letter);
+    paths.require_base_search_index()?;
 
     if paths.overlay_index_path.is_file() && search_index_has_rows(&paths.overlay_index_path)? {
         let base_mapped = MappedSearchIndex::open(&paths.base_index_path).wrap_err_with(|| {
             format!(
-                "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-                paths.base_index_path.display(),
+                "Failed loading base search index for drive {} from {}",
                 drive_letter,
+                paths.base_index_path.display(),
             )
         })?;
         let base_parsed = SearchIndexBytes::new(base_mapped.bytes())
@@ -464,7 +458,10 @@ pub(crate) fn visit_drive_search_index_rows(
                 }
                 (None, None) => break,
             };
-            if visit(row)? == ControlFlow::Break(()) {
+            if visit(row).wrap_err_with(|| {
+                format!("Failed visiting matched search index rows for drive {drive_letter}")
+            })? == ControlFlow::Break(())
+            {
                 break;
             }
         }
@@ -481,9 +478,9 @@ pub(crate) fn visit_drive_search_index_rows(
     )
     .wrap_err_with(|| {
         format!(
-            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-            paths.base_index_path.display(),
-            drive_letter
+            "Failed querying base search index for drive {} at {}",
+            drive_letter,
+            paths.base_index_path.display()
         )
     })?;
 
@@ -497,9 +494,12 @@ struct MatchingRowRef {
 
 #[cfg(test)]
 mod tests {
+    use super::visit_drive_search_index_rows;
     use super::visit_matching_parsed_row_indices;
     use crate::domain::DriveLetter;
+    use crate::machine::DriveArtifactInfo;
     use crate::query::QueryPlan;
+    use crate::query::QueryRule;
     use crate::query::resolve_query_scopes;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
@@ -509,6 +509,107 @@ mod tests {
     use std::ops::ControlFlow;
     use uom::si::information::byte;
     use uom::si::usize::Information;
+
+    #[test]
+    fn visitor_errors_do_not_claim_an_existing_index_is_missing() -> eyre::Result<()> {
+        for has_overlay in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let paths = DriveArtifactInfo::new(temp.path(), DriveLetter::C);
+            let rows = [SearchIndexPathRow {
+                path: String::from(r"C:\example.jpg").into(),
+                has_deleted_entries: false,
+            }];
+            for index_path in [&paths.base_index_path, &paths.overlay_index_path]
+                .into_iter()
+                .take(usize::from(has_overlay) + 1)
+            {
+                SearchIndexBytesMut::from_rows(
+                    SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 1),
+                    &rows,
+                )?
+                .write_to_path(index_path)?;
+            }
+
+            let error = visit_drive_search_index_rows(
+                DriveLetter::C,
+                temp.path(),
+                &QueryPlan::single_rule(QueryRule::MatchAll),
+                &[],
+                false,
+                false,
+                |_| eyre::bail!("rules visitor failed: no enclosing git root was found"),
+            )
+            .expect_err("visitor errors must propagate from valid indexes");
+            let report = format!("{error:#}");
+            assert!(report.contains("rules visitor failed"), "{report}");
+            assert!(!report.contains("Fast query requires"), "{report}");
+            assert!(!report.contains("teamy-mft sync"), "{report}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_base_index_reports_the_current_sync_command() -> eyre::Result<()> {
+        for has_overlay in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let paths = DriveArtifactInfo::new(temp.path(), DriveLetter::C);
+            if has_overlay {
+                SearchIndexBytesMut::from_rows(
+                    SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 1),
+                    &[SearchIndexPathRow {
+                        path: String::from(r"C:\example.jpg").into(),
+                        has_deleted_entries: false,
+                    }],
+                )?
+                .write_to_path(&paths.overlay_index_path)?;
+            }
+
+            let error = visit_drive_search_index_rows(
+                DriveLetter::C,
+                temp.path(),
+                &QueryPlan::single_rule(QueryRule::MatchAll),
+                &[],
+                false,
+                false,
+                |_| unreachable!("a missing base index must prevent row visitation"),
+            )
+            .expect_err("a missing base index must fail even when an overlay exists");
+            let report = format!("{error:#}");
+            assert!(report.contains("Fast query requires"), "{report}");
+            assert!(
+                report.contains("teamy-mft sync --drive-letter-pattern C"),
+                "{report}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_existing_indexes_do_not_report_a_missing_index() -> eyre::Result<()> {
+        for is_directory in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let paths = DriveArtifactInfo::new(temp.path(), DriveLetter::C);
+            if is_directory {
+                std::fs::create_dir(&paths.base_index_path)?;
+            } else {
+                std::fs::write(&paths.base_index_path, b"invalid search index")?;
+            }
+            let error = visit_drive_search_index_rows(
+                DriveLetter::C,
+                temp.path(),
+                &QueryPlan::single_rule(QueryRule::MatchAll),
+                &[],
+                false,
+                false,
+                |_| unreachable!("an invalid index must prevent row visitation"),
+            )
+            .expect_err("invalid indexes must retain their load failure");
+            let report = format!("{error:#}");
+            assert!(!report.contains("Fast query requires"), "{report}");
+            assert!(!report.contains("teamy-mft sync"), "{report}");
+        }
+        Ok(())
+    }
 
     fn parse_index(rows: &[SearchIndexPathRow]) -> eyre::Result<ParsedSearchIndex<'static>> {
         let bytes = SearchIndexBytesMut::from_rows(

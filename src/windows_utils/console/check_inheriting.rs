@@ -22,12 +22,11 @@ pub fn is_inheriting_console() -> bool {
 #[cfg(test)]
 mod test {
     #[test]
-    fn it_works() -> eyre::Result<()> {
+    fn it_works() {
         let inheriting = super::is_inheriting_console();
         assert!(
             inheriting,
             "This test should be run from a console instead of double-clicking the exe."
         );
-        Ok(())
     }
 }

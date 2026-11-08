@@ -1,4 +1,5 @@
 use crate::cli::command::rules::RulesMutationDirective;
+use crate::machine::MachineConfig;
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryFilterRules;
 use crate::query::RULES_FILE_EXTENSION;
@@ -113,7 +114,7 @@ impl RulesRemoveArgs {
             }
             vec![rules_path]
         } else {
-            let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+            let sync_dir = MachineConfig::load()?.sync_dir;
             let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
             let mut discovered =
                 QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;
@@ -147,7 +148,7 @@ impl RulesRemoveArgs {
             return Ok(());
         }
 
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let mut removed_any = false;
         for rules_path in selected_paths {
             if !rules_path.is_file() {

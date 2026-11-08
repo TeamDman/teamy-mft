@@ -1,4 +1,5 @@
 use crate::domain::DriveLetter;
+use crate::machine::MachineConfig;
 use crate::paths::EnsureParentDirExists;
 use eyre::ContextCompat;
 use facet::Facet;
@@ -8,7 +9,6 @@ use std::ops::Deref;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
-use tracing::instrument;
 
 pub const MACHINE_ROOT_DIR_NAME: &str = "teamy_mft";
 pub const MACHINE_CONFIG_FILE_NAME: &str = "machine_config.json";
@@ -34,41 +34,6 @@ pub const DEFAULT_IGNORED_RULES_PATH_PATTERNS: &[&str] = &[
     "**/.cargo/registry/src/**",
     "**/cargo/registry/src/**",
 ];
-
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-pub struct MachineConfig {
-    pub version: u32,
-    pub owner_sid: String,
-    pub sync_dir: FacetPathBuf,
-    pub pipe_name: String,
-    pub service_name: String,
-    pub idle_timeout_secs: u64,
-    #[facet(default)]
-    pub ignored_rules_path_patterns: Vec<String>,
-}
-
-impl MachineConfig {
-    #[must_use]
-    pub fn new(owner_sid: String, sync_dir: Option<PathBuf>) -> Self {
-        Self {
-            version: 1,
-            owner_sid,
-            sync_dir: sync_dir.unwrap_or_else(default_sync_dir).into(),
-            pipe_name: String::from(DEFAULT_PIPE_NAME),
-            service_name: String::from(DEFAULT_SERVICE_NAME),
-            idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
-            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
-        }
-    }
-
-    #[must_use]
-    pub fn with_normalized_defaults(mut self) -> Self {
-        if self.ignored_rules_path_patterns.is_empty() {
-            self.ignored_rules_path_patterns = default_ignored_rules_path_patterns();
-        }
-        self
-    }
-}
 
 #[must_use]
 pub fn default_ignored_rules_path_patterns() -> Vec<String> {
@@ -221,15 +186,6 @@ impl PublishedCheckpoint {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishedDrivePaths {
-    pub drive_letter: DriveLetter,
-    pub mft_path: PathBuf,
-    pub base_index_path: PathBuf,
-    pub overlay_index_path: PathBuf,
-    pub checkpoint_path: PathBuf,
-}
-
 #[must_use]
 pub fn program_data_dir() -> PathBuf {
     std::env::var_os("PROGRAMDATA").map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from)
@@ -248,50 +204,6 @@ pub fn machine_config_path() -> PathBuf {
 #[must_use]
 pub fn default_sync_dir() -> PathBuf {
     machine_root_dir().join("cache")
-}
-
-#[must_use]
-pub fn published_drive_paths(sync_dir: &Path, drive_letter: DriveLetter) -> PublishedDrivePaths {
-    PublishedDrivePaths {
-        drive_letter,
-        mft_path: sync_dir.join(format!("{drive_letter}{MFT_CACHE_FILE_EXTENSION}")),
-        base_index_path: sync_dir.join(format!("{drive_letter}{SEARCH_INDEX_FILE_EXTENSION}")),
-        overlay_index_path: sync_dir.join(format!(
-            "{drive_letter}{OVERLAY_SEARCH_INDEX_FILE_EXTENSION}"
-        )),
-        checkpoint_path: sync_dir.join(format!("{drive_letter}{CHECKPOINT_FILE_EXTENSION}")),
-    }
-}
-
-/// # Errors
-///
-/// Returns an error if the machine config cannot be read or parsed.
-pub fn load_machine_config() -> eyre::Result<Option<MachineConfig>> {
-    let path = machine_config_path();
-    match fs::metadata(&path) {
-        Ok(metadata) if metadata.is_file() => {}
-        Ok(metadata) => {
-            eyre::bail!(
-                "Machine config path {} exists but is not a file; file_type={:?}",
-                path.display(),
-                metadata.file_type()
-            );
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            debug!(path = %path.display(), "Machine config file is not present");
-            return Ok(None);
-        }
-        Err(error) => {
-            return Err(eyre::eyre!(
-                "Failed reading machine config metadata at {}: {error}",
-                path.display()
-            ));
-        }
-    }
-
-    let config = facet_json::from_str::<MachineConfig>(&fs::read_to_string(&path)?)
-        .map_err(|error| eyre::eyre!("Failed parsing {}: {error}", path.display()))?;
-    Ok(Some(config.with_normalized_defaults()))
 }
 
 /// # Errors
@@ -347,54 +259,6 @@ pub fn save_machine_config(config: &MachineConfig) -> eyre::Result<()> {
 
 /// # Errors
 ///
-/// Returns an error if the machine config is not installed or cannot be read.
-#[instrument(level = "debug")]
-#[track_caller]
-pub fn load_required_machine_config() -> eyre::Result<MachineConfig> {
-    load_machine_config()?.wrap_err("Teamy-MFT is not installed. Run `teamy-mft install --help`.")
-}
-
-/// # Errors
-///
-/// Returns an error if the installed machine config exists but cannot be parsed.
-pub fn load_machine_client_config() -> eyre::Result<MachineConfig> {
-    match load_machine_config() {
-        Ok(Some(config)) => Ok(config),
-        Ok(None) => Ok(MachineConfig {
-            version: 1,
-            owner_sid: String::new(),
-            sync_dir: default_sync_dir().into(),
-            pipe_name: String::from(DEFAULT_PIPE_NAME),
-            service_name: String::from(DEFAULT_SERVICE_NAME),
-            idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
-            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
-        }),
-        Err(error) if is_access_denied_error(&error) => Ok(MachineConfig {
-            version: 1,
-            owner_sid: String::new(),
-            sync_dir: default_sync_dir().into(),
-            pipe_name: String::from(DEFAULT_PIPE_NAME),
-            service_name: String::from(DEFAULT_SERVICE_NAME),
-            idle_timeout_secs: DEFAULT_IDLE_TIMEOUT_SECS,
-            ignored_rules_path_patterns: default_ignored_rules_path_patterns(),
-        }),
-        Err(error) => Err(error),
-    }
-}
-
-/// # Errors
-///
-/// Returns an error if the machine cache root is unavailable because install has not been run.
-#[instrument(level = "debug")]
-#[track_caller]
-pub fn load_sync_dir_from_config() -> eyre::Result<PathBuf> {
-    let config = load_required_machine_config()?;
-    debug!(sync_dir = %config.sync_dir.display(), "Resolved machine sync directory");
-    Ok(config.sync_dir.into_inner())
-}
-
-/// # Errors
-///
 /// Returns an error if the checkpoint file cannot be read or parsed.
 pub fn load_checkpoint(path: &Path) -> eyre::Result<Option<PublishedCheckpoint>> {
     if !path.is_file() {
@@ -434,51 +298,4 @@ pub fn is_access_denied_error(error: &eyre::Report) -> bool {
         .chain()
         .filter_map(|source| source.downcast_ref::<io::Error>())
         .any(|source| source.kind() == io::ErrorKind::PermissionDenied)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DEFAULT_IGNORED_RULES_PATH_PATTERNS;
-    use super::MachineConfig;
-
-    #[test]
-    fn new_machine_config_includes_default_ignored_rules_paths() {
-        let config = MachineConfig::new(String::from("owner"), None);
-
-        assert_eq!(
-            config.ignored_rules_path_patterns,
-            super::default_ignored_rules_path_patterns()
-        );
-    }
-
-    #[test]
-    fn legacy_machine_config_without_ignored_rules_paths_still_parses() {
-        let config = facet_json::from_str::<MachineConfig>(
-            r#"{
-                "version": 1,
-                "owner_sid": "owner",
-                "sync_dir": "C:\\ProgramData\\teamy_mft\\cache",
-                "pipe_name": "\\\\.\\pipe\\teamy-mft-daemon",
-                "service_name": "teamy-mft-daemon",
-                "idle_timeout_secs": 300
-            }"#,
-        )
-        .expect("legacy machine config should parse")
-        .with_normalized_defaults();
-
-        assert_eq!(
-            config.ignored_rules_path_patterns,
-            super::default_ignored_rules_path_patterns()
-        );
-        assert!(
-            config
-                .ignored_rules_path_patterns
-                .iter()
-                .any(|pattern| pattern.contains("CARGO_HOME"))
-        );
-        assert_eq!(
-            config.ignored_rules_path_patterns.len(),
-            DEFAULT_IGNORED_RULES_PATH_PATTERNS.len()
-        );
-    }
 }

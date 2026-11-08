@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryFilterRules;
 use crate::query::RULES_FILE_EXTENSION;
@@ -33,7 +34,7 @@ impl ProfileResetArgs {
         let requested_profile = normalize_profile_name(
             (!self.profile.trim().is_empty()).then_some(self.profile.as_str()),
         )?;
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let files =
             QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;

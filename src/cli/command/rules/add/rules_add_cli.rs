@@ -1,4 +1,5 @@
 use crate::cli::command::rules::RulesMutationDirective;
+use crate::machine::MachineConfig;
 use crate::paths::EnsureParentDirExists;
 use crate::query::QueryFilterRules;
 use crate::query::RULES_FILE_EXTENSION;
@@ -88,7 +89,7 @@ impl RulesAddArgs {
             }
         };
 
-        let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+        let sync_dir = MachineConfig::load()?.sync_dir;
         let drive_letters = self.drive_letter_pattern.into_drive_letters()?;
         let mut discovered =
             QueryFilterRules::discover_rule_files_for_drive_letters(&drive_letters, &sync_dir)?;

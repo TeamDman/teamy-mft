@@ -169,11 +169,16 @@ mod tests {
     use crate::read::logical_read_plan::LogicalReadPlan;
     use crate::read::physical_read_plan::PhysicalReadPlan;
     use crate::windows_utils::string::EasyPCWSTR;
+    use std::collections::BTreeSet;
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use std::process::Command;
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "A child test process isolates environment variables without racing other tests; no service management is performed."
+    )]
     fn configured_max_in_flight_io_parses_environment() -> eyre::Result<()> {
         const EXPECTED: &str = "TEAMY_MFT_TEST_EXPECTED_IO_LIMIT";
         if let Ok(expected) = std::env::var(EXPECTED) {
@@ -230,7 +235,7 @@ mod tests {
         let source = tempfile::NamedTempFile::new()?;
         let path = source.path().easy_pcwstr()?;
         let logical = LogicalReadPlan {
-            segments: Default::default(),
+            segments: BTreeSet::new(),
         };
         for (limit, expected) in [
             (ParallelismLimit::Automatic, 32),

@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -20,7 +21,7 @@ impl ServiceLogsArgs {
     ///
     /// Returns an error if the daemon cannot be reached or the log stream cannot be opened.
     pub fn invoke(self) -> eyre::Result<()> {
-        let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+        let config = MachineConfig::load_for_client()?;
         let ready_daemon = crate::machine::ipc::ensure_daemon_ready(&config)?;
         crate::machine::ipc::ensure_rpc_compatibility(&ready_daemon.ping)?;
 

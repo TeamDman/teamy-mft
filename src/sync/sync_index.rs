@@ -1,192 +1,58 @@
+use crate::machine::DriveArtifactInfo;
 use crate::mft::mft_convert_to_path_collection::convert_mft_file_to_path_collection;
 use crate::mft::mft_file::MftFile;
 use crate::search_index::format::SearchIndexHeader;
 use crate::search_index::format::SearchIndexPathRow;
 use crate::search_index::search_index_bytes::SearchIndexBytesMut;
-use crate::sync::DriveSyncInfo;
-use crate::sync::IfExistsOutputBehaviour;
 use eyre::Context;
 use eyre::bail;
-use itertools::Itertools;
 use std::time::Instant;
 use teamy_cancellation::CancellationScope;
-use tracing::debug;
 use tracing::info;
 use tracing::info_span;
-use uom::si::information::byte;
-use uom::si::usize::Information;
 
 #[derive(Debug)]
-pub struct SyncIndex;
+pub(super) struct SyncIndex;
 
 impl SyncIndex {
-    /// Validate the sync can proceed before any index writes begin.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `if_exists` is `Abort` and any index output already exists.
-    pub fn invoke_preflight(
-        drive_infos: Vec<DriveSyncInfo>,
-        if_exists: &IfExistsOutputBehaviour,
-    ) -> eyre::Result<Vec<DriveSyncInfo>> {
-        let mut rtn = Vec::with_capacity(drive_infos.len());
-        for info in drive_infos {
-            let index_exists = info.index_output_path.exists();
-            match (index_exists, if_exists) {
-                (false, _) | (true, IfExistsOutputBehaviour::Overwrite) => {
-                    rtn.push(info);
-                }
-                (true, IfExistsOutputBehaviour::Skip) => {
-                    debug!(
-                        drive = %info.drive_letter,
-                        path = %info.index_output_path.display(),
-                        "Skipping existing index output"
-                    );
-                }
-                (true, IfExistsOutputBehaviour::Abort) => {
-                    bail!(
-                        "Aborting sync: {} already exists",
-                        info.index_output_path.display()
-                    );
-                }
-            }
-        }
-        Ok(rtn)
-    }
-
-    /// Build `.mft_search_index` files from cached MFT snapshots.
-    ///
-    /// Does not call the preflight check.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the sync directory cannot be retrieved, matching drives cannot be
-    /// resolved, or index files cannot be read, built, or written.
-    pub fn invoke(drive_infos: Vec<DriveSyncInfo>, cancel: &CancellationScope) -> eyre::Result<()> {
-        info!(
-            "Building search indexes for drives: {}",
-            drive_infos.iter().map(|info| info.drive_letter).join(", ")
-        );
-
-        for info in drive_infos {
-            let _span = info_span!(
-                "sync_index_for_drive",
-                drive = %info.drive_letter,
-                mft_path = %info.mft_output_path.display(),
-                index_path = %info.index_output_path.display(),
-            )
-            .entered();
-            Self::invoke_for_mft_path(&info, cancel)?;
-        }
-
-        info!("Index sync stage completed");
-
-        Ok(())
-    }
-
-    /// Build a search index from an already-loaded in-memory `MftFile`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if path conversion or index writing fails.
-    pub fn invoke_for_mft_file(info: &DriveSyncInfo, mft_file: &MftFile) -> eyre::Result<()> {
-        let start = Instant::now();
-        info!(
-            drive_letter = %info.drive_letter,
-            mft_path = %info.mft_output_path.display(),
-            "Building search index",
-        );
-        let rows = {
-            let _span = info_span!(
-                "build_search_index_rows",
-                drive = %info.drive_letter,
-                mft_size = %mft_file.size().get::<byte>(),
-            )
-            .entered();
-            Self::build_rows_for_mft_file(info, mft_file)?
-        };
-        let rtn = {
-            let _span = info_span!(
-                "write_search_index_output",
-                drive = %info.drive_letter,
-                row_count = rows.len(),
-                output_path = %info.index_output_path.display(),
-            )
-            .entered();
-            Self::write_index_output(info, mft_file.size(), rows)
-        };
-        info!(
-            drive_letter = %info.drive_letter,
-            mft_path = %info.mft_output_path.display(),
-            "Search index built in {} ms",
-            start.elapsed().as_millis()
-        );
-        rtn.wrap_err_with(|| {
-            format!(
-                "Failed building search index for drive {} from {}",
-                info.drive_letter,
-                info.mft_output_path.display()
-            )
-        })
-    }
-
-    pub(crate) fn invoke_for_mft_path(
-        info: &DriveSyncInfo,
-        cancel: &CancellationScope,
-    ) -> eyre::Result<()> {
-        if !info.mft_output_path.is_file() {
+    pub(super) fn build(info: &DriveArtifactInfo, cancel: &CancellationScope) -> eyre::Result<()> {
+        if !info.mft_path.is_file() {
             bail!(
                 "Cannot build index for drive {}: missing {}",
                 info.drive_letter,
-                info.mft_output_path.display()
+                info.mft_path.display()
             );
         }
 
         let start = Instant::now();
-        info!(drive_letter = %info.drive_letter, mft_path = %info.mft_output_path.display(), "Building search index from cached snapshot");
+        info!(drive_letter = %info.drive_letter, mft_path = %info.mft_path.display(), "Building search index from cached snapshot");
         let mft_file = {
             let _span = info_span!(
                 "load_cached_mft_for_index",
                 drive = %info.drive_letter,
-                mft_path = %info.mft_output_path.display(),
+                mft_path = %info.mft_path.display(),
             )
             .entered();
-            MftFile::from_path(&info.mft_output_path, cancel).wrap_err_with(|| {
+            MftFile::from_path(&info.mft_path, cancel).wrap_err_with(|| {
                 format!(
                     "Failed parsing MFT snapshot for drive {} from {}",
                     info.drive_letter,
-                    info.mft_output_path.display()
+                    info.mft_path.display()
                 )
             })?
         };
 
         let mft_size = mft_file.size();
-        let rows = Self::build_rows_for_mft_file(info, &mft_file)?;
-        drop(mft_file);
-        eyre::ensure!(
-            !cancel.is_cancelled(),
-            "Cancelled before publishing index for drive {}",
-            info.drive_letter
-        );
-        let result = Self::write_index_output(info, mft_size, rows);
-        info!(drive_letter = %info.drive_letter, elapsed_ms = start.elapsed().as_millis(), "Cached search index build finished");
-        result
-    }
-
-    fn build_rows_for_mft_file(
-        info: &DriveSyncInfo,
-        mft_file: &MftFile,
-    ) -> eyre::Result<Vec<SearchIndexPathRow>> {
-        let files = convert_mft_file_to_path_collection(info.drive_letter, mft_file)
+        let files = convert_mft_file_to_path_collection(info.drive_letter, &mft_file)
             .wrap_err_with(|| {
                 format!(
                     "Failed processing MFT data for drive {} from {}",
                     info.drive_letter,
-                    info.mft_output_path.display()
+                    info.mft_path.display()
                 )
             })?;
 
-        Ok(files
+        let rows = files
             .0
             .into_iter()
             .flatten()
@@ -194,25 +60,26 @@ impl SyncIndex {
                 path: path.path.to_string_lossy().into_owned().into(),
                 has_deleted_entries: path.has_deleted_entries(),
             })
-            .collect())
-    }
-
-    fn write_index_output(
-        info: &DriveSyncInfo,
-        mft_size: Information,
-        rows: Vec<SearchIndexPathRow>,
-    ) -> eyre::Result<()> {
+            .collect::<Vec<_>>();
+        drop(mft_file);
+        eyre::ensure!(
+            !cancel.is_cancelled(),
+            "Cancelled before publishing index for drive {}",
+            info.drive_letter
+        );
         SearchIndexBytesMut::from_owned_rows(
-            SearchIndexHeader::new(info.drive_letter, mft_size, rows.len() as u64),
+            SearchIndexHeader::new(info.drive_letter, mft_size, u64::try_from(rows.len())?),
             rows,
         )?
-        .write_to_path(&info.index_output_path)
+        .write_to_path(&info.base_index_path)
         .wrap_err_with(|| {
             format!(
                 "Failed writing index output for drive {} to {}",
                 info.drive_letter,
-                info.index_output_path.display()
+                info.base_index_path.display()
             )
-        })
+        })?;
+        info!(drive_letter = %info.drive_letter, elapsed_ms = start.elapsed().as_millis(), "Cached search index build finished");
+        Ok(())
     }
 }

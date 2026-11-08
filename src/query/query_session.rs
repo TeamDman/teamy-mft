@@ -1,7 +1,7 @@
 use super::query_runtime::QueryRowVisitor;
 use crate::domain::DriveLetter;
-use crate::machine::config::load_sync_dir_from_config;
-use crate::machine::config::published_drive_paths;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineConfig;
 use crate::query::Pathlike;
 use crate::query::QueryFilterRules;
 use crate::query::QueryPlan;
@@ -18,7 +18,6 @@ use crate::search_index::search_index_bytes::ParsedSearchIndex;
 use crate::search_index::search_index_bytes::SearchIndexBytes;
 use eyre::Context;
 use eyre::ContextCompat;
-use eyre::ensure;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -59,7 +58,7 @@ impl QuerySession {
     pub fn local() -> eyre::Result<Self> {
         Ok(Self {
             backend: QuerySessionBackend::Local,
-            sync_dir: load_sync_dir_from_config()?,
+            sync_dir: MachineConfig::load()?.sync_dir.into_inner(),
             published_index_cache: HashMap::new(),
         })
     }
@@ -71,7 +70,7 @@ impl QuerySession {
     pub fn daemon_rpc() -> eyre::Result<Self> {
         Ok(Self {
             backend: QuerySessionBackend::DaemonRpc,
-            sync_dir: load_sync_dir_from_config()?,
+            sync_dir: MachineConfig::load()?.sync_dir.into_inner(),
             published_index_cache: HashMap::new(),
         })
     }
@@ -161,7 +160,7 @@ impl QuerySession {
         let mut selected_drives = Vec::with_capacity(drive_letters.len());
         for drive in drive_letters {
             if skip_missing && !self.published_index_cache.contains_key(&drive) {
-                let path = published_drive_paths(&self.sync_dir, drive).base_index_path;
+                let path = DriveArtifactInfo::new(&self.sync_dir, drive).base_index_path;
                 match std::fs::metadata(&path) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         tracing::warn!(drive = %drive, index_path = %path.display(),
@@ -223,13 +222,8 @@ impl QuerySession {
 
 impl CachedPublishedDriveQuery {
     fn load(drive: DriveLetter, sync_dir: &std::path::Path) -> eyre::Result<Self> {
-        let paths = published_drive_paths(sync_dir, drive);
-        ensure!(
-            paths.base_index_path.is_file(),
-            "Fast query requires {}. Run `teamy-mft sync index --drive-pattern {}` first.",
-            paths.base_index_path.display(),
-            drive
-        );
+        let paths = DriveArtifactInfo::new(sync_dir, drive);
+        paths.require_base_search_index()?;
 
         let base_index = MappedSearchIndex::open(&paths.base_index_path).wrap_err_with(|| {
             format!(
@@ -438,7 +432,7 @@ mod tests {
     use super::QuerySession;
     use crate::cancellation::CancellationToken;
     use crate::domain::DriveLetter;
-    use crate::machine::config::published_drive_paths;
+    use crate::machine::DriveArtifactInfo;
     use crate::query::QueryPlan;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
@@ -469,7 +463,7 @@ mod tests {
         drive: DriveLetter,
         rows: &[SearchIndexPathRow],
     ) -> eyre::Result<()> {
-        let paths = published_drive_paths(temp_dir.path(), drive);
+        let paths = DriveArtifactInfo::new(temp_dir.path(), drive);
         std::fs::create_dir_all(
             paths
                 .base_index_path
@@ -489,7 +483,7 @@ mod tests {
         drive: DriveLetter,
         rows: &[SearchIndexPathRow],
     ) -> eyre::Result<()> {
-        let paths = published_drive_paths(temp_dir.path(), drive);
+        let paths = DriveArtifactInfo::new(temp_dir.path(), drive);
         std::fs::create_dir_all(
             paths
                 .overlay_index_path
@@ -762,6 +756,162 @@ mod tests {
         })
     }
 
+    #[test]
+    fn wildcard_query_ignores_inactive_orphaned_git_root_rules() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let review_config = temp.path().join("staged-review").join(".config");
+        std::fs::create_dir_all(&review_config)?;
+        let rule_path = review_config.join("sample.teamy-mft.teamy_mft_rules");
+        std::fs::write(
+            &rule_path,
+            "DEFAULT RULE IS EXCLUDE\n\nORDER 2 INCLUDE {GIT_ROOT}\n",
+        )?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[
+                SearchIndexPathRow {
+                    path: rule_path.to_string_lossy().into_owned().into(),
+                    has_deleted_entries: false,
+                },
+                SearchIndexPathRow {
+                    path: r"C:\Photos\20181226_145513.jpg".into(),
+                    has_deleted_entries: false,
+                },
+                SearchIndexPathRow {
+                    path: r"C:\Recipes\hotsauce.txt".into(),
+                    has_deleted_entries: false,
+                },
+            ],
+        )?;
+
+        for (query, expected) in [
+            ("20181226_145513.jpg", r"C:\Photos\20181226_145513.jpg"),
+            ("hotsauce", r"C:\Recipes\hotsauce.txt"),
+        ] {
+            let rows = collect_selected_fixture_paths(
+                &temp,
+                &QueryPlan::new(query),
+                vec![DriveLetter::L, DriveLetter::C],
+            )?;
+            assert_eq!(rows, [expected]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn wildcard_query_ignores_inactive_profile_syntax_errors() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let rule_path = temp.path().join("broken.teamy-mft.teamy_mft_rules");
+        std::fs::write(&rule_path, "THIS IS NOT A RULE\n")?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[
+                SearchIndexPathRow {
+                    path: rule_path.to_string_lossy().into_owned().into(),
+                    has_deleted_entries: false,
+                },
+                SearchIndexPathRow {
+                    path: r"C:\Recipes\hotsauce.txt".into(),
+                    has_deleted_entries: false,
+                },
+            ],
+        )?;
+        let rows = collect_selected_fixture_paths(
+            &temp,
+            &QueryPlan::new("hotsauce"),
+            vec![DriveLetter::C],
+        )?;
+        assert_eq!(rows, [r"C:\Recipes\hotsauce.txt"]);
+        Ok(())
+    }
+
+    #[test]
+    fn wildcard_query_ignores_inactive_profile_invalid_utf8() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let rule_path = temp.path().join("broken.teamy-mft.teamy_mft_rules");
+        std::fs::write(&rule_path, [0xff, 0xfe])?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[
+                SearchIndexPathRow {
+                    path: rule_path.to_string_lossy().into_owned().into(),
+                    has_deleted_entries: false,
+                },
+                SearchIndexPathRow {
+                    path: r"C:\Recipes\hotsauce.txt".into(),
+                    has_deleted_entries: false,
+                },
+            ],
+        )?;
+        let rows = collect_selected_fixture_paths(
+            &temp,
+            &QueryPlan::new("hotsauce"),
+            vec![DriveLetter::C],
+        )?;
+        assert_eq!(rows, [r"C:\Recipes\hotsauce.txt"]);
+        Ok(())
+    }
+
+    #[test]
+    fn selected_orphaned_git_root_rules_keep_their_error() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let rule_path = temp.path().join("sample.teamy-mft.teamy_mft_rules");
+        std::fs::write(
+            &rule_path,
+            "DEFAULT RULE IS EXCLUDE\n\nORDER 2 INCLUDE {GIT_ROOT}\n",
+        )?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[SearchIndexPathRow {
+                path: rule_path.to_string_lossy().into_owned().into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        let plan = QueryPlan {
+            profile: Some("teamy-mft".into()),
+            ..QueryPlan::new("20181226_145513.jpg")
+        };
+        let error = collect_selected_fixture_paths(&temp, &plan, vec![DriveLetter::C])
+            .expect_err("selected invalid rules must still fail the query");
+        let report = format!("{error:#}");
+        assert!(report.contains("uses {GIT_ROOT} but no enclosing git root was found"));
+        assert!(report.contains("sample.teamy-mft.teamy_mft_rules:3"));
+        assert!(!report.contains("Fast query requires"), "{report}");
+        assert!(!report.contains("Run `teamy-mft sync"), "{report}");
+        Ok(())
+    }
+
+    #[test]
+    fn global_orphaned_git_root_rules_keep_their_error() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let rule_path = temp.path().join("sample.teamy_mft_rules");
+        std::fs::write(&rule_path, "INCLUDE {GIT_ROOT}\n")?;
+        write_drive_index(
+            &temp,
+            DriveLetter::C,
+            &[SearchIndexPathRow {
+                path: rule_path.to_string_lossy().into_owned().into(),
+                has_deleted_entries: false,
+            }],
+        )?;
+        let error = collect_selected_fixture_paths(
+            &temp,
+            &QueryPlan::new("hotsauce"),
+            vec![DriveLetter::C],
+        )
+        .expect_err("invalid global rules must still fail the default query");
+        let report = format!("{error:#}");
+        assert!(report.contains("uses {GIT_ROOT} but no enclosing git root was found"));
+        assert!(report.contains("sample.teamy_mft_rules:1"));
+        assert!(!report.contains("Fast query requires"), "{report}");
+        assert!(!report.contains("Run `teamy-mft sync"), "{report}");
+        Ok(())
+    }
+
     struct QueryWarningCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
     impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for QueryWarningCounter {
@@ -870,20 +1020,21 @@ mod tests {
     fn wildcard_query_does_not_skip_corrupt_or_nonfile_indexes() -> eyre::Result<()> {
         for directory in [false, true] {
             let temp = tempfile::tempdir()?;
-            let path = published_drive_paths(temp.path(), DriveLetter::L).base_index_path;
+            let path = DriveArtifactInfo::new(temp.path(), DriveLetter::L).base_index_path;
             if directory {
                 std::fs::create_dir(&path)?;
             } else {
                 std::fs::write(&path, b"corrupt index")?;
             }
-            assert!(
-                collect_selected_fixture_paths(
-                    &temp,
-                    &QueryPlan::new("Cargo.toml"),
-                    vec![DriveLetter::L]
-                )
-                .is_err()
-            );
+            let error = collect_selected_fixture_paths(
+                &temp,
+                &QueryPlan::new("Cargo.toml"),
+                vec![DriveLetter::L],
+            )
+            .expect_err("corrupt indexes and index directories should fail wildcard queries");
+            let report = format!("{error:#}");
+            assert!(!report.contains("Fast query requires"), "{report}");
+            assert!(!report.contains("Run `teamy-mft sync"), "{report}");
         }
         Ok(())
     }
@@ -900,22 +1051,21 @@ mod tests {
             }],
         )?;
         std::fs::write(
-            published_drive_paths(temp.path(), DriveLetter::C).overlay_index_path,
+            DriveArtifactInfo::new(temp.path(), DriveLetter::C).overlay_index_path,
             b"corrupt overlay",
         )?;
-        assert!(
-            collect_selected_fixture_paths(
-                &temp,
-                &QueryPlan::new("Cargo.toml"),
-                vec![DriveLetter::L, DriveLetter::C]
-            )
-            .is_err()
-        );
+        let _error = collect_selected_fixture_paths(
+            &temp,
+            &QueryPlan::new("Cargo.toml"),
+            vec![DriveLetter::L, DriveLetter::C],
+        )
+        .expect_err("corrupt overlays should fail wildcard queries");
         let plan = QueryPlan {
             profile: Some("undiscovered-profile".into()),
             ..QueryPlan::new("Cargo.toml")
         };
-        assert!(collect_selected_fixture_paths(&temp, &plan, vec![DriveLetter::L]).is_err());
+        let _error = collect_selected_fixture_paths(&temp, &plan, vec![DriveLetter::L])
+            .expect_err("undiscovered profiles should fail wildcard queries");
         Ok(())
     }
 }

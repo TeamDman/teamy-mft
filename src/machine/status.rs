@@ -1,11 +1,10 @@
 use crate::domain::DriveLetter;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineConfig;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
-use crate::machine::config::MachineConfig;
 use crate::machine::config::PublishedCheckpoint;
 use crate::machine::config::is_access_denied_error;
 use crate::machine::config::load_checkpoint;
-use crate::machine::config::load_machine_config;
-use crate::machine::config::published_drive_paths;
 use crate::machine::security::current_user_sid_string;
 use crate::machine::service::WindowsServiceState;
 use crate::machine::service::query_service_state;
@@ -61,7 +60,7 @@ pub struct PublishedDriveSummary {
 pub fn load_machine_status(
     drive_letter_pattern: &DriveLetterPattern,
 ) -> eyre::Result<MachineStatus> {
-    let (config, config_warning) = match load_machine_config() {
+    let (config, config_warning) = match MachineConfig::load_if_present() {
         Ok(config) => (config, None),
         Err(error) if is_access_denied_error(&error) => (
             None,
@@ -91,7 +90,7 @@ pub fn load_machine_status(
             .into_drive_letters()?
             .into_iter()
             .map(|drive_letter| {
-                let paths = published_drive_paths(&config.sync_dir, drive_letter);
+                let paths = DriveArtifactInfo::new(&config.sync_dir, drive_letter);
                 let (mft_modified_at, mft_warning) =
                     modified_at(&paths.mft_path, "mft snapshot metadata")?;
                 let (base_index_modified_at, base_index_warning) =
@@ -210,7 +209,7 @@ pub fn collect_published_drive_summaries(
         .into_drive_letters()?
         .into_iter()
         .map(|drive_letter| {
-            let paths = published_drive_paths(sync_dir, drive_letter);
+            let paths = DriveArtifactInfo::new(sync_dir, drive_letter);
             let (mft_modified_at, mft_warning) =
                 modified_at(&paths.mft_path, "mft snapshot metadata")?;
             let (base_index_modified_at, base_index_warning) =

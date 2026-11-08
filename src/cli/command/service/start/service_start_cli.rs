@@ -1,5 +1,5 @@
+use crate::machine::MachineConfig;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
-use crate::machine::ipc::load_machine_daemon_client_config;
 use crate::machine::service::start_service_if_needed;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -12,7 +12,7 @@ impl ServiceStartArgs {
     ///
     /// Returns an error if the service cannot be started.
     pub fn invoke(self) -> eyre::Result<()> {
-        let config = load_machine_daemon_client_config()?;
+        let config = MachineConfig::load_for_client()?;
         let service_name = if config.service_name.is_empty() {
             DEFAULT_SERVICE_NAME
         } else {

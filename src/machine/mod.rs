@@ -1,13 +1,21 @@
 pub mod config;
 pub mod daemon;
 pub mod daemon_log;
+mod drive_artifact_info;
+mod drive_artifact_info_collection;
 pub mod ipc;
 pub mod live_drive_state;
+mod machine_cache_sync_request;
+mod machine_cache_sync_result;
+mod machine_config;
 pub mod security;
 pub mod service;
 pub mod status;
 pub mod usn;
 
-pub use config::MachineConfig;
 pub use config::PublishedCheckpoint;
-pub use config::PublishedDrivePaths;
+pub use drive_artifact_info::DriveArtifactInfo;
+pub use drive_artifact_info_collection::DriveArtifactInfoCollection;
+pub use machine_cache_sync_request::MachineCacheSyncRequest;
+pub use machine_cache_sync_result::MachineCacheSyncResult;
+pub use machine_config::MachineConfig;

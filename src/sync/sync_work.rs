@@ -1,19 +1,23 @@
+use crate::domain::DriveLetter;
 use crate::domain::ParallelismLimit;
-use crate::sync::DriveSyncInfo;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::DriveArtifactInfoCollection;
 use crate::sync::IfExistsOutputBehaviour;
+use crate::sync::SyncDecision;
 use crate::sync::SyncIndex;
 use crate::sync::SyncMft;
 use futures::StreamExt;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use teamy_cancellation::CancellationScope;
 use tracing::Span;
+use tracing::debug;
 use tracing::info_span;
 
 #[derive(Debug)]
 pub struct SyncWork {
-    pub mft_drives: Vec<DriveSyncInfo>,
-    pub index_drives: Vec<DriveSyncInfo>,
+    drives: BTreeMap<DriveLetter, (DriveArtifactInfo, SyncDecision)>,
 }
 
 impl SyncWork {
@@ -23,47 +27,53 @@ impl SyncWork {
     ///
     /// Returns an error when `Abort` encounters an existing MFT or base index.
     pub fn prepare(
-        drive_infos: Vec<DriveSyncInfo>,
-        if_exists: &IfExistsOutputBehaviour,
+        drive_infos: DriveArtifactInfoCollection,
+        if_exists: IfExistsOutputBehaviour,
     ) -> eyre::Result<Self> {
-        let index_drives = SyncIndex::invoke_preflight(drive_infos.clone(), if_exists)?;
-        let mut mft_drives = SyncMft::invoke_preflight(drive_infos, if_exists)?;
-        // A retained base index must keep its matching MFT snapshot and sidecars.
-        mft_drives.retain(|info| {
-            index_drives
-                .iter()
-                .any(|index| index.drive_letter == info.drive_letter)
-        });
-        Ok(Self {
-            mft_drives,
-            index_drives,
-        })
+        let mut drives = BTreeMap::new();
+        for info in drive_infos {
+            let decision = match if_exists {
+                IfExistsOutputBehaviour::Abort => {
+                    for path in [&info.base_index_path, &info.mft_path] {
+                        eyre::ensure!(
+                            !path.exists(),
+                            "Aborting sync: {} already exists",
+                            path.display()
+                        );
+                    }
+                    SyncDecision::MftAndIndex
+                }
+                IfExistsOutputBehaviour::Skip if info.base_index_path.exists() => {
+                    // Retain the matching snapshot and sidecars with the base index.
+                    debug!(drive = %info.drive_letter, path = %info.base_index_path.display(), "Skipping existing index output");
+                    SyncDecision::Skip
+                }
+                IfExistsOutputBehaviour::Skip if info.mft_path.exists() => {
+                    debug!(drive = %info.drive_letter, path = %info.mft_path.display(), "Using existing MFT snapshot for indexing");
+                    SyncDecision::Index
+                }
+                IfExistsOutputBehaviour::Overwrite | IfExistsOutputBehaviour::Skip => {
+                    SyncDecision::MftAndIndex
+                }
+            };
+            drives.insert(info.drive_letter, (info, decision));
+        }
+        Ok(Self { drives })
     }
 
     /// # Errors
     ///
     /// Returns acquisition, indexing or worker errors after draining all work.
     pub async fn execute(
-        self,
+        &self,
         parallel: ParallelismLimit,
         console_pid: Option<u32>,
         cancel: &CancellationScope,
     ) -> eyre::Result<()> {
-        let SyncWork {
-            mft_drives,
-            index_drives,
-        } = self;
-        let fresh_letters = mft_drives
-            .iter()
-            .map(|info| info.drive_letter)
-            .collect::<BTreeSet<_>>();
-        let index_letters = index_drives
-            .iter()
-            .map(|info| info.drive_letter)
-            .collect::<BTreeSet<_>>();
-        let retained = index_drives
-            .into_iter()
-            .filter(|info| !fresh_letters.contains(&info.drive_letter));
+        let mft_already_exists = self
+            .values()
+            .filter(|(_, decision)| *decision == SyncDecision::Index)
+            .map(|(info, _)| Ok(info.clone()));
         // A private pool bounds Rayon scans, fixups and path resolution as well as drive jobs.
         // Never change the daemon's global Rayon pool or its live-query worker policy.
         let builder = rayon::ThreadPoolBuilder::new();
@@ -81,19 +91,22 @@ impl SyncWork {
             parallel,
             "Syncing drives with parallel streaming reads and bounded indexing"
         );
-        let snapshots = SyncMft::invoke(mft_drives, console_pid, cancel.clone())?;
-        let ready = futures::stream::select(snapshots, futures::stream::iter(retained.map(Ok)));
+        let snapshots = SyncMft::invoke(
+            self.values().filter_map(|(info, decision)| {
+                (*decision == SyncDecision::MftAndIndex).then_some(info)
+            }),
+            console_pid,
+            cancel.clone(),
+        )?;
+        let ready = futures::stream::select(snapshots, futures::stream::iter(mft_already_exists));
         let cancel = cancel.clone();
         Self::build_ready_indexes(ready, pool, move |info| {
-            if !index_letters.contains(&info.drive_letter) {
-                return Ok(());
-            }
             eyre::ensure!(
                 !cancel.is_cancelled(),
                 "Cancelled before indexing drive {}",
                 info.drive_letter
             );
-            SyncIndex::invoke_for_mft_path(&info, &cancel)
+            SyncIndex::build(&info, &cancel)
         })
         .await
     }
@@ -104,8 +117,8 @@ impl SyncWork {
         build: F,
     ) -> eyre::Result<()>
     where
-        S: futures::Stream<Item = eyre::Result<DriveSyncInfo>>,
-        F: Fn(DriveSyncInfo) -> eyre::Result<()> + Send + Sync + 'static,
+        S: futures::Stream<Item = eyre::Result<DriveArtifactInfo>>,
+        F: Fn(DriveArtifactInfo) -> eyre::Result<()> + Send + Sync + 'static,
     {
         let parallel = pool.current_num_threads();
         let build = Arc::new(build);
@@ -128,14 +141,20 @@ impl SyncWork {
                             return Ok(());
                         }
                         let parent = Span::current();
+                        let dispatch = tracing::dispatcher::get_default(Clone::clone);
                         tokio::task::spawn_blocking(move || {
-                            let _parent = parent.enter();
-                            let _span = info_span!(
-                                "build_cached_search_index_for_drive",
-                                drive = %info.drive_letter,
-                            )
-                            .entered();
-                            pool.install(|| build(info))
+                            pool.install(|| {
+                                // Rayon runs on another thread; enter the RPC context there.
+                                tracing::dispatcher::with_default(&dispatch, || {
+                                    let _parent = parent.enter();
+                                    let _span = info_span!(
+                                        "build_cached_search_index_for_drive",
+                                        drive = %info.drive_letter,
+                                    )
+                                    .entered();
+                                    build(info)
+                                })
+                            })
                         })
                         .await
                         .map_err(|error| eyre::eyre!("Failed joining index task: {error}"))?
@@ -163,10 +182,18 @@ impl SyncWork {
     }
 }
 
+impl Deref for SyncWork {
+    type Target = BTreeMap<DriveLetter, (DriveArtifactInfo, SyncDecision)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.drives
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DriveLetter;
+    use std::collections::BTreeSet;
     use std::sync::Condvar;
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
@@ -184,6 +211,47 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn mixed_drive_decisions_keep_artifacts_attached_and_skips_visible() -> eyre::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let infos = DriveArtifactInfoCollection::resolve(
+            temp.path(),
+            [
+                DriveLetter::G,
+                DriveLetter::E,
+                DriveLetter::C,
+                DriveLetter::D,
+                DriveLetter::C,
+            ],
+        )?;
+        std::fs::write(&infos[&DriveLetter::C].mft_path, b"cached MFT")?;
+        std::fs::write(&infos[&DriveLetter::D].base_index_path, b"retained index")?;
+        std::fs::write(&infos[&DriveLetter::E].mft_path, b"retained MFT")?;
+        std::fs::write(&infos[&DriveLetter::E].base_index_path, b"retained index")?;
+
+        let work = SyncWork::prepare(infos, IfExistsOutputBehaviour::Skip)?;
+
+        assert_eq!(
+            work.iter()
+                .map(|(&drive, (_, decision))| (drive, *decision))
+                .collect::<Vec<_>>(),
+            [
+                (DriveLetter::C, SyncDecision::Index),
+                (DriveLetter::D, SyncDecision::Skip),
+                (DriveLetter::E, SyncDecision::Skip),
+                (DriveLetter::G, SyncDecision::MftAndIndex),
+            ]
+        );
+        for (&drive, (info, _)) in work.iter() {
+            assert_eq!(drive, info.drive_letter);
+            assert_eq!(*info, DriveArtifactInfo::new(temp.path(), drive));
+        }
+        assert!(!work[&DriveLetter::G].0.mft_path.exists());
+        assert!(!work[&DriveLetter::D].0.mft_path.exists());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn cached_index_outputs_match_at_parallel_one_two_and_auto() -> eyre::Result<()> {
         crate::cancellation::CancellationToken::new()
@@ -191,23 +259,23 @@ mod tests {
                 let mut expected = Vec::new();
                 for parallel in [1, 2, 0] {
                     let temp = tempfile::tempdir()?;
-                    let infos =
-                        crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
-                            temp.path(),
-                            [DriveLetter::C, DriveLetter::D, DriveLetter::G],
-                        )?;
-                    for info in &infos {
-                        std::fs::write(&info.mft_output_path, crate::mft::sample_mft_records())?;
+                    let infos = DriveArtifactInfoCollection::resolve(
+                        temp.path(),
+                        [DriveLetter::C, DriveLetter::D, DriveLetter::G],
+                    )?;
+                    for info in infos.values() {
+                        std::fs::write(&info.mft_path, crate::mft::sample_mft_records())?;
                     }
-                    let work = SyncWork::prepare(infos.clone(), &IfExistsOutputBehaviour::Skip)?;
+                    let work = SyncWork::prepare(infos, IfExistsOutputBehaviour::Skip)?;
                     assert!(
-                        work.mft_drives.is_empty(),
+                        work.values()
+                            .all(|(_, decision)| *decision == SyncDecision::Index),
                         "fixture must never open a volume"
                     );
                     work.execute(parallel.into(), None, &scope).await?;
-                    let bytes = infos
-                        .iter()
-                        .map(|info| std::fs::read(&info.index_output_path))
+                    let bytes = work
+                        .values()
+                        .map(|(info, _)| std::fs::read(&info.base_index_path))
                         .collect::<std::io::Result<Vec<_>>>()?;
                     if parallel == 1 {
                         expected = bytes;
@@ -219,12 +287,59 @@ mod tests {
             })
             .await
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn index_logs_keep_the_rpc_subscriber_and_correlation_on_rayon() -> eyre::Result<()> {
+        use crate::daemon::CorrelationId;
+        use crate::machine::daemon_log::DaemonTraceLayer;
+        use crate::machine::daemon_log::snapshot_for_correlation;
+        use tracing::Instrument;
+        use tracing::instrument::WithSubscriber;
+        use tracing_subscriber::prelude::*;
+
+        let temp = tempfile::tempdir()?;
+        let infos = DriveArtifactInfoCollection::resolve(temp.path(), [DriveLetter::C])?;
+        let correlation_id = CorrelationId::new();
+        let dispatch =
+            tracing::Dispatch::new(tracing_subscriber::registry().with(DaemonTraceLayer));
+        let span = tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info_span!(
+                "daemon_rpc",
+                correlation_id = %correlation_id,
+                rpc_method = "sync",
+            )
+        });
+        SyncWork::build_ready_indexes(
+            futures::stream::iter(infos.into_iter().map(Ok)),
+            Arc::new(rayon::ThreadPoolBuilder::new().num_threads(1).build()?),
+            |_| {
+                tracing::info!("index worker correlation probe");
+                Ok(())
+            },
+        )
+        .instrument(span)
+        .with_subscriber(dispatch)
+        .await?;
+
+        let events = snapshot_for_correlation(&correlation_id);
+        let event = events
+            .iter()
+            .find(|event| event.message == "index worker correlation probe")
+            .expect("index logs must reach the RPC subscriber with its correlation ID");
+        assert_eq!(event.method, "sync");
+        assert!(
+            event.spans.iter().any(|span| span.name == "daemon_rpc"),
+            "index event must retain its RPC span: {event:#?}"
+        );
+        Ok(())
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn ready_indexes_run_on_distinct_rayon_threads_with_the_resolved_limit()
     -> eyre::Result<()> {
         for parallel in [1, 2] {
             let temp = tempfile::tempdir()?;
-            let infos = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
+            let infos = DriveArtifactInfoCollection::resolve(
                 temp.path(),
                 [
                     DriveLetter::C,
@@ -289,11 +404,9 @@ mod tests {
             assert_eq!(threads.len(), parallel);
             assert_eq!(workers.len(), parallel);
             assert_eq!(active.load(Ordering::SeqCst), parallel);
-            assert!(
-                tokio::time::timeout(Duration::from_millis(50), started_rx.recv())
-                    .await
-                    .is_err()
-            );
+            tokio::time::timeout(Duration::from_millis(50), started_rx.recv())
+                .await
+                .expect_err("no additional index job may start while all workers are occupied");
             drop(release);
             tokio::time::timeout(Duration::from_secs(5), job).await???;
             assert_eq!(peak.load(Ordering::SeqCst), parallel);
@@ -305,12 +418,10 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn acquisition_failure_drains_real_index_and_acquisition_workers() -> eyre::Result<()> {
         let temp = tempfile::tempdir()?;
-        let mut infos = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
-            temp.path(),
-            [DriveLetter::C, DriveLetter::G],
-        )?;
-        let acquisition_info = infos.pop().unwrap();
-        let index_info = infos.pop().unwrap();
+        let infos =
+            DriveArtifactInfoCollection::resolve(temp.path(), [DriveLetter::C, DriveLetter::G])?;
+        let acquisition_info = infos.get(&DriveLetter::G).unwrap().clone();
+        let index_info = infos.get(&DriveLetter::C).unwrap().clone();
         let index_gate = Arc::new((Mutex::new(false), Condvar::new()));
         let acquisition_gate = Arc::new((Mutex::new(false), Condvar::new()));
         let release_index = ReleaseWorkersOnDrop(vec![Arc::clone(&index_gate)]);
@@ -382,17 +493,13 @@ mod tests {
             );
         }
         assert_eq!(started, BTreeSet::from(["acquisition", "index"]));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut job)
-                .await
-                .is_err()
-        );
+        tokio::time::timeout(Duration::from_millis(50), &mut job)
+            .await
+            .expect_err("sync must wait for the active index and acquisition workers");
         drop(release_index);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut job)
-                .await
-                .is_err()
-        );
+        tokio::time::timeout(Duration::from_millis(50), &mut job)
+            .await
+            .expect_err("sync must keep waiting for the acquisition after indexing finishes");
         drop(release_acquisition);
         let error = tokio::time::timeout(Duration::from_secs(5), job)
             .await??
@@ -408,10 +515,8 @@ mod tests {
     async fn ready_index_overlaps_a_blocking_acquisition_on_a_single_thread_runtime()
     -> eyre::Result<()> {
         let temp = tempfile::tempdir()?;
-        let infos = crate::sync::drive_sync_info::resolve_drive_infos_in_dir_for_letters(
-            temp.path(),
-            [DriveLetter::C, DriveLetter::D],
-        )?;
+        let infos =
+            DriveArtifactInfoCollection::resolve(temp.path(), [DriveLetter::C, DriveLetter::D])?;
         let acquisition_gate = Arc::new((Mutex::new(false), Condvar::new()));
         let release_acquisition = ReleaseWorkersOnDrop(vec![Arc::clone(&acquisition_gate)]);
         let acquisition_thread = Arc::new((Mutex::new(None), Condvar::new()));
@@ -487,11 +592,9 @@ mod tests {
                 .expect("ready snapshot must start indexing before the other read finishes");
         assert_ne!(read_thread, index_thread);
         assert_ne!(index_thread, std::thread::current().id());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut job)
-                .await
-                .is_err()
-        );
+        tokio::time::timeout(Duration::from_millis(50), &mut job)
+            .await
+            .expect_err("sync must wait for the drive acquisition still in progress");
         drop(release_acquisition);
         tokio::time::timeout(Duration::from_secs(5), job).await???;
         assert_eq!(index_count.load(Ordering::SeqCst), 2);

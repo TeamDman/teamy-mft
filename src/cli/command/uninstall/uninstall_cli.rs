@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -14,8 +15,7 @@ impl UninstallArgs {
     ///
     /// Returns an error if service removal fails.
     pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
-        let sync_dir = crate::machine::config::load_machine_config()?
-            .map(|config| config.sync_dir.into_inner());
+        let sync_dir = MachineConfig::load_if_present()?.map(|config| config.sync_dir.into_inner());
         crate::cli::command::service::ServiceUninstallArgs { purge: self.purge }
             .invoke(console_pid)?;
         if !self.purge

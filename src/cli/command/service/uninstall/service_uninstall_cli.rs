@@ -1,5 +1,5 @@
+use crate::machine::MachineConfig;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
-use crate::machine::config::load_machine_config;
 use crate::machine::config::machine_config_path;
 use crate::machine::config::machine_root_dir;
 use crate::machine::service::uninstall_windows_service;
@@ -21,7 +21,7 @@ impl ServiceUninstallArgs {
     /// Returns an error if elevation or service removal fails.
     pub fn invoke(self, console_pid: Option<u32>) -> eyre::Result<()> {
         ensure_elevated(console_pid)?;
-        let config = load_machine_config()?;
+        let config = MachineConfig::load_if_present()?;
         let service_name = config.as_ref().map_or_else(
             || String::from(DEFAULT_SERVICE_NAME),
             |config| config.service_name.clone(),

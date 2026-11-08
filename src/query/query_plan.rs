@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::query::DEFAULT_PROFILE_NAME;
 use crate::query::QueryLimit;
 use crate::query::QueryRule;
@@ -81,7 +82,7 @@ impl QueryPlan {
     /// logical default profile or if the selected profile name is invalid.
     pub fn ensure_selected_profile_allowed(&self) -> eyre::Result<()> {
         let current_sid = crate::machine::security::current_user_sid_string()?;
-        let machine_config = crate::machine::config::load_machine_client_config()?;
+        let machine_config = MachineConfig::load_for_client()?;
         let is_in_builtin_administrators =
             crate::windows_utils::elevation::is_in_builtin_administrators()?;
         self.ensure_selected_profile_allowed_for_identity(
@@ -253,7 +254,8 @@ mod tests {
     #[test]
     fn empty_inputs_are_rejected() {
         let query_inputs = vec![String::new(), "|".to_owned()];
-        assert!(QueryPlan::parse_inputs(&query_inputs).is_err());
+        let _error = QueryPlan::parse_inputs(&query_inputs)
+            .expect_err("empty query inputs should be rejected");
     }
 
     #[test]

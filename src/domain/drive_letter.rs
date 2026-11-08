@@ -168,8 +168,8 @@ impl Display for DriveLetter {
 }
 
 impl<'a> Arbitrary<'a> for DriveLetter {
-    fn arbitrary(input: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Self(char::from(input.int_in_range(b'A'..=b'Z')?)))
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        Ok(Self(char::from(u.int_in_range(b'A'..=b'Z')?)))
     }
 }
 
@@ -196,7 +196,8 @@ mod tests {
             r"\\server\share\file.rules",
             r"\\?\UNC\server\share\file.rules",
         ] {
-            assert!(DriveLetter::from_absolute_windows_path(path).is_err());
+            let _error = DriveLetter::from_absolute_windows_path(path)
+                .expect_err("relative and UNC paths should be rejected");
         }
         Ok(())
     }
@@ -221,13 +222,17 @@ mod tests {
     #[test]
     fn constructors_reject_non_letters_and_multi_character_inputs() {
         for value in ['\0', ' ', ':', '/', '1', 'é', 'ß', 'Ω'] {
-            assert!(DriveLetter::try_from(value).is_err());
+            let _error =
+                DriveLetter::try_from(value).expect_err("non-letter characters should be rejected");
         }
         for value in [0, b' ', b':', b'1', 255] {
-            assert!(DriveLetter::try_from(value).is_err());
+            let _error =
+                DriveLetter::try_from(value).expect_err("non-letter bytes should be rejected");
         }
         for value in ["", "CC", "C:", "C:\\", " C", "C ", "é", "1"] {
-            assert!(value.parse::<DriveLetter>().is_err());
+            let _error = value
+                .parse::<DriveLetter>()
+                .expect_err("invalid drive letter strings should be rejected");
         }
     }
 

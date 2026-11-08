@@ -58,16 +58,8 @@ fn decode_name(units: &[u16]) -> Cow<'_, str> {
 pub struct MftEntryPathCollection(pub Vec<Vec<ResolvedPath>>);
 impl MftEntryPathCollection {
     #[must_use]
-    pub fn entry_count(&self) -> usize {
-        self.0.len()
-    }
-    #[must_use]
     pub fn total_paths(&self) -> usize {
         self.0.iter().map(std::vec::Vec::len).sum()
-    }
-    #[must_use]
-    pub fn paths_for(&self, entry_id: usize) -> &[ResolvedPath] {
-        self.0.get(entry_id).map_or(&[], |v| &**v)
     }
 }
 

@@ -54,23 +54,6 @@ impl FixupStats {
 
 const SECTOR: usize = 512; // NTFS logical sector (fixup stride)
 
-/// Detect the entry size from the first entry bytes.
-/// Expects a valid NTFS FILE record with a 1KB or 4KB typical size.
-/// Returns None if slice too small.
-#[inline]
-#[must_use]
-pub fn detect_entry_size(entry0: &[u8]) -> Option<u32> {
-    // total_entry_size at offset 0x1C (after used_entry_size at 0x18)
-    if entry0.len() < 0x20 {
-        return None;
-    }
-    let sz = u32::from_le_bytes(entry0[0x1C..0x20].try_into().ok()?);
-    if sz == 0 {
-        return None;
-    }
-    Some(sz)
-}
-
 #[inline]
 fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
     if entry.len() < 8 {
@@ -79,27 +62,6 @@ fn read_update_sequence_array_fields(entry: &[u8]) -> Option<(usize, usize)> {
     let usa_offset = u16::from_le_bytes([entry[4], entry[5]]) as usize;
     let usa_size = u16::from_le_bytes([entry[6], entry[7]]) as usize; // count of u16 elements (first is update sequence value)
     Some((usa_offset, usa_size))
-}
-
-/// Quick check if an entry still needs fixup application.
-#[inline]
-#[must_use]
-pub fn needs_fixup(entry: &[u8]) -> bool {
-    let Some((usa_offset, usa_size)) = read_update_sequence_array_fields(entry) else {
-        return false;
-    };
-    if usa_size < 2 {
-        return false;
-    }
-    let fixup_bytes_len = usa_size * 2; // each element u16
-    if usa_offset + fixup_bytes_len > entry.len() {
-        return false;
-    }
-    if entry.len() < SECTOR {
-        return false;
-    }
-    let update_sequence = &entry[usa_offset..usa_offset + 2];
-    &entry[SECTOR - 2..SECTOR] == update_sequence
 }
 
 /// Apply fixups in place for a single entry slice.
@@ -247,18 +209,4 @@ pub fn apply_fixups_parallel(buf: &mut [u8], entry_size: usize) -> FixupStats {
     );
 
     stats
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detect_entry_size_basic() {
-        // Minimal fake header with total_entry_size = 1024 at 0x1C
-        let mut entry = vec![0u8; 0x20];
-        entry[0..4].copy_from_slice(b"FILE");
-        entry[0x1C..0x20].copy_from_slice(&1024u32.to_le_bytes());
-        assert_eq!(detect_entry_size(&entry), Some(1024));
-    }
 }

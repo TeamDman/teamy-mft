@@ -1,6 +1,7 @@
+use super::rule_file_profile_selection::RuleFileProfileSelection;
 use crate::domain::DriveLetter;
-use crate::machine::config::load_machine_client_config;
-use crate::machine::config::published_drive_paths;
+use crate::machine::DriveArtifactInfo;
+use crate::machine::MachineConfig;
 use crate::query::QueryNeedle;
 use crate::query::QueryPlan;
 use crate::query::QueryRule;
@@ -126,6 +127,8 @@ impl QueryFilterRules {
     }
 
     /// Discover all `.teamy_mft_rules` files from cached search indexes for the given drives.
+    /// Patterns are expanded only when an effective profile is selected by
+    /// [`Self::from_discovered_files`].
     ///
     /// # Errors
     ///
@@ -135,9 +138,17 @@ impl QueryFilterRules {
         drive_letters: &[DriveLetter],
         sync_dir: &Path,
     ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
+        Self::discover_rule_files(drive_letters, sync_dir, RuleFileProfileSelection::All)
+    }
+
+    fn discover_rule_files(
+        drive_letters: &[DriveLetter],
+        sync_dir: &Path,
+        selection: RuleFileProfileSelection<'_>,
+    ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
         let _span = info_span!("discover_query_rule_files").entered();
         let ignored_rules = RulesPathIgnoreSet::from_patterns(
-            &load_machine_client_config()?.ignored_rules_path_patterns,
+            &MachineConfig::load_for_client()?.ignored_rules_path_patterns,
         )?;
         let rules_query = QueryPlan::single_rule(QueryRule::EndsWithCaseInsensitive(
             QueryNeedle::new(RULES_FILE_EXTENSION),
@@ -145,7 +156,13 @@ impl QueryFilterRules {
         let results: Vec<eyre::Result<Vec<DiscoveredRuleFile>>> = drive_letters
             .par_iter()
             .map(|drive_letter| {
-                discover_rule_files_for_drive(*drive_letter, sync_dir, &rules_query, &ignored_rules)
+                discover_rule_files_for_drive(
+                    *drive_letter,
+                    sync_dir,
+                    &rules_query,
+                    &ignored_rules,
+                    selection,
+                )
             })
             .collect();
 
@@ -158,12 +175,13 @@ impl QueryFilterRules {
     }
 
     /// Load one rules file directly from disk, even if it was not discovered through an index.
+    /// Pattern expansion is deferred until [`Self::from_discovered_files`] selects its profile.
     ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or parsed.
     pub fn load_rule_file(path: &Path) -> eyre::Result<Option<DiscoveredRuleFile>> {
-        load_rules_file(None, path)
+        load_rules_file(None, path, RuleFileProfileSelection::All)
     }
 
     /// Load direct child `.teamy_mft_rules` files from one directory without requiring index discovery.
@@ -187,7 +205,7 @@ impl QueryFilterRules {
             {
                 continue;
             }
-            if let Some(file) = load_rules_file(None, &entry_path)? {
+            if let Some(file) = load_rules_file(None, &entry_path, RuleFileProfileSelection::All)? {
                 files.push(file);
             }
         }
@@ -206,8 +224,13 @@ impl QueryFilterRules {
         sync_dir: &Path,
         profile: Option<&str>,
     ) -> eyre::Result<Self> {
-        let discovered = Self::discover_rule_files_for_drive_letters(drive_letters, sync_dir)?;
-        Self::from_discovered_files(discovered, profile)
+        let profile = normalize_profile_name(profile)?;
+        let selection = match profile.as_deref() {
+            None => RuleFileProfileSelection::Default,
+            Some(name) => RuleFileProfileSelection::Named(name),
+        };
+        let discovered = Self::discover_rule_files(drive_letters, sync_dir, selection)?;
+        Self::from_discovered_files(discovered, profile.as_deref())
     }
 
     /// Resolve an effective rule set from already-discovered files.
@@ -241,6 +264,25 @@ impl QueryFilterRules {
                 profile_name,
                 RULES_FILE_EXTENSION
             );
+        }
+
+        for file in &mut effective_files {
+            file.compiled_rules.clear();
+            for rule in &file.rules {
+                let Some(pattern) = rule.directive.pattern() else {
+                    continue;
+                };
+                let matcher = compile_path_rule(pattern, &file.path, rule.line_number)?;
+                let semantic_key = matcher.semantic_key();
+                file.compiled_rules.push(CompiledRule {
+                    order: rule.order.unwrap_or(0),
+                    include: matches!(rule.directive, RuleDirective::Include(_)),
+                    line_number: rule.line_number,
+                    semantic_key,
+                    source_path: file.path.clone(),
+                    matcher,
+                });
+            }
         }
 
         let mut matcher_rules = Vec::<CompiledRule>::new();
@@ -444,8 +486,9 @@ fn discover_rule_files_for_drive(
     sync_dir: &Path,
     rules_query: &QueryPlan,
     ignored_rules: &RulesPathIgnoreSet,
+    selection: RuleFileProfileSelection<'_>,
 ) -> eyre::Result<Vec<DiscoveredRuleFile>> {
-    let paths = published_drive_paths(sync_dir, drive_letter);
+    let paths = DriveArtifactInfo::new(sync_dir, drive_letter);
     if !paths.base_index_path.is_file() {
         return Ok(Vec::new());
     }
@@ -468,7 +511,8 @@ fn discover_rule_files_for_drive(
                 );
                 return Ok(ControlFlow::Continue(()));
             }
-            let Some(file) = load_rules_file(Some(drive_letter), row.path.as_ref())? else {
+            let Some(file) = load_rules_file(Some(drive_letter), row.path.as_ref(), selection)?
+            else {
                 return Ok(ControlFlow::Continue(()));
             };
             files.push(file);
@@ -482,9 +526,22 @@ fn discover_rule_files_for_drive(
 fn load_rules_file(
     drive_letter: Option<DriveLetter>,
     path: &Path,
+    selection: RuleFileProfileSelection<'_>,
 ) -> eyre::Result<Option<DiscoveredRuleFile>> {
     if !path.is_file() {
         debug!(path = %path.display(), "Skipping rules file that no longer exists");
+        return Ok(None);
+    }
+
+    let profile = detect_profile_from_path(path)?;
+    let selected = match selection {
+        RuleFileProfileSelection::All => true,
+        RuleFileProfileSelection::Default => profile.is_none(),
+        RuleFileProfileSelection::Named(name) => {
+            profile.as_deref().is_none_or(|profile| profile == name)
+        }
+    };
+    if !selected {
         return Ok(None);
     }
 
@@ -505,32 +562,14 @@ fn load_rules_file(
         }
     };
 
-    let profile = detect_profile_from_path(path)?;
     let rules = parse_rule_lines(path, &contents)?;
-    let mut compiled_rules = Vec::new();
-
-    for rule in &rules {
-        let Some(pattern) = rule.directive.pattern() else {
-            continue;
-        };
-        let matcher = compile_path_rule(pattern, path, rule.line_number)?;
-        let semantic_key = matcher.semantic_key();
-        compiled_rules.push(CompiledRule {
-            order: rule.order.unwrap_or(0),
-            include: matches!(rule.directive, RuleDirective::Include(_)),
-            line_number: rule.line_number,
-            semantic_key,
-            source_path: path.to_path_buf(),
-            matcher,
-        });
-    }
 
     Ok(Some(DiscoveredRuleFile {
         drive_letter,
         path: path.to_path_buf(),
         profile,
         rules,
-        compiled_rules,
+        compiled_rules: Vec::new(),
     }))
 }
 
@@ -865,7 +904,9 @@ mod tests {
     use super::QueryFilterRules;
     use super::RULES_FILE_EXTENSION;
     use super::RuleDirective;
+    use super::RuleFileProfileSelection;
     use crate::domain::DriveLetter;
+    use crate::machine::DriveArtifactInfo;
     use crate::machine::config::default_ignored_rules_path_patterns;
     use crate::query::MatchingRowIndices;
     use crate::query::QueryNeedle;
@@ -887,9 +928,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &global_path)
-                    .expect("load global file")
-                    .expect("global file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &global_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load global file")
+                .expect("global file exists"),
             ],
             None,
         )
@@ -914,12 +959,20 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &global_path)
-                    .expect("load global file")
-                    .expect("global file exists"),
-                super::load_rules_file(Some(DriveLetter::C), &profile_path)
-                    .expect("load profile file")
-                    .expect("profile file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &global_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load global file")
+                .expect("global file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &profile_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load profile file")
+                .expect("profile file exists"),
             ],
             Some("mc-modding"),
         )
@@ -940,9 +993,13 @@ mod tests {
 
         let error = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &global_path)
-                    .expect("load global file")
-                    .expect("global file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &global_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load global file")
+                .expect("global file exists"),
             ],
             Some("mc-modding"),
         )
@@ -970,12 +1027,20 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &global_path)
-                    .expect("load global file")
-                    .expect("global file exists"),
-                super::load_rules_file(Some(DriveLetter::C), &profile_path)
-                    .expect("load profile file")
-                    .expect("profile file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &global_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load global file")
+                .expect("global file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &profile_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load profile file")
+                .expect("profile file exists"),
             ],
             Some("default"),
         )
@@ -984,6 +1049,96 @@ mod tests {
         assert_eq!(rules.files().len(), 1);
         assert!(rules.is_filtered_path(Path::new(r"C:\private\notes.txt")));
         assert!(!rules.is_filtered_path(Path::new(r"C:\Repos\Minecraft\example\src\Main.java")));
+    }
+
+    #[test]
+    fn default_profile_ignores_orphaned_git_root_rules() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.teamy-mft{RULES_FILE_EXTENSION}"));
+        std::fs::write(
+            &rules_path,
+            "DEFAULT RULE IS EXCLUDE\n\nORDER 2 INCLUDE {GIT_ROOT}\n",
+        )?;
+        let file = QueryFilterRules::load_rule_file(&rules_path)?.expect("rules file exists");
+
+        let rules = QueryFilterRules::from_discovered_files(vec![file], None)?;
+
+        assert!(rules.files().is_empty());
+        assert!(!rules.is_filtered_path(Path::new(r"C:\photos\20181226_145513.jpg")));
+        Ok(())
+    }
+
+    #[test]
+    fn selected_profile_rejects_orphaned_git_root_rules() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.teamy-mft{RULES_FILE_EXTENSION}"));
+        std::fs::write(
+            &rules_path,
+            "DEFAULT RULE IS EXCLUDE\n\nORDER 2 INCLUDE {GIT_ROOT}\n",
+        )?;
+        let file = QueryFilterRules::load_rule_file(&rules_path)?.expect("rules file exists");
+
+        let error = QueryFilterRules::from_discovered_files(vec![file], Some("teamy-mft"))
+            .expect_err("selected orphaned rule must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("{}:3:", rules_path.display()))
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("no enclosing git root was found")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn default_profile_rejects_global_orphaned_git_root_rules() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample{RULES_FILE_EXTENSION}"));
+        std::fs::write(
+            &rules_path,
+            "DEFAULT RULE IS EXCLUDE\n\nORDER 2 INCLUDE {GIT_ROOT}\n",
+        )?;
+        let file = QueryFilterRules::load_rule_file(&rules_path)?.expect("rules file exists");
+
+        let error = QueryFilterRules::from_discovered_files(vec![file], None)
+            .expect_err("global orphaned rule must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no enclosing git root was found")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_glob_is_compiled_only_for_its_selected_profile() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let rules_path = temp_dir
+            .path()
+            .join(format!("sample.teamy-mft{RULES_FILE_EXTENSION}"));
+        std::fs::write(&rules_path, "INCLUDE [\n")?;
+        let inactive_file =
+            QueryFilterRules::load_rule_file(&rules_path)?.expect("rules file exists");
+        let rules = QueryFilterRules::from_discovered_files(vec![inactive_file], None)?;
+        assert!(rules.files().is_empty());
+
+        let selected_file =
+            QueryFilterRules::load_rule_file(&rules_path)?.expect("rules file exists");
+        let error = QueryFilterRules::from_discovered_files(vec![selected_file], Some("teamy-mft"))
+            .expect_err("selected invalid glob must fail");
+        assert!(error.to_string().contains("invalid glob pattern"));
+        Ok(())
     }
 
     #[test]
@@ -996,9 +1151,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             None,
         )
@@ -1018,9 +1177,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             Some("mc-modding"),
         )
@@ -1047,9 +1210,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             Some("mc-modding"),
         )
@@ -1059,6 +1226,10 @@ mod tests {
         let filtered_path = temp_dir.path().join("tests").join("lib.rs");
         assert!(!rules.is_filtered_path(included_path.as_path()));
         assert!(rules.is_filtered_path(filtered_path.as_path()));
+        assert_eq!(
+            rules.matching_files_for_path(included_path.as_path()).len(),
+            1
+        );
     }
 
     #[test]
@@ -1077,9 +1248,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             Some("mc-modding"),
         )
@@ -1099,8 +1274,15 @@ mod tests {
             .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
         std::fs::write(&rules_path, "INCLUDE {GIT_ROOT}\\docs\n").expect("write rules file");
 
-        let error = super::load_rules_file(Some(DriveLetter::C), &rules_path)
-            .expect_err("missing git root should fail");
+        let file = super::load_rules_file(
+            Some(DriveLetter::C),
+            &rules_path,
+            RuleFileProfileSelection::All,
+        )
+        .expect("load raw rules")
+        .expect("rules file exists");
+        let error = QueryFilterRules::from_discovered_files(vec![file], Some("mc-modding"))
+            .expect_err("missing git root should fail for the selected profile");
 
         assert!(
             error
@@ -1127,15 +1309,27 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &global_path)
-                    .expect("load global file")
-                    .expect("global file exists"),
-                super::load_rules_file(Some(DriveLetter::C), &left_rules_path)
-                    .expect("load left file")
-                    .expect("left file exists"),
-                super::load_rules_file(Some(DriveLetter::C), &right_rules_path)
-                    .expect("load right file")
-                    .expect("right file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &global_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load global file")
+                .expect("global file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &left_rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load left file")
+                .expect("left file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &right_rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load right file")
+                .expect("right file exists"),
             ],
             Some("mc-modding"),
         )
@@ -1161,9 +1355,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             Some("mc-modding"),
         )
@@ -1187,9 +1385,13 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &rules_path)
-                    .expect("load rules file")
-                    .expect("rules file exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &rules_path,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load rules file")
+                .expect("rules file exists"),
             ],
             None,
         )
@@ -1209,12 +1411,20 @@ mod tests {
 
         let error = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &path_a)
-                    .expect("load path_a")
-                    .expect("path_a exists"),
-                super::load_rules_file(Some(DriveLetter::C), &path_b)
-                    .expect("load path_b")
-                    .expect("path_b exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &path_a,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load path_a")
+                .expect("path_a exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &path_b,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load path_b")
+                .expect("path_b exists"),
             ],
             None,
         )
@@ -1261,10 +1471,43 @@ mod tests {
     }
 
     #[test]
+    fn discovery_skips_stale_uppercase_rules_file_rows() -> eyre::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let published_paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
+        let missing_rules_path = temp_dir.path().join("missing.TEAMY_MFT_RULES");
+        let rows = vec![SearchIndexPathRow {
+            path: missing_rules_path.display().to_string().into(),
+            has_deleted_entries: false,
+        }];
+        let bytes = SearchIndexBytesMut::from_rows(
+            SearchIndexHeader::new(
+                DriveLetter::C,
+                Information::new::<byte>(123),
+                u64::try_from(rows.len())?,
+            ),
+            &rows,
+        )?
+        .into_inner()?;
+        std::fs::write(&published_paths.base_index_path, bytes)?;
+
+        let rules =
+            QueryFilterRules::discover_for_drive_letters(&[DriveLetter::C], temp_dir.path(), None)?;
+
+        assert!(rules.files().is_empty());
+        assert!(
+            QueryFilterRules::discover_rule_files_for_drive_letters(
+                &[DriveLetter::C],
+                temp_dir.path(),
+            )?
+            .is_empty()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn discover_rule_files_for_drive_letters_uses_overlay_query_results() -> eyre::Result<()> {
         let temp_dir = tempfile::tempdir()?;
-        let published_paths =
-            crate::machine::config::published_drive_paths(temp_dir.path(), DriveLetter::C);
+        let published_paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
         let rules_path = temp_dir
             .path()
             .join(format!("sample{RULES_FILE_EXTENSION}"));
@@ -1354,9 +1597,13 @@ mod tests {
             .join(format!("sample.mc-modding{RULES_FILE_EXTENSION}"));
         std::fs::write(&rules_path, "EXCLUDE C:\\private\n").expect("write rules file");
 
-        let file = super::load_rules_file(Some(DriveLetter::C), &rules_path)
-            .expect("load rules file")
-            .expect("rules file exists");
+        let file = super::load_rules_file(
+            Some(DriveLetter::C),
+            &rules_path,
+            RuleFileProfileSelection::All,
+        )
+        .expect("load rules file")
+        .expect("rules file exists");
 
         assert_eq!(file.drive_letter, Some(DriveLetter::C));
         assert_eq!(file.profile.as_deref(), Some("mc-modding"));
@@ -1392,12 +1639,20 @@ mod tests {
             .expect("write profile rules");
 
         let files = vec![
-            super::load_rules_file(Some(DriveLetter::C), &global_path)
-                .expect("load global file")
-                .expect("global file exists"),
-            super::load_rules_file(Some(DriveLetter::C), &profile_path)
-                .expect("load profile file")
-                .expect("profile file exists"),
+            super::load_rules_file(
+                Some(DriveLetter::C),
+                &global_path,
+                RuleFileProfileSelection::All,
+            )
+            .expect("load global file")
+            .expect("global file exists"),
+            super::load_rules_file(
+                Some(DriveLetter::C),
+                &profile_path,
+                RuleFileProfileSelection::All,
+            )
+            .expect("load profile file")
+            .expect("profile file exists"),
         ];
 
         let profiles = QueryFilterRules::discovered_profile_names(&files);
@@ -1428,12 +1683,20 @@ mod tests {
 
         let rules = QueryFilterRules::from_discovered_files(
             vec![
-                super::load_rules_file(Some(DriveLetter::C), &path_a)
-                    .expect("load path_a")
-                    .expect("path_a exists"),
-                super::load_rules_file(Some(DriveLetter::C), &path_b)
-                    .expect("load path_b")
-                    .expect("path_b exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &path_a,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load path_a")
+                .expect("path_a exists"),
+                super::load_rules_file(
+                    Some(DriveLetter::C),
+                    &path_b,
+                    RuleFileProfileSelection::All,
+                )
+                .expect("load path_b")
+                .expect("path_b exists"),
             ],
             None,
         )

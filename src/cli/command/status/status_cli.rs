@@ -1,3 +1,4 @@
+use crate::machine::MachineConfig;
 use crate::windows_utils::storage::DriveLetterPattern;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -91,7 +92,7 @@ fn load_daemon_status_summary(
             warning: None,
         });
     }
-    let config = crate::machine::ipc::load_machine_daemon_client_config()?;
+    let config = MachineConfig::load_for_client()?;
     let ready_daemon = match crate::machine::ipc::ensure_daemon_ready(&config) {
         Ok(ready_daemon) => ready_daemon,
         Err(error) if allow_fallback => {
@@ -417,7 +418,7 @@ fn print_machine_summary(
     }
 }
 
-fn print_protection_summary(config: &crate::machine::config::MachineConfig) {
+fn print_protection_summary(config: &MachineConfig) {
     match crate::machine::security::query_path_protection_status(
         &config.sync_dir,
         &config.owner_sid,

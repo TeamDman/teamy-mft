@@ -100,6 +100,7 @@ mod tests {
     use crate::read::logical_read_plan::LogicalFileSegmentKind;
     use crate::read::logical_read_plan::LogicalReadPlan;
     use crate::read::physical_read_request::PhysicalReadRequest;
+    use std::collections::BTreeSet;
     use std::io;
     use std::io::Cursor;
     use std::io::Seek;
@@ -220,7 +221,7 @@ mod tests {
     #[test]
     fn constructor_rejects_mismatched_buffer_lengths() -> eyre::Result<()> {
         let logical = LogicalReadPlan {
-            segments: Default::default(),
+            segments: BTreeSet::new(),
         };
         let request =
             PhysicalReadRequest::from(ByteRange::from_offset_and_length(info(0), info(512))?);

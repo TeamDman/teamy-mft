@@ -1,4 +1,13 @@
+#![warn(clippy::absolute_paths, unused_qualifications)]
+
+use crate::machine::MachineCacheSyncRequest;
+use crate::machine::MachineConfig;
+use crate::machine::daemon_log::DaemonLogWireEvent;
+use crate::machine::daemon_log::spawn_stderr_log_drain;
+use crate::machine::ipc;
 use crate::sync::SyncPlan;
+use crate::sync::sync_path_into_published_overlay;
+use crate::sync::sync_path_recursively_into_published_overlay;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
@@ -41,21 +50,20 @@ impl SyncArgs {
         );
 
         if self.daemon {
-            let config = crate::machine::ipc::load_machine_daemon_client_config()?;
-            crate::machine::ipc::ensure_daemon_ready(&config)?;
-            let (logs_tx, logs_rx) =
-                vox::channel::<crate::machine::daemon_log::DaemonLogWireEvent>();
-            let log_drain = crate::machine::daemon_log::spawn_stderr_log_drain(logs_rx);
-            let result = crate::machine::ipc::sync(&config, plan, logs_tx);
+            let config = MachineConfig::load_for_client()?;
+            ipc::ensure_daemon_ready(&config)?;
+            let (logs_tx, logs_rx) = vox::channel::<DaemonLogWireEvent>();
+            let log_drain = spawn_stderr_log_drain(logs_rx);
+            let result = ipc::sync(&config, plan, logs_tx);
             let _ = log_drain.join();
             result?;
         } else {
-            let sync_dir = crate::machine::config::load_sync_dir_from_config()?;
+            let sync_dir = MachineConfig::load()?.sync_dir;
             if let Some(path) = plan.path.as_deref() {
                 let drive_letter = if plan.recursive {
-                    crate::sync::sync_path_recursively_into_published_overlay(&sync_dir, path)?
+                    sync_path_recursively_into_published_overlay(&sync_dir, path)?
                 } else {
-                    crate::sync::sync_path_into_published_overlay(&sync_dir, path)?
+                    sync_path_into_published_overlay(&sync_dir, path)?
                 };
                 if plan.recursive {
                     println!(
@@ -66,14 +74,14 @@ impl SyncArgs {
                 }
             } else {
                 let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
-                crate::machine::daemon::sync_machine_cache(
-                    &sync_dir,
-                    &drive_letters,
-                    plan.if_exists,
-                    plan.parallel,
+                MachineCacheSyncRequest {
+                    sync_dir: sync_dir.into_inner(),
+                    drive_letters,
+                    if_exists: plan.if_exists,
+                    parallel: plan.parallel,
                     console_pid,
-                    cancellation_scope,
-                )?;
+                }
+                .execute_blocking(cancellation_scope)?;
             }
         }
 

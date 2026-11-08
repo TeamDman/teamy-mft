@@ -31,7 +31,7 @@ mod tests {
         assert_eq!(SearchIndexFlags::try_from(0)?, SearchIndexFlags::Reserved);
         assert_eq!(u16::from(SearchIndexFlags::Reserved), 0);
         for value in [1, 2, 0x8000, u16::MAX] {
-            assert!(SearchIndexFlags::try_from(value).is_err());
+            let _error = SearchIndexFlags::try_from(value).unwrap_err();
         }
         Ok(())
     }

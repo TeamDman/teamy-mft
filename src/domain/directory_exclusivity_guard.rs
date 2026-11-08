@@ -42,7 +42,8 @@ mod tests {
     fn overlapping_acquisition_is_rejected_until_guard_is_dropped() -> eyre::Result<()> {
         let temp = tempfile::tempdir()?;
         let first = DirectoryExclusivityGuard::acquire(temp.path())?;
-        assert!(DirectoryExclusivityGuard::acquire(temp.path()).is_err());
+        let _error = DirectoryExclusivityGuard::acquire(temp.path())
+            .expect_err("overlapping directory acquisition should fail");
         drop(first);
         let _next = DirectoryExclusivityGuard::acquire(temp.path())?;
         Ok(())

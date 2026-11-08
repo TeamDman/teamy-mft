@@ -1,6 +1,5 @@
+use crate::machine::MachineConfig;
 use crate::machine::config::DEFAULT_SERVICE_NAME;
-use crate::machine::config::load_machine_config;
-use crate::machine::ipc::load_machine_daemon_client_config;
 use crate::machine::service::query_service_state;
 use arbitrary::Arbitrary;
 use facet::Facet;
@@ -13,13 +12,13 @@ impl ServiceStatusArgs {
     ///
     /// Returns an error if the service state cannot be queried.
     pub fn invoke(self) -> eyre::Result<()> {
-        let config = load_machine_config()?;
+        let config = MachineConfig::load_if_present()?;
         let service_name = config.as_ref().map_or_else(
             || String::from(DEFAULT_SERVICE_NAME),
             |config| config.service_name.clone(),
         );
         let mut service_state = query_service_state(&service_name)?;
-        let daemon_ready = load_machine_daemon_client_config()
+        let daemon_ready = MachineConfig::load_for_client()
             .and_then(|config| crate::machine::ipc::ensure_daemon_ready(&config))
             .ok();
         if daemon_ready.is_some() {
