@@ -850,7 +850,18 @@ fn validate_journal_continuity(
         journal_id,
         checkpoint.last_usn.unwrap_or(snapshot_usn),
         cursor,
-    )
+    )?;
+    // Cold loading rebuilds from the raw snapshot, even if a later overlay was published.
+    if snapshot_usn < cursor.first_usn {
+        eyre::bail!(
+            "USN replay gap for drive {}: snapshot_usn={} fell below first_usn={}. Run `teamy-mft sync --drive-letter-pattern {}` to rebuild the snapshot.",
+            drive_letter,
+            snapshot_usn,
+            cursor.first_usn,
+            drive_letter
+        );
+    }
+    Ok(())
 }
 
 fn validate_active_cursor(
@@ -874,6 +885,15 @@ fn validate_active_cursor(
             drive_letter,
             snapshot_usn,
             cursor.lowest_valid_usn
+        );
+    }
+    if current_usn < cursor.first_usn {
+        eyre::bail!(
+            "USN replay gap for drive {}: current_usn={} fell below first_usn={}. Run `teamy-mft sync --drive-letter-pattern {}` to rebuild the snapshot.",
+            drive_letter,
+            current_usn,
+            cursor.first_usn,
+            drive_letter
         );
     }
     if current_usn > cursor.next_usn {
@@ -985,13 +1005,16 @@ mod tests {
     use super::diff_overlay_rows;
     use super::join_windows_path;
     use super::validate_active_cursor;
+    use super::validate_journal_continuity;
     use crate::cancellation::CancellationToken;
     use crate::daemon::MachineErrorKind;
     use crate::domain::DriveLetter;
+    use crate::machine::config::PublishedCheckpoint;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
     use crate::query::QueryLimit;
     use crate::query::QueryPlan;
+    use crate::search_index::format::SEARCH_INDEX_VERSION;
     use crate::search_index::format::SearchIndexHeader;
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
@@ -1646,6 +1669,123 @@ mod tests {
         )
         .expect_err("gap should be rejected");
         assert!(error.to_string().contains("replay gap"));
+    }
+
+    #[test]
+    fn journal_retention_rejects_expired_snapshot_with_zero_lowest_valid_usn() {
+        let checkpoint = PublishedCheckpoint {
+            journal_id: Some(5),
+            snapshot_usn: Some(100),
+            last_usn: Some(100),
+            ..PublishedCheckpoint::empty(DriveLetter::C, SEARCH_INDEX_VERSION)
+        };
+        let error = validate_journal_continuity(
+            DriveLetter::C,
+            &checkpoint,
+            JournalCursor {
+                journal_id: 5,
+                first_usn: 101,
+                next_usn: 120,
+                lowest_valid_usn: 0,
+                max_usn: 999,
+            },
+        )
+        .expect_err("a snapshot older than retained journal history cannot be replayed");
+
+        let message = error.to_string();
+        assert!(message.contains("replay gap"), "{message}");
+        assert!(message.contains("first_usn=101"), "{message}");
+        assert!(
+            message.contains("teamy-mft sync --drive-letter-pattern C"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn journal_retention_rejects_expired_snapshot_even_when_last_usn_is_retained() {
+        let checkpoint = PublishedCheckpoint {
+            journal_id: Some(5),
+            snapshot_usn: Some(100),
+            last_usn: Some(110),
+            ..PublishedCheckpoint::empty(DriveLetter::C, SEARCH_INDEX_VERSION)
+        };
+        let error = validate_journal_continuity(
+            DriveLetter::C,
+            &checkpoint,
+            JournalCursor {
+                journal_id: 5,
+                first_usn: 101,
+                next_usn: 120,
+                lowest_valid_usn: 0,
+                max_usn: 999,
+            },
+        )
+        .expect_err("cold loading must replay from the raw snapshot, not the published cursor");
+
+        let message = error.to_string();
+        assert!(message.contains("replay gap"), "{message}");
+        assert!(message.contains("snapshot_usn=100"), "{message}");
+        assert!(message.contains("first_usn=101"), "{message}");
+    }
+
+    #[test]
+    fn journal_retention_rejects_expired_active_cursor() {
+        let error = validate_active_cursor(
+            DriveLetter::C,
+            90,
+            5,
+            100,
+            JournalCursor {
+                journal_id: 5,
+                first_usn: 101,
+                next_usn: 120,
+                lowest_valid_usn: 0,
+                max_usn: 999,
+            },
+        )
+        .expect_err("an active graph must not skip journal history lost after its last refresh");
+
+        let message = error.to_string();
+        assert!(message.contains("replay gap"), "{message}");
+        assert!(message.contains("current_usn=100"), "{message}");
+        assert!(message.contains("first_usn=101"), "{message}");
+    }
+
+    #[test]
+    fn journal_retention_allows_active_cursor_after_an_older_snapshot() -> eyre::Result<()> {
+        validate_active_cursor(
+            DriveLetter::C,
+            90,
+            5,
+            110,
+            JournalCursor {
+                journal_id: 5,
+                first_usn: 101,
+                next_usn: 120,
+                lowest_valid_usn: 0,
+                max_usn: 999,
+            },
+        )
+    }
+
+    #[test]
+    fn journal_retention_allows_cursor_at_first_readable_usn() -> eyre::Result<()> {
+        let cursor = JournalCursor {
+            journal_id: 5,
+            first_usn: 100,
+            next_usn: 120,
+            lowest_valid_usn: 0,
+            max_usn: 999,
+        };
+        let checkpoint = PublishedCheckpoint {
+            journal_id: Some(5),
+            snapshot_usn: Some(100),
+            last_usn: Some(100),
+            ..PublishedCheckpoint::empty(DriveLetter::C, SEARCH_INDEX_VERSION)
+        };
+
+        validate_journal_continuity(DriveLetter::C, &checkpoint, cursor)?;
+        validate_active_cursor(DriveLetter::C, 90, 5, 100, cursor)
     }
 
     #[cfg(windows)]

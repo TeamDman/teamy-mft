@@ -300,11 +300,14 @@ impl DriveWorkerState {
                 degraded: None,
             });
         }
-        if self.mode == DriveWorkerRuntimeMode::PublishedIndexOnly {
+        if self.mode == DriveWorkerRuntimeMode::PublishedIndexOnly || self.snapshot_only.is_some() {
             return query_published_drive(self.drive, &self.sync_dir, request)
                 .map(|rows| DaemonDriveQueryRows {
                     rows,
-                    degraded: None,
+                    degraded: self
+                        .snapshot_only
+                        .as_ref()
+                        .map(|message| (self.drive, message.clone())),
                 })
                 .map_err(|error| MachineError::degraded(error.to_string()));
         }
@@ -482,7 +485,7 @@ fn run_drive_worker(
                 publish_drive_worker_status(state, status);
             }
             Ok(DriveWorkerCommand::Warm) => {
-                if !state.is_live_observed() {
+                if !state.is_live_observed() || state.snapshot_only.is_some() {
                     publish_drive_worker_status(state, status);
                     continue;
                 }
@@ -900,7 +903,11 @@ fn warm_next_drive_worker(
         drop(workers);
 
         let snapshot = worker.snapshot();
-        if snapshot.loading || snapshot.active_jobs > 0 || snapshot.degraded.is_some() {
+        if snapshot.loading
+            || snapshot.active_jobs > 0
+            || snapshot.degraded.is_some()
+            || snapshot.snapshot_only.is_some()
+        {
             continue;
         }
         worker.warm();
@@ -2079,9 +2086,11 @@ fn machine_error_from_panic(
 mod tests {
     use super::DaemonRuntimeState;
     use super::DriveWorker;
+    use super::DriveWorkerCommand;
     use super::DriveWorkerRuntimeMode;
     use super::DriveWorkerState;
     use super::DriveWorkerStatusSnapshot;
+    use super::run_drive_worker;
     use super::warm_next_drive_worker;
     use crate::cancellation::CancellationToken;
     use crate::domain::DriveLetter;
@@ -2091,6 +2100,7 @@ mod tests {
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use rustc_hash::FxHashMap;
+    use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use std::time::Instant;
@@ -2208,6 +2218,108 @@ mod tests {
             assert!(state.state.is_none());
             assert!(state.snapshot_only.is_none());
             assert!(state.degraded.is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn snapshot_only_query_uses_published_index_without_retrying_live_load() -> eyre::Result<()> {
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let paths = DriveArtifactInfo::new(temp_dir.path(), DriveLetter::C);
+            SearchIndexBytesMut::from_rows(
+                SearchIndexHeader::new(DriveLetter::C, Information::new::<byte>(123), 1),
+                &[SearchIndexPathRow {
+                    path: String::from(r"C:\cache\CACHEDIR.TAG").into(),
+                    has_deleted_entries: false,
+                }],
+            )?
+            .write_to_path(&paths.base_index_path)?;
+            let mut state = state(
+                &temp_dir,
+                DriveLetter::C,
+                DriveWorkerRuntimeMode::LiveObserved,
+            );
+            let reason = String::from("USN journal unavailable; using published snapshot");
+            state.mark_snapshot_only(reason.clone());
+
+            let result = state.query_with_cancel(&QueryPlan::new("<CACHEDIR.TAG>"), &scope)?;
+
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0].path.as_str(), r"C:\cache\CACHEDIR.TAG");
+            assert_eq!(result.degraded, Some((DriveLetter::C, reason.clone())));
+            assert_eq!(state.snapshot_only.as_deref(), Some(reason.as_str()));
+            assert!(state.state.is_none());
+            assert!(state.degraded.is_none());
+            assert!(!state.loading);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn snapshot_only_worker_ignores_queued_warm_requests() -> eyre::Result<()> {
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let mut state = state(
+                &temp_dir,
+                DriveLetter::C,
+                DriveWorkerRuntimeMode::LiveObserved,
+            );
+            let reason = String::from("USN journal unavailable; using published snapshot");
+            state.mark_snapshot_only(reason.clone());
+            let (tx, rx) = crossbeam_channel::unbounded();
+            tx.send(DriveWorkerCommand::Warm)?;
+            tx.send(DriveWorkerCommand::Stop)?;
+            let status = StdMutex::new(DriveWorkerStatusSnapshot::default());
+
+            run_drive_worker(&mut state, &rx, &status, &scope);
+
+            assert_eq!(state.snapshot_only.as_deref(), Some(reason.as_str()));
+            assert!(state.degraded.is_none());
+            assert!(state.state.is_none());
+            assert!(!state.loading);
+            let snapshot = status.lock().expect("status mutex should not be poisoned");
+            assert_eq!(snapshot.snapshot_only.as_deref(), Some(reason.as_str()));
+            assert!(snapshot.degraded.is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn warm_scheduler_skips_snapshot_only_drive_workers() -> eyre::Result<()> {
+        CancellationToken::new().with_scope(|scope| {
+            let temp_dir = tempfile::tempdir()?;
+            let mut state = DaemonRuntimeState {
+                owner_sid: String::new(),
+                sync_dir: temp_dir.path().to_path_buf(),
+                console_pid: None,
+                drives: FxHashMap::default(),
+                degraded: FxHashMap::default(),
+                loading: FxHashMap::default(),
+                active_jobs: 0,
+                warm_drive_letters: vec![DriveLetter::C],
+                next_warm_drive_index: 0,
+                warm_not_before: Instant::now(),
+            };
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let worker = DriveWorker {
+                drive: DriveLetter::C,
+                tx,
+                status: Arc::new(StdMutex::new(DriveWorkerStatusSnapshot {
+                    snapshot_only: Some(String::from("USN journal unavailable")),
+                    ..DriveWorkerStatusSnapshot::default()
+                })),
+                cancellation_token: CancellationToken::new(),
+            };
+            let workers = StdMutex::new(FxHashMap::from_iter([(DriveLetter::C, worker)]));
+
+            warm_next_drive_worker(&mut state, &workers, &scope);
+
+            match rx.try_recv() {
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+                Err(error) => panic!("snapshot-only worker channel failed: {error}"),
+                Ok(_) => panic!("snapshot-only workers must not be warmed again"),
+            }
             Ok(())
         })
     }
