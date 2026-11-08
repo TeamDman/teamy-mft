@@ -988,7 +988,6 @@ mod tests {
     use crate::cancellation::CancellationToken;
     use crate::daemon::MachineErrorKind;
     use crate::domain::DriveLetter;
-    use crate::machine::MachineCacheSyncRequest;
     use crate::machine::usn::JournalCursor;
     use crate::machine::usn::UsnEvent;
     use crate::query::QueryLimit;
@@ -997,9 +996,11 @@ mod tests {
     use crate::search_index::format::SearchIndexPathRow;
     use crate::search_index::search_index_bytes::SearchIndexBytesMut;
     use crate::sync::IfExistsOutputBehaviour;
+    use crate::sync::SyncRequest;
     use rustc_hash::FxHashMap;
     use std::path::Path;
     use std::time::Duration;
+    use tokio::runtime::Builder;
     use uom::si::information::byte;
     use uom::si::usize::Information;
 
@@ -1659,14 +1660,15 @@ mod tests {
             let created_path = scope_dir.path().join(format!("{needle}.txt"));
             let cancel = scope.clone();
 
-            MachineCacheSyncRequest {
+            let request = SyncRequest {
                 sync_dir: cache_dir.path().to_path_buf(),
                 drive_letters: vec![drive_letter],
                 if_exists: IfExistsOutputBehaviour::Overwrite,
                 parallel: 1.into(),
                 console_pid: None,
-            }
-            .execute_blocking(&cancel)?;
+            };
+            let runtime = Builder::new_current_thread().enable_all().build()?;
+            runtime.block_on(request.execute(&cancel))?;
 
             let mut state = LiveDriveState::load(
                 cache_dir.path(),

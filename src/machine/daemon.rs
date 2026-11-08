@@ -1,7 +1,6 @@
 use crate::cancellation::CancellationToken;
 use crate::domain::DriveLetter;
 use crate::machine::DriveArtifactInfo;
-use crate::machine::MachineCacheSyncRequest;
 use crate::machine::MachineConfig;
 use crate::machine::daemon_log::daemon_log_hub;
 use crate::machine::daemon_log::spawn_correlation_log_forwarder;
@@ -24,6 +23,7 @@ use crate::query::QueryRowFilter;
 use crate::query::resolve_query_scopes;
 use crate::query::visit_drive_search_index_rows;
 use crate::sync::SyncPlan;
+use crate::sync::SyncRequest;
 use crate::windows_utils::string::EasyPCWSTR;
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
@@ -1085,7 +1085,7 @@ impl DaemonRuntimeState {
             );
             repair_published_drive_permissions(&self.sync_dir, &self.owner_sid, &drive_letters)
                 .map_err(|error| MachineError::degraded(error.to_string()))?;
-            let sync_result = MachineCacheSyncRequest {
+            let sync_result = SyncRequest {
                 sync_dir: self.sync_dir.clone(),
                 drive_letters,
                 if_exists: request.if_exists,

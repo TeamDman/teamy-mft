@@ -1,17 +1,18 @@
 #![warn(clippy::absolute_paths, unused_qualifications)]
 
-use crate::machine::MachineCacheSyncRequest;
 use crate::machine::MachineConfig;
 use crate::machine::daemon_log::DaemonLogWireEvent;
 use crate::machine::daemon_log::spawn_stderr_log_drain;
 use crate::machine::ipc;
 use crate::sync::SyncPlan;
+use crate::sync::SyncRequest;
 use crate::sync::sync_path_into_published_overlay;
 use crate::sync::sync_path_recursively_into_published_overlay;
 use arbitrary::Arbitrary;
 use facet::Facet;
 use figue::{self as args};
 use teamy_cancellation::CancellationScope;
+use tokio::runtime::Builder;
 
 #[derive(Facet, PartialEq, Debug, Arbitrary, Default)]
 pub struct SyncArgs {
@@ -74,14 +75,15 @@ impl SyncArgs {
                 }
             } else {
                 let drive_letters = plan.drive_letter_pattern.clone().into_drive_letters()?;
-                MachineCacheSyncRequest {
+                let request = SyncRequest {
                     sync_dir: sync_dir.into_inner(),
                     drive_letters,
                     if_exists: plan.if_exists,
                     parallel: plan.parallel,
                     console_pid,
-                }
-                .execute_blocking(cancellation_scope)?;
+                };
+                let runtime = Builder::new_current_thread().enable_all().build()?;
+                runtime.block_on(request.execute(cancellation_scope))?;
             }
         }
 

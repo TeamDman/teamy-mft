@@ -4,7 +4,8 @@ mod sync_index;
 mod sync_mft;
 mod sync_path;
 mod sync_plan;
-mod sync_work;
+mod sync_request;
+mod sync_result;
 
 pub use if_exists_output_behaviour::IfExistsOutputBehaviour;
 pub use sync_decision::SyncDecision;
@@ -13,4 +14,5 @@ pub use sync_mft::SyncMft;
 pub use sync_path::sync_path_into_published_overlay;
 pub use sync_path::sync_path_recursively_into_published_overlay;
 pub use sync_plan::SyncPlan;
-pub use sync_work::SyncWork;
+pub use sync_request::SyncRequest;
+pub use sync_result::SyncResult;
